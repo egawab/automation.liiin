@@ -43,7 +43,8 @@ export async function POST(req: Request) {
                     minDelayMins: 15,
                     maxDelayMins: 45,
                     systemActive: false,
-                    linkedinSessionCookie: ''
+                    linkedinSessionCookie: '',
+                    platformUrl: '' // Auto-detected from environment
                 }
             });
         }
