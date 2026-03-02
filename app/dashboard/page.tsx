@@ -91,23 +91,8 @@ export default function Dashboard() {
     // Then poll every 5 seconds
     const interval = setInterval(fetchData, 5000);
     
-    // OPTIMIZED: Auto-start worker on dashboard load for instant response
-    const autoStartWorker = async () => {
-      try {
-        // Check if worker is running
-        const statusRes = await fetch('/api/worker/start');
-        const status = await statusRes.json();
-        
-        if (!status.running) {
-          console.log('🚀 Auto-starting worker for instant response...');
-          await fetch('/api/worker/start', { method: 'POST' });
-        }
-      } catch (error) {
-        console.error('Failed to auto-start worker:', error);
-      }
-    };
-    
-    autoStartWorker();
+    // ❌ REMOVED AUTO-START: Worker should only start when user clicks "Start" button
+    // The worker must NEVER auto-start - it should only run based on explicit user action
     
     return () => {
       clearTimeout(initialTimeout);
@@ -118,11 +103,31 @@ export default function Dashboard() {
   const toggleSystem = async () => {
     const newState = !systemActive;
     setSystemActive(newState);
+    
+    // ✅ Update settings to toggle systemActive flag
     await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ systemActive: newState })
     });
+    
+    // ✅ USER ACTION: Start worker only when user clicks "Start"
+    if (newState) {
+      console.log('🚀 User clicked START - Initiating worker...');
+      try {
+        const response = await fetch('/api/worker/start', { method: 'POST' });
+        const result = await response.json();
+        if (result.success) {
+          console.log('✅ Worker started successfully:', result);
+        } else {
+          console.error('❌ Failed to start worker:', result);
+        }
+      } catch (error) {
+        console.error('❌ Error starting worker:', error);
+      }
+    } else {
+      console.log('⏸️ User clicked PAUSE - Worker will stop after current cycle');
+    }
   };
 
   const addKeyword = async () => {

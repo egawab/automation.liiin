@@ -293,6 +293,7 @@ async function postComment(postElement: any, commentText: string): Promise<boole
 async function runPipelineForUser(userId: string, sessionCookie: string, settings: any) {
     console.log(`\n========================================`);
     console.log(`👤 Processing User: ${userId.slice(0, 8)}...`);
+    console.log(`⚡ USER-INITIATED SESSION - Using CURRENT data only`);
     console.log(`========================================`);
 
     // STEP 1: Check daily limit using Log model
@@ -307,6 +308,7 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
     });
 
     console.log(`   📊 Comments posted today: ${commentsToday}/${settings.maxCommentsPerDay}`);
+    console.log(`   🔍 Fetching FRESH keywords and comments from database...`);
 
     if (commentsToday >= settings.maxCommentsPerDay) {
         console.log(`   ⚠️  Daily limit reached. Skipping user.`);
@@ -314,7 +316,7 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
         return;
     }
 
-    // STEP 2: Fetch ALL active keywords WITH their comments
+    // STEP 2: ✅ FRESH DATA - Fetch ALL active keywords WITH their comments for THIS session
     const keywords = await prisma.keyword.findMany({
         where: { userId, active: true },
         include: { comments: true },
@@ -326,16 +328,24 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
     });
 
     if (keywords.length === 0) {
-        console.log(`   ⚠️  No active keywords found. Skipping user.`);
-        await logAction(userId, 'No keywords configured', 'N/A');
+        console.log(`   ⚠️  No active keywords found for THIS session. Stopping.`);
+        await logAction(userId, '⚠️ No keywords configured in current session', 'N/A');
         return;
     }
 
+    console.log(`   ✅ CURRENT SESSION DATA LOADED:`);
     console.log(`   📋 Active keywords: ${keywords.length}`);
     console.log(`   💬 General comments pool: ${generalComments.length}`);
     keywords.forEach((kw, idx) => {
-        console.log(`      ${idx + 1}. "${kw.keyword}" (${kw.comments.length} specific comments)`);
+        console.log(`      ${idx + 1}. \"${kw.keyword}\" (Target: ${kw.targetReach} likes, ${kw.comments.length} comments)`);
     });
+    
+    console.log(`\n   🎯 SETTINGS FOR THIS RUN:`);
+    console.log(`      • Min Likes: ${settings.minLikes}`);
+    console.log(`      • Max Likes: ${settings.maxLikes}`);
+    console.log(`      • Min Comments: ${settings.minComments}`);
+    console.log(`      • Max Comments: ${settings.maxComments}`);
+    console.log(`      • Max Per Day: ${settings.maxCommentsPerDay}`);
 
     // STEP 3: OPTIMIZED Browser Launch - Faster with performance flags
     console.log(`\n   🌐 Launching browser (optimized)...`);
@@ -573,14 +583,16 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
 
 async function runOrchestrator() {
     console.log('\n════════════════════════════════════════════════════════════');
-    console.log('  🚀 NEXORA LinkedIn Automation Worker v5.0 (PERFORMANCE OPTIMIZED)');
+    console.log('  🚀 NEXORA LinkedIn Automation Worker v5.0 - USER ACTION ONLY');
     console.log('  📅 ' + new Date().toLocaleString());
-    console.log('  ⚡ INSTANT START MODE - Ready to process immediately');
+    console.log('  ⚠️  STRICT MODE: Only runs when user presses "Start" button');
+    console.log('  ✅ No auto-execution, no cached jobs, no background triggers');
     console.log('════════════════════════════════════════════════════════════\n');
 
     while (true) {
         try {
-            // OPTIMIZED: Check for active users every 5 seconds for instant response
+            // ✅ FIXED: Check for ACTIVE users with systemActive=true ONLY
+            // This prevents worker from processing until user explicitly clicks "Start"
             const activeSettings = await prisma.settings.findMany({
                 where: {
                     systemActive: true,
@@ -589,18 +601,28 @@ async function runOrchestrator() {
             });
 
             if (activeSettings.length === 0) {
-                console.log('⏳ No active users. Checking again in 5 seconds...');
-                await sleep(5000); // Reduced from 60s to 5s for instant response
+                console.log('⏸️  System in STANDBY - No active users. Waiting for user to press "Start"...');
+                await sleep(10000); // Check every 10 seconds for user action
                 continue;
             }
 
-            console.log(`👥 Found ${activeSettings.length} active user(s)`);
+            console.log(`\n✅ USER ACTION DETECTED - System activated by user`);
+            console.log(`👥 Found ${activeSettings.length} active user(s)\n`);
 
-            // Process each user
+            // ✅ FRESH DATA: Fetch current keywords and settings for THIS session only
             for (const userSettings of activeSettings) {
                 if (!userSettings.userId) continue;
                 
+                console.log(`📊 Loading CURRENT session data for user: ${userSettings.userId.slice(0, 8)}...`);
+                
                 try {
+                    // ✅ Log the start of user-initiated action
+                    await logAction(
+                        userSettings.userId, 
+                        'Worker started by USER ACTION - Processing current session data', 
+                        'USER_START'
+                    );
+                    
                     await runPipelineForUser(
                         userSettings.userId, 
                         userSettings.linkedinSessionCookie, 
@@ -620,6 +642,8 @@ async function runOrchestrator() {
             // Calculate next cycle delay
             const minDelay = Math.min(...activeSettings.map(s => s.minDelayMins));
             const maxDelay = Math.max(...activeSettings.map(s => s.maxDelayMins));
+            
+            console.log(`\n⏳ Cycle complete. Next check in ${minDelay}-${maxDelay} minutes...`);
             await randomDelay(minDelay, maxDelay);
 
         } catch (error: any) {

@@ -1,6 +1,6 @@
 /**
- * API endpoint to auto-start the worker process
- * This allows the worker to start automatically when the dashboard loads
+ * API endpoint to start the worker process ONLY when user clicks "Start" button
+ * ✅ FIXED: Worker only starts on explicit user action, never automatically
  */
 
 import { NextResponse } from 'next/server';
@@ -15,8 +15,11 @@ declare global {
 
 export async function POST() {
     try {
+        console.log('\n🚀 [API] User clicked "Start" button - Starting worker...');
+        
         // Check if worker is already running
         if (global._workerProcess && !global._workerProcess.killed) {
+            console.log('⚠️ [API] Worker already running - PID:', global._workerProcess.pid);
             return NextResponse.json({
                 success: true,
                 message: 'Worker already running',
@@ -25,8 +28,11 @@ export async function POST() {
             });
         }
 
-        // Start the worker process
+        // ✅ USER ACTION: Start the worker process
         const workerPath = path.join(process.cwd(), 'worker.ts');
+        
+        console.log('📂 [API] Worker path:', workerPath);
+        console.log('✅ [API] Spawning worker process...');
         
         const workerProcess = spawn('npx', ['tsx', workerPath], {
             detached: true,
@@ -37,6 +43,8 @@ export async function POST() {
         // Store process globally
         global._workerProcess = workerProcess;
         global._workerStartTime = Date.now();
+
+        console.log(`✅ [API] Worker started - PID: ${workerProcess.pid}`);
 
         // Log worker output
         workerProcess.stdout?.on('data', (data) => {
@@ -57,12 +65,13 @@ export async function POST() {
 
         return NextResponse.json({
             success: true,
-            message: 'Worker started successfully',
-            pid: workerProcess.pid
+            message: 'Worker started by USER ACTION',
+            pid: workerProcess.pid,
+            startedAt: new Date().toISOString()
         });
 
     } catch (error: any) {
-        console.error('Failed to start worker:', error);
+        console.error('❌ [API] Failed to start worker:', error);
         return NextResponse.json({
             success: false,
             error: error.message
