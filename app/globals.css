@@ -346,46 +346,21 @@
   }
   
   /* ===================================
-     TRUE ANIMATED BACKGROUND LAYER
+     VISUAL EFFECTS ON TOP OF BLACK
      =================================== */
   
-  /* Animated Gradient Mesh - Behind black overlay */
-  @keyframes mesh-gradient {
-    0%, 100% {
-      background-position: 0% 50%;
-    }
-    50% {
-      background-position: 100% 50%;
-    }
-  }
-  
-  .animated-gradient-mesh {
-    background: linear-gradient(
-      -45deg,
-      #1a0f0a 0%,
-      #2d1810 15%,
-      #1a0f0a 30%,
-      #3d2415 45%,
-      #1a0f0a 60%,
-      #2d1810 75%,
-      #1a0f0a 100%
-    );
-    background-size: 400% 400%;
-    animation: mesh-gradient 20s ease infinite;
-  }
-  
-  /* Cinematic Light Sweep */
+  /* Cinematic Light Sweep - Subtle */
   @keyframes light-sweep {
     0%, 100% {
       transform: translateX(-100%) translateY(-50%) rotate(-15deg);
       opacity: 0;
     }
     10% {
-      opacity: 0.15;
+      opacity: 0.08;
     }
     50% {
       transform: translateX(100%) translateY(-50%) rotate(-15deg);
-      opacity: 0.15;
+      opacity: 0.08;
     }
     60%, 100% {
       opacity: 0;
@@ -396,9 +371,9 @@
     background: linear-gradient(
       90deg,
       transparent 0%,
-      rgba(251, 191, 36, 0.1) 45%,
-      rgba(245, 158, 11, 0.15) 50%,
-      rgba(251, 191, 36, 0.1) 55%,
+      rgba(251, 191, 36, 0.06) 45%,
+      rgba(245, 158, 11, 0.08) 50%,
+      rgba(251, 191, 36, 0.06) 55%,
       transparent 100%
     );
     width: 200%;
@@ -407,11 +382,11 @@
     transform-origin: center;
   }
   
-  /* Depth Grid Pattern */
+  /* Depth Grid Pattern - Very Subtle */
   .depth-grid {
     background-image: 
-      linear-gradient(rgba(251, 191, 36, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(251, 191, 36, 0.03) 1px, transparent 1px);
+      linear-gradient(rgba(251, 191, 36, 0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(251, 191, 36, 0.015) 1px, transparent 1px);
     background-size: 100px 100px;
     animation: grid-perspective 30s linear infinite;
   }
@@ -419,11 +394,11 @@
   @keyframes grid-perspective {
     0%, 100% {
       transform: perspective(1000px) rotateX(60deg) scale(2);
-      opacity: 0.1;
+      opacity: 0.05;
     }
     50% {
       transform: perspective(1000px) rotateX(60deg) scale(2.2);
-      opacity: 0.15;
+      opacity: 0.08;
     }
   }
   

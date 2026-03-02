@@ -5,20 +5,17 @@ import React from 'react';
 export default function AnimatedMeshBackground() {
   return (
     <>
-      {/* TRUE BACKGROUND LAYER - Behind everything */}
-      <div className="fixed inset-0 -z-50">
-        {/* Animated Gradient Mesh Background */}
-        <div className="absolute inset-0 animated-gradient-mesh" />
-        
+      {/* PURE BLACK BASE - NEVER CHANGES */}
+      <div className="fixed inset-0 -z-50 bg-[#0a0a0a]" />
+      
+      {/* VISUAL EFFECTS LAYER - On top of black */}
+      <div className="fixed inset-0 -z-40 pointer-events-none">
         {/* Cinematic Light Sweep */}
         <div className="absolute inset-0 cinematic-light-sweep" />
         
-        {/* Depth Grid Pattern */}
-        <div className="absolute inset-0 depth-grid opacity-10" />
+        {/* Subtle Depth Grid Pattern */}
+        <div className="absolute inset-0 depth-grid opacity-5" />
       </div>
-      
-      {/* BLACK OVERLAY - Creates the dark theme on top of animated bg */}
-      <div className="fixed inset-0 -z-40 bg-[#0a0a0a]/85 backdrop-blur-[2px]" />
     </>
   );
 }
