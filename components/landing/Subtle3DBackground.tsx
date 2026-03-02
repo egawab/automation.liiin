@@ -20,83 +20,111 @@ export default function Subtle3DBackground() {
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    // Particle system for subtle depth effect
-    const particles: Array<{
+    // Network nodes for connected mesh effect
+    const nodes: Array<{
       x: number;
       y: number;
       z: number;
+      baseX: number;
+      baseY: number;
       vx: number;
       vy: number;
-      vz: number;
     }> = [];
 
-    // Create subtle particles
-    for (let i = 0; i < 50; i++) {
-      particles.push({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
-        z: Math.random() * 1000,
-        vx: (Math.random() - 0.5) * 0.2,
-        vy: (Math.random() - 0.5) * 0.2,
-        vz: (Math.random() - 0.5) * 0.5,
-      });
+    // Create network nodes distributed across the screen
+    const nodeCount = 40;
+    const cols = 8;
+    const rows = 5;
+    const spacingX = canvas.width / (cols + 1);
+    const spacingY = canvas.height / (rows + 1);
+
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        const baseX = spacingX * (j + 1);
+        const baseY = spacingY * (i + 1);
+        nodes.push({
+          x: baseX,
+          y: baseY,
+          z: Math.random() * 500,
+          baseX: baseX,
+          baseY: baseY,
+          vx: (Math.random() - 0.5) * 0.3,
+          vy: (Math.random() - 0.5) * 0.3,
+        });
+      }
     }
+
+    let time = 0;
 
     // Animation loop
     let animationFrameId: number;
     const animate = () => {
-      ctx.fillStyle = 'rgba(17, 24, 39, 0.1)'; // Very subtle trail effect
+      // Clear with solid dark background
+      ctx.fillStyle = '#111827';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      particles.forEach((particle) => {
-        // Update position
-        particle.x += particle.vx;
-        particle.y += particle.vy;
-        particle.z += particle.vz;
+      time += 0.005;
 
-        // Wrap around screen
-        if (particle.x < 0) particle.x = canvas.width;
-        if (particle.x > canvas.width) particle.x = 0;
-        if (particle.y < 0) particle.y = canvas.height;
-        if (particle.y > canvas.height) particle.y = 0;
-        if (particle.z < 0) particle.z = 1000;
-        if (particle.z > 1000) particle.z = 0;
+      // Update and draw connections first (so they're behind nodes)
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        
+        // Gentle floating motion with sine waves
+        node.x = node.baseX + Math.sin(time + i * 0.5) * 30;
+        node.y = node.baseY + Math.cos(time + i * 0.3) * 20;
+        node.z = 250 + Math.sin(time * 0.8 + i * 0.4) * 150;
 
+        // Draw connections to nearby nodes
+        for (let j = i + 1; j < nodes.length; j++) {
+          const other = nodes[j];
+          const dx = node.x - other.x;
+          const dy = node.y - other.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          // Connect nodes that are close together
+          if (distance < 200) {
+            // Calculate 3D perspective for both nodes
+            const scale1 = 800 / (800 + node.z);
+            const scale2 = 800 / (800 + other.z);
+            
+            const x1 = node.x * scale1 + canvas.width / 2 * (1 - scale1);
+            const y1 = node.y * scale1 + canvas.height / 2 * (1 - scale1);
+            const x2 = other.x * scale2 + canvas.width / 2 * (1 - scale2);
+            const y2 = other.y * scale2 + canvas.height / 2 * (1 - scale2);
+
+            // Calculate opacity based on distance and depth
+            const avgZ = (node.z + other.z) / 2;
+            const depthOpacity = 1 - (avgZ / 500);
+            const distanceOpacity = 1 - (distance / 200);
+            const lineOpacity = depthOpacity * distanceOpacity * 0.15;
+
+            // Draw connection line
+            ctx.strokeStyle = `rgba(156, 163, 175, ${lineOpacity})`;
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Draw nodes on top
+      nodes.forEach((node, i) => {
         // Calculate 3D perspective
-        const scale = 1000 / (1000 + particle.z);
-        const x2d = particle.x * scale + canvas.width / 2 * (1 - scale);
-        const y2d = particle.y * scale + canvas.height / 2 * (1 - scale);
+        const scale = 800 / (800 + node.z);
+        const x2d = node.x * scale + canvas.width / 2 * (1 - scale);
+        const y2d = node.y * scale + canvas.height / 2 * (1 - scale);
         
-        // Draw particle with depth-based opacity and size
-        const opacity = 0.1 + (1 - particle.z / 1000) * 0.15;
-        const size = 1 + (1 - particle.z / 1000) * 2;
+        // Draw node with depth-based opacity and size
+        const depthOpacity = 1 - (node.z / 500);
+        const opacity = 0.2 + depthOpacity * 0.3;
+        const size = 2 + (1 - node.z / 500) * 2;
         
-        ctx.fillStyle = `rgba(156, 163, 175, ${opacity})`; // Subtle gray
+        ctx.fillStyle = `rgba(156, 163, 175, ${opacity})`;
         ctx.beginPath();
         ctx.arc(x2d, y2d, size, 0, Math.PI * 2);
         ctx.fill();
-
-        // Draw subtle connections between nearby particles
-        particles.forEach((other) => {
-          const dx = particle.x - other.x;
-          const dy = particle.y - other.y;
-          const dz = particle.z - other.z;
-          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-          if (distance < 150) {
-            const otherScale = 1000 / (1000 + other.z);
-            const otherX2d = other.x * otherScale + canvas.width / 2 * (1 - otherScale);
-            const otherY2d = other.y * otherScale + canvas.height / 2 * (1 - otherScale);
-            
-            const lineOpacity = (1 - distance / 150) * 0.05;
-            ctx.strokeStyle = `rgba(156, 163, 175, ${lineOpacity})`;
-            ctx.lineWidth = 0.5;
-            ctx.beginPath();
-            ctx.moveTo(x2d, y2d);
-            ctx.lineTo(otherX2d, otherY2d);
-            ctx.stroke();
-          }
-        });
       });
 
       animationFrameId = requestAnimationFrame(animate);
