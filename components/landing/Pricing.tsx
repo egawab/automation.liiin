@@ -63,7 +63,7 @@ const plans = [
 
 export default function Pricing() {
   return (
-    <section id="pricing" className="relative py-32 px-4 overflow-hidden bg-gray-50">
+    <section id="pricing" className="relative py-32 px-4 overflow-hidden bg-transparent">
       <div className="max-w-7xl mx-auto">
         {/* Section Header */}
         <motion.div
@@ -73,10 +73,10 @@ export default function Pricing() {
           transition={{ duration: 0.4 }}
           className="text-center mb-16"
         >
-          <h2 className="text-4xl sm:text-5xl font-bold text-gray-900 mb-4">
+          <h2 className="text-4xl sm:text-5xl font-bold text-white mb-4">
             Simple, Transparent Pricing
           </h2>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+          <p className="text-xl text-gray-300 max-w-2xl mx-auto">
             Choose the plan that fits your growth goals. All plans include a 14-day free trial.
           </p>
         </motion.div>
@@ -97,40 +97,40 @@ export default function Pricing() {
                 {/* Popular Badge */}
                 {plan.popular && (
                   <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 z-10">
-                    <div className="bg-gray-900 text-white text-xs font-bold px-4 py-1.5 rounded-full shadow-lg">
+                    <div className="bg-white text-gray-900 text-xs font-bold px-4 py-1.5 rounded-full shadow-lg">
                       MOST POPULAR
                     </div>
                   </div>
                 )}
 
                 {/* Card */}
-                <div className={`h-full rounded-2xl p-8 transition-colors duration-200 ${
+                <div className={`h-full rounded-2xl p-8 transition-colors duration-200 backdrop-blur-sm ${
                   plan.popular
-                    ? 'bg-white border-2 border-gray-900'
-                    : 'bg-white border border-gray-200 hover:border-gray-300'
+                    ? 'bg-gray-800/70 border-2 border-white'
+                    : 'bg-gray-800/50 border border-gray-700 hover:border-gray-600'
                 }`}>
                   {/* Icon */}
-                  <div className="w-12 h-12 rounded-xl bg-gray-100 border border-gray-200 flex items-center justify-center mb-6">
-                    <Icon className="w-6 h-6 text-gray-700" />
+                  <div className="w-12 h-12 rounded-xl bg-gray-700 border border-gray-600 flex items-center justify-center mb-6">
+                    <Icon className="w-6 h-6 text-gray-300" />
                   </div>
 
                   {/* Plan Name */}
-                  <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                  <h3 className="text-2xl font-bold text-white mb-2">
                     {plan.name}
                   </h3>
 
                   {/* Description */}
-                  <p className="text-gray-600 text-sm mb-6">
+                  <p className="text-gray-300 text-sm mb-6">
                     {plan.description}
                   </p>
 
                   {/* Price */}
                   <div className="mb-6">
                     <div className="flex items-baseline gap-1">
-                      <span className="text-5xl font-bold text-gray-900">
+                      <span className="text-5xl font-bold text-white">
                         ${plan.price}
                       </span>
-                      <span className="text-gray-500">
+                      <span className="text-gray-400">
                         {plan.period}
                       </span>
                     </div>
@@ -140,8 +140,8 @@ export default function Pricing() {
                   <Link href="/login" className="block mb-6">
                     <button className={`w-full py-4 rounded-xl font-semibold transition-colors duration-200 ${
                       plan.popular
-                        ? 'bg-gray-900 hover:bg-gray-800 text-white'
-                        : 'bg-gray-100 hover:bg-gray-200 text-gray-900 border border-gray-300'
+                        ? 'bg-white hover:bg-gray-100 text-gray-900'
+                        : 'bg-gray-700 hover:bg-gray-600 text-white border border-gray-600'
                     }`}>
                       {plan.cta}
                     </button>
@@ -151,8 +151,8 @@ export default function Pricing() {
                   <ul className="space-y-3">
                     {plan.features.map((feature, idx) => (
                       <li key={idx} className="flex items-start gap-3">
-                        <Check className="w-5 h-5 text-gray-700 flex-shrink-0 mt-0.5" />
-                        <span className="text-gray-600 text-sm">
+                        <Check className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+                        <span className="text-gray-300 text-sm">
                           {feature}
                         </span>
                       </li>
@@ -172,8 +172,8 @@ export default function Pricing() {
           transition={{ duration: 0.4, delay: 0.3 }}
           className="mt-16 text-center"
         >
-          <p className="text-gray-600">
-            <span className="font-semibold text-gray-900">30-day money-back guarantee.</span> No questions asked.
+          <p className="text-gray-300">
+            <span className="font-semibold text-white">30-day money-back guarantee.</span> No questions asked.
           </p>
         </motion.div>
       </div>

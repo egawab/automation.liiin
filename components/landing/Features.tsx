@@ -54,7 +54,7 @@ const item = {
 
 export default function Features() {
   return (
-    <section id="features" className="relative py-32 px-4 overflow-hidden bg-white">
+    <section id="features" className="relative py-32 px-4 overflow-hidden bg-transparent">
 
       <div className="max-w-7xl mx-auto relative">
         {/* Refined Section Header */}
@@ -65,11 +65,11 @@ export default function Features() {
           transition={{ duration: 0.4 }}
           className="text-center mb-20"
         >
-          <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight mb-6 text-gray-900">
+          <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight mb-6 text-white">
             Everything You Need
           </h2>
           
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed font-light">
+          <p className="text-xl text-gray-300 max-w-2xl mx-auto leading-relaxed font-light">
             Professional automation that builds authority, generates leads, 
             and grows your network.
           </p>
@@ -92,21 +92,21 @@ export default function Features() {
                 className="group relative"
               >
                 {/* Clean Card with Minimal Design */}
-                <div className="h-full bg-white border border-gray-200 rounded-2xl p-8 hover:border-gray-300 transition-colors duration-200">
+                <div className="h-full bg-gray-800/50 border border-gray-700 rounded-2xl p-8 hover:border-gray-600 transition-colors duration-200 backdrop-blur-sm">
                   
                   {/* Icon with clean styling */}
                   <div className="mb-6 relative">
-                    <div className="w-12 h-12 rounded-xl bg-gray-100 border border-gray-200 flex items-center justify-center">
-                      <Icon className="w-6 h-6 text-gray-600" />
+                    <div className="w-12 h-12 rounded-xl bg-gray-700 border border-gray-600 flex items-center justify-center">
+                      <Icon className="w-6 h-6 text-gray-300" />
                     </div>
                   </div>
 
                   {/* Content */}
-                  <h3 className="text-xl font-semibold text-gray-900 mb-3 relative">
+                  <h3 className="text-xl font-semibold text-white mb-3 relative">
                     {feature.title}
                   </h3>
                   
-                  <p className="text-gray-600 leading-relaxed font-light relative">
+                  <p className="text-gray-300 leading-relaxed font-light relative">
                     {feature.description}
                   </p>
                 </div>

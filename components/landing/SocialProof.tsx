@@ -33,7 +33,7 @@ const testimonials = [
 
 export default function SocialProof() {
   return (
-    <section className="relative py-24 px-4 overflow-hidden bg-white">
+    <section className="relative py-24 px-4 overflow-hidden bg-transparent">
       <div className="max-w-7xl mx-auto">
         {/* Section Header */}
         <motion.div
@@ -43,10 +43,10 @@ export default function SocialProof() {
           transition={{ duration: 0.4 }}
           className="text-center mb-16"
         >
-          <h2 className="text-4xl sm:text-5xl font-bold text-gray-900 mb-4">
+          <h2 className="text-4xl sm:text-5xl font-bold text-white mb-4">
             Trusted by Professionals
           </h2>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+          <p className="text-xl text-gray-300 max-w-2xl mx-auto">
             Join thousands growing their LinkedIn presence on autopilot
           </p>
         </motion.div>
@@ -63,36 +63,36 @@ export default function SocialProof() {
               className="group relative"
             >
               {/* Card */}
-              <div className="h-full bg-white border border-gray-200 rounded-2xl p-8 hover:border-gray-300 transition-colors duration-200">
+              <div className="h-full bg-gray-800/50 border border-gray-700 rounded-2xl p-8 hover:border-gray-600 transition-colors duration-200 backdrop-blur-sm">
                 {/* Quote Icon */}
-                <Quote className="w-10 h-10 text-gray-300 mb-4" />
+                <Quote className="w-10 h-10 text-gray-500 mb-4" />
                 
                 {/* Rating */}
                 <div className="flex gap-1 mb-4">
                   {[...Array(testimonial.rating)].map((_, i) => (
-                    <Star key={i} className="w-4 h-4 fill-gray-700 text-gray-700" />
+                    <Star key={i} className="w-4 h-4 fill-yellow-500 text-yellow-500" />
                   ))}
                 </div>
 
                 {/* Content */}
-                <p className="text-gray-700 mb-6 leading-relaxed">
+                <p className="text-gray-300 mb-6 leading-relaxed">
                   "{testimonial.content}"
                 </p>
 
                 {/* Author */}
                 <div className="flex items-center gap-3">
                   {/* Avatar Placeholder */}
-                  <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
-                    <span className="text-gray-700 font-semibold text-lg">
+                  <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center">
+                    <span className="text-white font-semibold text-lg">
                       {testimonial.name.charAt(0)}
                     </span>
                   </div>
                   
                   <div>
-                    <div className="font-semibold text-gray-900">
+                    <div className="font-semibold text-white">
                       {testimonial.name}
                     </div>
-                    <div className="text-sm text-gray-600">
+                    <div className="text-sm text-gray-400">
                       {testimonial.role} at {testimonial.company}
                     </div>
                   </div>
@@ -110,13 +110,13 @@ export default function SocialProof() {
           transition={{ duration: 0.4, delay: 0.3 }}
           className="mt-16 text-center"
         >
-          <div className="inline-flex flex-wrap items-center justify-center gap-8 text-gray-600">
+          <div className="inline-flex flex-wrap items-center justify-center gap-8 text-gray-300">
             <div className="flex items-center gap-2">
               <div className="flex -space-x-2">
                 {[...Array(5)].map((_, i) => (
                   <div 
                     key={i} 
-                    className="w-8 h-8 rounded-full bg-gray-200 border-2 border-white flex items-center justify-center text-gray-700 text-xs font-bold"
+                    className="w-8 h-8 rounded-full bg-gray-700 border-2 border-gray-900 flex items-center justify-center text-white text-xs font-bold"
                   >
                     {String.fromCharCode(65 + i)}
                   </div>
@@ -124,9 +124,9 @@ export default function SocialProof() {
               </div>
               <span className="text-sm font-medium">10,000+ happy users</span>
             </div>
-            <span className="text-gray-400">•</span>
+            <span className="text-gray-600">•</span>
             <span className="text-sm font-medium">4.9/5 average rating</span>
-            <span className="text-gray-400">•</span>
+            <span className="text-gray-600">•</span>
             <span className="text-sm font-medium">2M+ comments posted</span>
           </div>
         </motion.div>

@@ -41,8 +41,8 @@ export default function Navigation() {
         transition={{ duration: 0.4 }}
         className={`fixed top-0 left-0 right-0 z-50 transition-all duration-200 ${
           isScrolled 
-            ? 'bg-white/95 backdrop-blur-xl border-b border-gray-200' 
-            : 'bg-white/80 backdrop-blur-sm border-b border-gray-100'
+            ? 'bg-gray-900/95 backdrop-blur-xl border-b border-gray-800' 
+            : 'bg-gray-900/80 backdrop-blur-sm border-b border-gray-800'
         }`}
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -62,7 +62,7 @@ export default function Navigation() {
                 <a
                   key={link.href}
                   href={link.href}
-                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+                  className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white transition-colors"
                 >
                   {link.label}
                 </a>
@@ -73,12 +73,12 @@ export default function Navigation() {
             <div className="hidden md:flex items-center gap-4">
               <Link
                 href="/login"
-                className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+                className="text-sm font-medium text-gray-300 hover:text-white transition-colors"
               >
                 Sign In
               </Link>
               <Link href="/login">
-                <button className="px-6 py-2.5 bg-gray-900 hover:bg-gray-800 text-white font-semibold rounded-xl transition-colors duration-200">
+                <button className="px-6 py-2.5 bg-white hover:bg-gray-100 text-gray-900 font-semibold rounded-xl transition-colors duration-200">
                   Get Started
                 </button>
               </Link>
@@ -87,7 +87,7 @@ export default function Navigation() {
             {/* Mobile Menu Button with Animation */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden relative p-2 text-gray-600 hover:text-gray-900 transition-colors focus:outline-none"
+              className="md:hidden relative p-2 text-gray-300 hover:text-white transition-colors focus:outline-none"
               aria-label="Toggle mobile menu"
             >
               {isMobileMenuOpen ? (
@@ -110,7 +110,7 @@ export default function Navigation() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-40 md:hidden bg-black/20 backdrop-blur-sm"
+              className="fixed inset-0 z-40 md:hidden bg-black/40 backdrop-blur-sm"
               onClick={() => setIsMobileMenuOpen(false)}
             />
 
@@ -120,7 +120,7 @@ export default function Navigation() {
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed top-20 right-0 bottom-0 z-50 w-80 md:hidden bg-white border-l border-gray-200 shadow-2xl overflow-y-auto"
+              className="fixed top-20 right-0 bottom-0 z-50 w-80 md:hidden bg-gray-900 border-l border-gray-800 shadow-2xl overflow-y-auto"
             >
               <div className="p-6 space-y-2">
                 {/* Navigation Links */}
@@ -133,20 +133,20 @@ export default function Navigation() {
                     key={link.href}
                     href={link.href}
                     onClick={() => setIsMobileMenuOpen(false)}
-                    className="block py-3 px-4 text-base font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-xl transition-colors"
+                    className="block py-3 px-4 text-base font-medium text-gray-300 hover:bg-gray-800 hover:text-white rounded-xl transition-colors"
                   >
                     {link.label}
                   </a>
                 ))}
 
                 {/* Divider */}
-                <div className="h-px bg-gray-200 my-4" />
+                <div className="h-px bg-gray-800 my-4" />
 
                 {/* Sign In Link */}
                 <Link
                   href="/login"
                   onClick={() => setIsMobileMenuOpen(false)}
-                  className="block py-3 px-4 text-base font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-xl transition-colors"
+                  className="block py-3 px-4 text-base font-medium text-gray-300 hover:bg-gray-800 hover:text-white rounded-xl transition-colors"
                 >
                   Sign In
                 </Link>
@@ -154,7 +154,7 @@ export default function Navigation() {
                 {/* Get Started Button - Clean Design */}
                 <div className="pt-4">
                   <Link href="/login" onClick={() => setIsMobileMenuOpen(false)}>
-                    <button className="w-full px-6 py-4 bg-gray-900 hover:bg-gray-800 text-white font-semibold rounded-xl transition-colors">
+                    <button className="w-full px-6 py-4 bg-white hover:bg-gray-100 text-gray-900 font-semibold rounded-xl transition-colors">
                       Get Started
                     </button>
                   </Link>
@@ -162,7 +162,7 @@ export default function Navigation() {
 
                 {/* Bottom Info */}
                 <div className="pt-8 text-center">
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-gray-400">
                     Join 1,000+ professionals growing on LinkedIn
                   </p>
                 </div>
