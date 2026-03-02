@@ -695,10 +695,12 @@ async function runOrchestrator() {
             console.log(`👥 Found ${activeSettings.length} active user(s)\n`);
             
             // Auto-configure platform URL from settings or environment
-            if (activeSettings.length > 0 && activeSettings[0].platformUrl) {
-                setApiBaseUrl(activeSettings[0].platformUrl);
+            if (activeSettings.length > 0 && activeSettings[0].platformUrl && activeSettings[0].platformUrl.trim()) {
+                const userPlatformUrl = activeSettings[0].platformUrl.trim();
+                console.log(`   📡 Platform URL from user settings: ${userPlatformUrl}`);
+                setApiBaseUrl(userPlatformUrl);
             } else {
-                console.log(`   📡 Using auto-detected platform URL (environment-based)`);
+                console.log(`   📡 Platform URL from auto-detection (check logs above)`);
             }
             
             await broadcastStatus(`✅ Worker activated - processing ${activeSettings.length} user(s)`);

@@ -9,25 +9,39 @@ import { Page } from 'playwright';
 function getApiBaseUrl(): string {
   // 1. Check if explicitly set (for production deployments)
   if (process.env.NEXT_PUBLIC_APP_URL) {
+    console.log(`   📡 Using NEXT_PUBLIC_APP_URL: ${process.env.NEXT_PUBLIC_APP_URL}`);
     return process.env.NEXT_PUBLIC_APP_URL;
   }
   
   // 2. Check if VERCEL_URL is set (automatic in Vercel deployments)
   if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`;
+    const url = `https://${process.env.VERCEL_URL}`;
+    console.log(`   📡 Using VERCEL_URL: ${url}`);
+    return url;
   }
   
   // 3. Check if running on Render (RENDER_EXTERNAL_URL)
   if (process.env.RENDER_EXTERNAL_URL) {
+    console.log(`   📡 Using RENDER_EXTERNAL_URL: ${process.env.RENDER_EXTERNAL_URL}`);
     return process.env.RENDER_EXTERNAL_URL;
   }
   
   // 4. Check if running on Railway (RAILWAY_STATIC_URL)
   if (process.env.RAILWAY_STATIC_URL) {
+    console.log(`   📡 Using RAILWAY_STATIC_URL: ${process.env.RAILWAY_STATIC_URL}`);
     return process.env.RAILWAY_STATIC_URL;
   }
   
-  // 5. Default to localhost for local development
+  // 5. Check if DATABASE_URL indicates production (Neon)
+  if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon.tech')) {
+    // Production database detected, use production platform URL
+    const productionUrl = 'https://automation-liiin-nfum.vercel.app';
+    console.log(`   📡 Production database detected, using: ${productionUrl}`);
+    return productionUrl;
+  }
+  
+  // 6. Default to localhost for local development ONLY
+  console.log(`   📡 Using localhost (local development mode)`);
   return 'http://localhost:3000';
 }
 
