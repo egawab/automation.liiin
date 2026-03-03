@@ -427,6 +427,30 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         var results = [];
         var seenUrls = {};
         
+        // Initialize diagnostics FIRST
+        window.__scraperDiagnostics = {
+          containerCount: 0,
+          totalExtracted: 0,
+          pageTitle: document.title,
+          noResultsFound: false,
+          methods: {},
+          phase1Details: {
+            containersFound: 0,
+            containersWithLinks: 0,
+            linksRejectedByValidation: 0,
+            linksDuplicate: 0,
+            linksAccepted: 0
+          },
+          phase2Details: {
+            linksFound: 0,
+            linksRejectedByValidation: 0,
+            linksDuplicate: 0,
+            linksAccepted: 0
+          },
+          rejectionReasons: [],
+          sampleRejectedUrls: []
+        };
+        
         // Strict URL validation - only accept real LinkedIn post URLs
         function isValidPostUrl(url) {
           // Must contain one of these patterns for a real post
@@ -603,32 +627,15 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         // REMOVED: Desperate fallback was too aggressive and grabbed non-post pages
         // If Phase 1 and 2 fail, it means LinkedIn truly has no posts for this keyword
 
-        window.__scraperDiagnostics = {
-          containerCount: containers.length,
-          totalExtracted: results.length,
-          pageTitle: document.title,
-          noResultsFound: !!document.querySelector('.search-relevance-no-results, .artdeco-empty-state'),
-          methods: results.reduce(function(acc, r) {
-            acc[r.method] = (acc[r.method] || 0) + 1;
-            return acc;
-          }, {}),
-          // Detailed debugging
-          phase1Details: {
-            containersFound: containers.length,
-            containersWithLinks: 0,
-            linksRejectedByValidation: 0,
-            linksDuplicate: 0,
-            linksAccepted: 0
-          },
-          phase2Details: {
-            linksFound: 0,
-            linksRejectedByValidation: 0,
-            linksDuplicate: 0,
-            linksAccepted: 0
-          },
-          rejectionReasons: [],
-          sampleRejectedUrls: []
-        };
+        // Update final metrics
+        window.__scraperDiagnostics.containerCount = containers.length;
+        window.__scraperDiagnostics.totalExtracted = results.length;
+        window.__scraperDiagnostics.noResultsFound = !!document.querySelector('.search-relevance-no-results, .artdeco-empty-state');
+        window.__scraperDiagnostics.methods = results.reduce(function(acc, r) {
+          acc[r.method] = (acc[r.method] || 0) + 1;
+          return acc;
+        }, {});
+        window.__scraperDiagnostics.phase1Details.containersFound = containers.length;
 
         return results;
       })()
