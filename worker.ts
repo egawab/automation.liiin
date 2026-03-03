@@ -21,6 +21,7 @@
  * 4. Repeat cycle
  */
 
+import 'dotenv/config'; // MUST be first — loads DATABASE_URL before PrismaClient initializes
 import { chromium, Browser, Page } from 'playwright';
 import { PrismaClient } from '@prisma/client';
 import {
