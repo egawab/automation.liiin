@@ -694,24 +694,36 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       console.log('   Waiting for page elements to stabilize...');
       // Wait for either the global nav (logged in) or the login form (failed)
       await Promise.race([
-        page.waitForSelector('#global-nav', { timeout: 15000 }).catch(() => null),
-        page.waitForSelector('input[name="session_key"]', { timeout: 15000 }).catch(() => null),
-        page.waitForSelector('div.feed-shared-update-v2', { timeout: 15000 }).catch(() => null)
+        page.waitForSelector('#global-nav', { timeout: 10000 }).catch(() => null),
+        page.waitForSelector('.global-nav', { timeout: 10000 }).catch(() => null),
+        page.waitForSelector('[aria-label="Primary Navigation"]', { timeout: 10000 }).catch(() => null),
+        page.waitForSelector('input[name="session_key"]', { timeout: 10000 }).catch(() => null),
+        page.waitForSelector('div.feed-shared-update-v2', { timeout: 10000 }).catch(() => null)
       ]);
+
+      // Explicit short sleep to allow dynamic content (like session fragments) to settle
+      await sleep(3000);
     } catch (e: any) {
       console.log(`   ⚠️  Navigation warning: ${e.message}`);
     }
 
-    // Check if logged in (more robust checks)
+    // Check current state
     const currentUrl = page.url();
-    const hasGlobalNav = await page.$('#global-nav') !== null;
+    const hasGlobalNav = await page.$('#global-nav') !== null || await page.$('.global-nav') !== null;
+    const hasPrimaryNav = await page.$('[aria-label="Primary Navigation"]') !== null;
     const hasFeedPosts = await page.$('div.feed-shared-update-v2') !== null;
     const hasStartPost = await page.$('button[aria-label*="Start a post"]') !== null;
+    const isFeedUrl = currentUrl.includes('/feed');
+    const onLoginPage = await page.$('input[name="session_key"]') !== null || currentUrl.includes('/login');
 
-    const isLoggedIn = (currentUrl.includes('/feed') && (hasGlobalNav || hasFeedPosts)) || hasGlobalNav || hasStartPost;
+    // Robust login determination: 
+    // 1. If we are on /feed and NOT on a login page, we are very likely logged in regardless of specific selectors
+    // 2. OR if any major logged-in selectors are present
+    const isLoggedIn = (isFeedUrl && !onLoginPage) || hasGlobalNav || hasPrimaryNav || hasFeedPosts || hasStartPost;
 
     if (isLoggedIn) {
       console.log('✅ LinkedIn authentication successful\n');
+      console.log(`   Detected via: ${isFeedUrl ? 'Feed URL' : ''} ${hasGlobalNav ? '+ Global Nav' : ''} ${hasPrimaryNav ? '+ Primary Nav' : ''}`);
       await broadcastScreenshot(page, 'Authenticated on LinkedIn');
       return true;
     } else {
@@ -721,10 +733,13 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       // Take screenshot for debugging
       await broadcastScreenshot(page, 'Authentication failed');
 
-      // Check if we're on login page
-      const onLoginPage = await page.$('input[name="session_key"]') !== null;
-      if (onLoginPage || currentUrl.includes('login') || currentUrl.includes('checkpoint')) {
-        console.log('   Reason: Redirected to login/checkpoint page (invalid cookie or security check)');
+      // Detailed failure reason
+      if (onLoginPage) {
+        console.log('   Reason: Redirected to login page (invalid/expired cookie)');
+      } else if (currentUrl.includes('/checkpoint')) {
+        console.log('   Reason: Security checkpoint detected (e.g. Email/SMS verification needed)');
+      } else {
+        console.log('   Reason: Unknown navigation state (check the diagnostic screenshot)');
       }
 
       return false;
