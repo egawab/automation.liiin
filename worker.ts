@@ -181,7 +181,26 @@ async function main() {
           }
 
           // Process single keyword
-          const result = await processKeyword(keyword, settings);
+          let result: ProcessingResult;
+          try {
+            result = await processKeyword(keyword, settings);
+          } catch (error: any) {
+            // Handle CAPTCHA detection - STOP worker completely
+            if (error.message === 'CAPTCHA_DETECTED') {
+              console.log('\n🚨 CAPTCHA DETECTED - Stopping worker to protect account\n');
+              await broadcastError('CAPTCHA detected! Worker stopped to avoid account restrictions. Please solve CAPTCHA manually and restart.');
+              await broadcastStatus('STOPPED', { message: 'CAPTCHA detected - manual intervention required' });
+              isRunning = false;
+              break;
+            }
+            
+            // Other errors - log and continue
+            result = {
+              success: false,
+              keyword: keyword.keyword,
+              reason: error.message
+            };
+          }
 
           // Log result to database
           await logResult(result, settings.userId);
@@ -207,6 +226,15 @@ async function main() {
         await sleep(2000); // Max 2 seconds between cycles
 
       } catch (error: any) {
+        // Handle CAPTCHA at loop level too
+        if (error.message === 'CAPTCHA_DETECTED') {
+          console.log('\n🚨 CAPTCHA DETECTED - Stopping worker to protect account\n');
+          await broadcastError('CAPTCHA detected! Worker stopped. Please solve CAPTCHA manually and restart.');
+          await broadcastStatus('STOPPED', { message: 'CAPTCHA detected - manual intervention required' });
+          isRunning = false;
+          break;
+        }
+        
         console.error('❌ Error in worker loop:', error);
         await broadcastError(`Worker error: ${error.message}`);
         await sleep(5000); // Wait 5 seconds on error
@@ -463,16 +491,29 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
             });
           }
           if (!link) return;
+          
+          window.__scraperDiagnostics.phase1Details.containersWithLinks++;
 
           var href = link.getAttribute('href') || '';
           if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
           href = href.split('?')[0].split('#')[0]; // Remove query params and anchors
           
           // STRICT VALIDATION: Only accept real post URLs in Phase 1 too
-          if (!isValidPostUrl(href)) return;
+          if (!isValidPostUrl(href)) {
+            window.__scraperDiagnostics.phase1Details.linksRejectedByValidation++;
+            if (window.__scraperDiagnostics.sampleRejectedUrls.length < 5) {
+              window.__scraperDiagnostics.sampleRejectedUrls.push(href);
+              window.__scraperDiagnostics.rejectionReasons.push('Phase1: URL validation failed for ' + href.substring(0, 80));
+            }
+            return;
+          }
           
-          if (seenUrls[href]) return;
+          if (seenUrls[href]) {
+            window.__scraperDiagnostics.phase1Details.linksDuplicate++;
+            return;
+          }
           seenUrls[href] = true;
+          window.__scraperDiagnostics.phase1Details.linksAccepted++;
 
           var likes = 0, comments = 0;
           
@@ -503,6 +544,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         if (results.length === 0) {
           console.log('[Scraper] Phase 1 found 0 posts, trying Phase 2 fallback...');
           var allLinks = Array.from(document.querySelectorAll('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"], a[href*="ugcPost"]'));
+          window.__scraperDiagnostics.phase2Details.linksFound = allLinks.length;
           
           allLinks.forEach(function(link) {
             var href = link.getAttribute('href') || '';
@@ -510,10 +552,21 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
             href = href.split('?')[0].split('#')[0];
             
             // STRICT VALIDATION: Only accept real post URLs
-            if (!isValidPostUrl(href)) return;
+            if (!isValidPostUrl(href)) {
+              window.__scraperDiagnostics.phase2Details.linksRejectedByValidation++;
+              if (window.__scraperDiagnostics.sampleRejectedUrls.length < 10) {
+                window.__scraperDiagnostics.sampleRejectedUrls.push(href);
+                window.__scraperDiagnostics.rejectionReasons.push('Phase2: URL validation failed for ' + href.substring(0, 80));
+              }
+              return;
+            }
             
-            if (seenUrls[href]) return;
+            if (seenUrls[href]) {
+              window.__scraperDiagnostics.phase2Details.linksDuplicate++;
+              return;
+            }
             seenUrls[href] = true;
+            window.__scraperDiagnostics.phase2Details.linksAccepted++;
 
             // Try to find engagement by going up to a common parent
             var parent = link;
@@ -558,7 +611,23 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           methods: results.reduce(function(acc, r) {
             acc[r.method] = (acc[r.method] || 0) + 1;
             return acc;
-          }, {})
+          }, {}),
+          // Detailed debugging
+          phase1Details: {
+            containersFound: containers.length,
+            containersWithLinks: 0,
+            linksRejectedByValidation: 0,
+            linksDuplicate: 0,
+            linksAccepted: 0
+          },
+          phase2Details: {
+            linksFound: 0,
+            linksRejectedByValidation: 0,
+            linksDuplicate: 0,
+            linksAccepted: 0
+          },
+          rejectionReasons: [],
+          sampleRejectedUrls: []
         };
 
         return results;
@@ -575,8 +644,34 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     console.log(`\n📊 Scraper Metrics:`);
     console.log(`   Containers detected: ${diag.containerCount || 0}`);
     console.log(`   Posts extracted: ${diag.totalExtracted || 0}`);
+    
+    // DETAILED DIAGNOSTICS
+    if (diag.phase1Details) {
+      console.log(`\n   🔍 Phase 1 (Container-based) Diagnostics:`);
+      console.log(`      Containers found: ${diag.phase1Details.containersFound}`);
+      console.log(`      Containers with links: ${diag.phase1Details.containersWithLinks}`);
+      console.log(`      Links rejected by validation: ${diag.phase1Details.linksRejectedByValidation}`);
+      console.log(`      Duplicate links: ${diag.phase1Details.linksDuplicate}`);
+      console.log(`      Links accepted: ${diag.phase1Details.linksAccepted}`);
+    }
+    
+    if (diag.phase2Details && diag.phase2Details.linksFound > 0) {
+      console.log(`\n   🔍 Phase 2 (Link-based) Diagnostics:`);
+      console.log(`      Links found: ${diag.phase2Details.linksFound}`);
+      console.log(`      Links rejected by validation: ${diag.phase2Details.linksRejectedByValidation}`);
+      console.log(`      Duplicate links: ${diag.phase2Details.linksDuplicate}`);
+      console.log(`      Links accepted: ${diag.phase2Details.linksAccepted}`);
+    }
+    
+    if (diag.sampleRejectedUrls && diag.sampleRejectedUrls.length > 0) {
+      console.log(`\n   ⚠️  Sample Rejected URLs:`);
+      diag.sampleRejectedUrls.forEach((url: string, i: number) => {
+        console.log(`      [${i + 1}] ${url}`);
+      });
+    }
+    
     if (diag.methods) {
-      console.log(`   Extraction methods used:`);
+      console.log(`\n   Extraction methods used:`);
       Object.keys(diag.methods).forEach(method => {
         console.log(`      ${method}: ${diag.methods[method]} posts`);
       });
@@ -584,16 +679,20 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     if (diag.noResultsFound) console.log(`   ⚠️ LinkedIn reports: "No results found"`);
 
     if (rawPosts.length > 0) {
-      console.log(`   ✅ Sample posts found:`);
+      console.log(`\n   ✅ Sample posts found:`);
       rawPosts.slice(0, 5).forEach((p, i) => {
         console.log(`      [${i + 1}] 👍 ${p.likes} | 💬 ${p.comments} | Method: ${p.method}`);
         console.log(`          URL: ${p.url.substring(0, 80)}...`);
       });
     } else {
-      console.log(`   ❌ No posts found for this keyword.`);
+      console.log(`\n   ❌ No posts found for this keyword.`);
       // Check for CAPTCHA
       const hasCaptcha = await page.evaluate('document.body.innerText.includes("CAPTCHA") || !!document.querySelector("iframe[src*=\'captcha\']")');
-      if (hasCaptcha) console.log(`   🚨 CAPTCHA detected! Automation blocked.`);
+      if (hasCaptcha) {
+        console.log(`   🚨 CAPTCHA detected! Automation blocked.`);
+        console.log(`   ⏸️  STOPPING worker to avoid account restrictions.`);
+        throw new Error('CAPTCHA_DETECTED');
+      }
       
       // Additional diagnostics
       const pageUrl = page.url();
