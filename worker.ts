@@ -399,6 +399,45 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         var results = [];
         var seenUrls = {};
         
+        // Strict URL validation - only accept real LinkedIn post URLs
+        function isValidPostUrl(url) {
+          // Must contain one of these patterns for a real post
+          var validPatterns = [
+            /\/posts\/[a-zA-Z0-9_-]+/,           // /posts/abc123
+            /\/feed\/update\/urn:li:activity:/,   // /feed/update/urn:li:activity:...
+            /\/feed\/update\/urn:li:ugcPost:/,    // /feed/update/urn:li:ugcPost:...
+            /activity-\d{19}/,                     // activity-1234567890123456789
+            /ugcPost-\d{19}/                       // ugcPost-1234567890123456789
+          ];
+          
+          // Must NOT be any of these (non-post pages)
+          var invalidPatterns = [
+            /\/premium\/products/,
+            /\/premium\/?$/,
+            /\/company\/[^\/]+\/?$/,              // Company root page (no /posts/)
+            /\/company\/[^\/]+\/posts\/?$/,       // Company posts listing (not individual post)
+            /\/feed\/?$/,                          // Feed home page
+            /\/search\//,                          // Search results
+            /\/mynetwork\//,                       // Network pages
+            /\/messaging\//,                       // Messaging
+            /\/notifications\//,                   // Notifications
+            /\/jobs\//,                            // Jobs
+            /\/learning\//                         // Learning
+          ];
+          
+          // Check invalid patterns first
+          for (var i = 0; i < invalidPatterns.length; i++) {
+            if (invalidPatterns[i].test(url)) return false;
+          }
+          
+          // Check valid patterns
+          for (var i = 0; i < validPatterns.length; i++) {
+            if (validPatterns[i].test(url)) return true;
+          }
+          
+          return false;
+        }
+        
         function parseNum(t) {
           if (!t) return 0;
           var c = t.toLowerCase().replace(/,/g, '').trim();
@@ -428,6 +467,9 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           var href = link.getAttribute('href') || '';
           if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
           href = href.split('?')[0].split('#')[0]; // Remove query params and anchors
+          
+          // STRICT VALIDATION: Only accept real post URLs in Phase 1 too
+          if (!isValidPostUrl(href)) return;
           
           if (seenUrls[href]) return;
           seenUrls[href] = true;
@@ -466,6 +508,10 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
             var href = link.getAttribute('href') || '';
             if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
             href = href.split('?')[0].split('#')[0];
+            
+            // STRICT VALIDATION: Only accept real post URLs
+            if (!isValidPostUrl(href)) return;
+            
             if (seenUrls[href]) return;
             seenUrls[href] = true;
 
@@ -500,24 +546,9 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           });
         }
         
-        // --- PHASE 3: Aggressive scraping if still nothing found ---
-        if (results.length === 0) {
-          console.log('[Scraper] Phase 2 found 0 posts, trying Phase 3 aggressive scraping...');
-          // Just grab ANY LinkedIn post links we can find
-          var desperateLinks = Array.from(document.querySelectorAll('a[href]'));
-          desperateLinks.forEach(function(link) {
-            var href = link.getAttribute('href') || '';
-            if (href.includes('linkedin.com') && (href.includes('post') || href.includes('activity') || href.includes('update'))) {
-              if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
-              href = href.split('?')[0].split('#')[0];
-              if (seenUrls[href]) return;
-              seenUrls[href] = true;
-              
-              // Default to 0 engagement if we can't extract
-              results.push({ url: href, likes: 0, comments: 0, method: 'desperate-fallback' });
-            }
-          });
-        }
+        // --- PHASE 3: Strict URL-based scraping (NO desperate fallback) ---
+        // REMOVED: Desperate fallback was too aggressive and grabbed non-post pages
+        // If Phase 1 and 2 fail, it means LinkedIn truly has no posts for this keyword
 
         window.__scraperDiagnostics = {
           containerCount: containers.length,
@@ -649,12 +680,31 @@ async function postAndVerifyComment(postUrl: string, commentText: string): Promi
       return { success: false, reason: 'Comment editor not found (tried multiple selectors)' };
     }
 
-    // Type comment
+    // Type comment - ensure proper focus
     console.log(`   ⌨️  Typing comment (${commentText.length} characters)...`);
-    await editor.click();
+    
+    // Triple-click to select any placeholder text, then clear
+    await editor.click({ clickCount: 3 });
+    await sleep(300);
+    await page.keyboard.press('Backspace');
+    await sleep(300);
+    
+    // Focus the editor properly
+    await editor.focus();
     await sleep(500);
-    await page.keyboard.type(commentText, { delay: 30 }); // Faster typing
+    
+    // Type the comment character by character
+    await page.keyboard.type(commentText, { delay: 30 });
     await sleep(1500);
+    
+    // Verify text was actually typed
+    const typedText = await editor.evaluate((el: any) => el.innerText || el.textContent || '').catch(() => '');
+    if (!typedText || !typedText.includes(commentText.substring(0, 20))) {
+      console.log(`   ❌ Text verification failed - comment box appears empty`);
+      await broadcastScreenshot(page, 'Comment text not in editor');
+      return { success: false, reason: 'Comment text was not typed into editor' };
+    }
+    console.log(`   ✅ Comment text verified in editor`);
 
     await broadcastScreenshot(page, 'Comment typed');
 
@@ -819,24 +869,32 @@ function selectBestPost(
 ): PostCandidate | null {
   // IMPROVED LOGIC: If we have filtered posts that match criteria, use them.
   // If NO posts match strict criteria, use the best available post anyway (don't skip posting!)
+  // BUT: Reject posts with 0 likes AND 0 comments (likely invalid pages)
+  
+  // Filter out invalid posts (0 engagement = likely not a real post)
+  const validPosts = allPosts.filter(p => p.likes > 0 || p.comments > 0);
+  const validFilteredPosts = filteredPosts.filter(p => p.likes > 0 || p.comments > 0);
   
   let postsToConsider: PostCandidate[] = [];
   let selectionMode = '';
   
-  if (filteredPosts.length > 0) {
+  if (validFilteredPosts.length > 0) {
     // We have posts that match criteria perfectly
-    postsToConsider = filteredPosts;
+    postsToConsider = validFilteredPosts;
     selectionMode = 'EXACT MATCH';
-    console.log(`   ✅ Found ${filteredPosts.length} posts matching criteria (${settings.minLikes}-${settings.maxLikes} likes, ${settings.minComments}-${settings.maxComments} comments)`);
-  } else if (allPosts.length > 0) {
-    // No posts match strict criteria, but we have SOME posts - use them anyway!
-    postsToConsider = allPosts;
+    console.log(`   ✅ Found ${validFilteredPosts.length} posts matching criteria (${settings.minLikes}-${settings.maxLikes} likes, ${settings.minComments}-${settings.maxComments} comments)`);
+  } else if (validPosts.length > 0) {
+    // No posts match strict criteria, but we have SOME valid posts - use them anyway!
+    postsToConsider = validPosts;
     selectionMode = 'BEST AVAILABLE (relaxed criteria)';
-    console.log(`   ⚠️  No posts matched strict criteria. Using best available from ${allPosts.length} posts.`);
+    console.log(`   ⚠️  No posts matched strict criteria. Using best available from ${validPosts.length} valid posts.`);
     console.log(`   📊 Criteria was: ${settings.minLikes}-${settings.maxLikes} likes, ${settings.minComments}-${settings.maxComments} comments`);
   } else {
-    // Absolutely no posts found at all
-    console.log(`   ❌ No posts found at all for this keyword.`);
+    // No valid posts found (all had 0 engagement)
+    console.log(`   ❌ No valid posts found (all had 0 likes and 0 comments - likely invalid URLs).`);
+    if (allPosts.length > 0) {
+      console.log(`   ⚠️  Found ${allPosts.length} URLs but they appear to be non-post pages.`);
+    }
     return null;
   }
 
