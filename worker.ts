@@ -185,15 +185,6 @@ async function main() {
           try {
             result = await processKeyword(keyword, settings);
           } catch (error: any) {
-            // Handle CAPTCHA detection - STOP worker completely
-            if (error.message === 'CAPTCHA_DETECTED') {
-              console.log('\n🚨 CAPTCHA DETECTED - Stopping worker to protect account\n');
-              await broadcastError('CAPTCHA detected! Worker stopped to avoid account restrictions. Please solve CAPTCHA manually and restart.');
-              await broadcastStatus('STOPPED', { message: 'CAPTCHA detected - manual intervention required' });
-              isRunning = false;
-              break;
-            }
-            
             // Other errors - log and continue
             result = {
               success: false,
@@ -226,15 +217,6 @@ async function main() {
         await sleep(2000); // Max 2 seconds between cycles
 
       } catch (error: any) {
-        // Handle CAPTCHA at loop level too
-        if (error.message === 'CAPTCHA_DETECTED') {
-          console.log('\n🚨 CAPTCHA DETECTED - Stopping worker to protect account\n');
-          await broadcastError('CAPTCHA detected! Worker stopped. Please solve CAPTCHA manually and restart.');
-          await broadcastStatus('STOPPED', { message: 'CAPTCHA detected - manual intervention required' });
-          isRunning = false;
-          break;
-        }
-        
         console.error('❌ Error in worker loop:', error);
         await broadcastError(`Worker error: ${error.message}`);
         await sleep(5000); // Wait 5 seconds on error
@@ -434,6 +416,119 @@ async function processKeyword(
       keyword,
       reason: error.message
     };
+  }
+}
+
+// ============================================================================
+// CAPTCHA HANDLING - PAUSE AND RESUME
+// ============================================================================
+
+async function waitForCaptchaResolution(): Promise<void> {
+  if (!page) return;
+
+  console.log('\n' + '='.repeat(80));
+  console.log('⏸️  WORKER PAUSED - CAPTCHA DETECTED');
+  console.log('='.repeat(80));
+  console.log('\n🚨 LinkedIn has shown a CAPTCHA challenge.\n');
+  console.log('📋 INSTRUCTIONS:');
+  console.log('   1. The browser window is still open');
+  console.log('   2. Solve the CAPTCHA manually in the browser');
+  console.log('   3. Wait for LinkedIn to load normally');
+  console.log('   4. The worker will automatically detect when CAPTCHA is resolved');
+  console.log('   5. Automation will resume from where it stopped\n');
+  console.log('⏳ Checking every 10 seconds for CAPTCHA resolution...\n');
+
+  // Broadcast paused status
+  await broadcastStatus('PAUSED', { 
+    message: 'CAPTCHA detected - Waiting for manual resolution',
+    action: 'Solve CAPTCHA in the browser window'
+  });
+  await broadcastError('CAPTCHA detected! Please solve it manually in the browser. Worker is paused and will resume automatically.');
+
+  let checkCount = 0;
+  const maxWaitTime = 30 * 60 * 1000; // Wait up to 30 minutes
+  const checkInterval = 10000; // Check every 10 seconds
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWaitTime) {
+    checkCount++;
+    await sleep(checkInterval);
+
+    try {
+      // Check if CAPTCHA is still present
+      const stillHasCaptcha = await page.evaluate(() => {
+        return document.body.innerText.includes('CAPTCHA') || 
+               document.body.innerText.includes('security verification') ||
+               document.body.innerText.includes('Let\'s do a quick security check') ||
+               !!document.querySelector('iframe[src*="captcha"]');
+      }).catch(() => true); // If error, assume CAPTCHA still there
+
+      if (!stillHasCaptcha) {
+        // CAPTCHA resolved! Verify session is still valid
+        console.log('\n✅ CAPTCHA appears to be resolved!');
+        console.log('   Verifying LinkedIn session...');
+
+        const sessionValid = await verifyLinkedInSession();
+        
+        if (sessionValid) {
+          console.log('   ✅ LinkedIn session is valid');
+          console.log('\n' + '='.repeat(80));
+          console.log('▶️  WORKER RESUMING - CAPTCHA RESOLVED');
+          console.log('='.repeat(80) + '\n');
+          
+          await broadcastStatus('RUNNING', { message: 'CAPTCHA resolved - Worker resumed' });
+          await broadcastLog('CAPTCHA resolved! Worker is resuming automation.');
+          
+          return; // Resume normal operation
+        } else {
+          console.log('   ⚠️  Session appears invalid, waiting...');
+        }
+      } else {
+        const elapsed = Math.round((Date.now() - startTime) / 1000 / 60);
+        console.log(`   ⏳ Check #${checkCount}: CAPTCHA still present (${elapsed} min elapsed)`);
+      }
+    } catch (error: any) {
+      console.log(`   ⚠️  Error checking CAPTCHA status: ${error.message}`);
+    }
+  }
+
+  // Timeout reached
+  console.log('\n⚠️  CAPTCHA resolution timeout (30 minutes)');
+  console.log('   Please restart the worker after solving CAPTCHA\n');
+  
+  await broadcastError('CAPTCHA resolution timeout. Please restart the worker.');
+  await broadcastStatus('STOPPED', { message: 'CAPTCHA timeout - manual restart required' });
+  
+  throw new Error('CAPTCHA resolution timeout');
+}
+
+async function verifyLinkedInSession(): Promise<boolean> {
+  if (!page) return false;
+
+  try {
+    // Check if we're on LinkedIn and logged in
+    const isValid = await page.evaluate(() => {
+      // Check for LinkedIn domain
+      if (!window.location.hostname.includes('linkedin.com')) return false;
+      
+      // Check for logged-in indicators
+      const loggedInIndicators = [
+        '.global-nav__me',
+        '[data-control-name="identity_profile_photo"]',
+        'button[aria-label*="View profile"]',
+        '.feed-identity-module'
+      ];
+      
+      for (const selector of loggedInIndicators) {
+        if (document.querySelector(selector)) return true;
+      }
+      
+      return false;
+    }).catch(() => false);
+
+    return isValid;
+  } catch (error) {
+    return false;
   }
 }
 
@@ -816,8 +911,8 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       const hasCaptcha = await page.evaluate('document.body.innerText.includes("CAPTCHA") || !!document.querySelector("iframe[src*=\'captcha\']")');
       if (hasCaptcha) {
         console.log(`   🚨 CAPTCHA detected! Automation blocked.`);
-        console.log(`   ⏸️  STOPPING worker to avoid account restrictions.`);
-        throw new Error('CAPTCHA_DETECTED');
+        console.log(`   ⏸️  PAUSING worker - waiting for manual CAPTCHA resolution...`);
+        await waitForCaptchaResolution();
       }
       
       // Additional diagnostics
@@ -863,7 +958,10 @@ async function postAndVerifyComment(postUrl: string, commentText: string): Promi
     if (hasCaptcha) {
       console.log(`   🚨 CAPTCHA detected on post page!`);
       await broadcastScreenshot(page, 'CAPTCHA detected on post page');
-      throw new Error('CAPTCHA_DETECTED');
+      console.log(`   ⏸️  PAUSING worker - waiting for manual CAPTCHA resolution...`);
+      await waitForCaptchaResolution();
+      // After resolution, re-check the page
+      console.log(`   ✅ CAPTCHA resolved, re-checking page...`);
     }
     console.log(`   ✅ No CAPTCHA detected`);
 
