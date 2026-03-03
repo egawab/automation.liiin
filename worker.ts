@@ -517,32 +517,50 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           sampleRejectedUrls: []
         };
         
-        // EMERGENCY: ACCEPT ALL URLs TO DEBUG
+        // URL validation - accept LinkedIn post URLs, reject invalid pages
         function isValidPostUrl(url) {
-          console.log('[EMERGENCY DEBUG] Checking URL: ' + url.substring(0, 100));
-          
-          // ONLY reject these SPECIFIC bad URLs
-          var mustReject = [
+          // Reject known invalid pages
+          var invalidPatterns = [
             '/premium/products',
-            '/search/',
+            '/premium/?',
             '/feed/?',
             '/feed?',
+            '/search/',
             '/mynetwork/',
             '/messaging/',
-            '/notifications/'
+            '/notifications/',
+            '/jobs/view/',
+            '/jobs/',
+            '/company/[^/]+/?$', // Company root (no post ID)
+            '/learning/'
           ];
           
-          // Check if URL contains any must-reject pattern
-          for (var i = 0; i < mustReject.length; i++) {
-            if (url.indexOf(mustReject[i]) !== -1) {
-              console.log('[EMERGENCY DEBUG] REJECTED: ' + url.substring(0, 100));
+          // Check invalid patterns
+          for (var i = 0; i < invalidPatterns.length; i++) {
+            if (url.indexOf(invalidPatterns[i]) !== -1 || new RegExp(invalidPatterns[i]).test(url)) {
+              console.log('[Validation] REJECTED (invalid): ' + url.substring(0, 80));
               return false;
             }
           }
           
-          // ACCEPT EVERYTHING ELSE (temporarily)
-          console.log('[EMERGENCY DEBUG] ACCEPTED: ' + url.substring(0, 100));
-          return true;
+          // Accept if URL contains post indicators
+          var validPatterns = [
+            '/posts/',
+            '/feed/update/urn:li:activity:',
+            '/feed/update/urn:li:ugcPost:',
+            'activity-',
+            'ugcPost-'
+          ];
+          
+          for (var i = 0; i < validPatterns.length; i++) {
+            if (url.indexOf(validPatterns[i]) !== -1) {
+              console.log('[Validation] ACCEPTED: ' + url.substring(0, 80));
+              return true;
+            }
+          }
+          
+          console.log('[Validation] REJECTED (no post indicator): ' + url.substring(0, 80));
+          return false;
         }
         
         function parseNum(t) {
@@ -557,19 +575,54 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         }
 
         // --- PHASE 1: Container-based extraction (Primary Method) ---
-        var containers = Array.from(document.querySelectorAll('.reusable-search__result-container, .entity-result, [data-chameleon-result-urn], .search-results__cluster-item, .feed-shared-update-v2, [data-testid="update-card"], li.reusable-search__result-container, .search-results-container li'));
+        // UPDATED: Modern LinkedIn selectors for content search results
+        var containers = Array.from(document.querySelectorAll(
+          '.reusable-search__result-container, ' +
+          '.entity-result, ' +
+          '[data-chameleon-result-urn], ' +
+          'li.reusable-search__result-container, ' +
+          'div.search-results__cluster-content > div, ' +
+          'div[class*="search-result"], ' +
+          '.scaffold-finite-scroll__content > div > div'
+        ));
         
-        containers.forEach(function(container) {
-          // Try multiple link patterns
-          var link = container.querySelector('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"], a.app-aware-link[href*="linkedin.com"]');
-          if (!link) {
-            var allLinks = Array.from(container.querySelectorAll('a[href]'));
-            link = allLinks.find(function(a) { 
-               var h = a.getAttribute('href') || '';
-               return h.includes('/posts/') || h.includes('/feed/update/') || h.includes('activity') || h.includes('ugcPost');
-            });
+        console.log('[Scraper] Found ' + containers.length + ' containers');
+        
+        containers.forEach(function(container, idx) {
+          // CRITICAL: Skip job posts - they have specific markers
+          var isJobPost = container.querySelector('.job-card-container, [data-job-id], a[href*="/jobs/view/"]') !== null;
+          if (isJobPost) {
+            console.log('[Scraper] Container ' + idx + ' is a job post, skipping');
+            return;
           }
-          if (!link) return;
+          
+          // UPDATED: Modern link extraction - LinkedIn's current DOM structure
+          var allLinks = Array.from(container.querySelectorAll('a[href]'));
+          console.log('[Scraper] Container ' + idx + ' has ' + allLinks.length + ' links');
+          
+          var link = null;
+          
+          // Try to find post link by URL pattern
+          for (var i = 0; i < allLinks.length; i++) {
+            var a = allLinks[i];
+            var href = a.getAttribute('href') || '';
+            
+            // Match post patterns
+            if (href.includes('/posts/') || 
+                href.includes('/feed/update/urn:li:activity') || 
+                href.includes('/feed/update/urn:li:ugcPost') ||
+                href.match(/activity-\d{19}/) ||
+                href.match(/ugcPost-\d{19}/)) {
+              link = a;
+              console.log('[Scraper] Found post link in container ' + idx + ': ' + href.substring(0, 80));
+              break;
+            }
+          }
+          
+          if (!link) {
+            console.log('[Scraper] No post link found in container ' + idx);
+            return;
+          }
           
           window.__scraperDiagnostics.phase1Details.containersWithLinks++;
 
@@ -622,10 +675,21 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         // --- PHASE 2: Link-based Fallback (If containers fail) ---
         if (results.length === 0) {
           console.log('[Scraper] Phase 1 found 0 posts, trying Phase 2 fallback...');
-          var allLinks = Array.from(document.querySelectorAll('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"], a[href*="ugcPost"]'));
-          window.__scraperDiagnostics.phase2Details.linksFound = allLinks.length;
           
-          allLinks.forEach(function(link) {
+          // UPDATED: Look for ANY links on the page that might be posts
+          var allLinks = Array.from(document.querySelectorAll('a[href]'));
+          var postLinks = allLinks.filter(function(a) {
+            var href = a.getAttribute('href') || '';
+            return href.includes('/posts/') || 
+                   href.includes('/feed/update/') || 
+                   href.includes('activity-') ||
+                   href.includes('ugcPost-');
+          });
+          
+          console.log('[Scraper] Phase 2: Found ' + postLinks.length + ' potential post links');
+          window.__scraperDiagnostics.phase2Details.linksFound = postLinks.length;
+          
+          postLinks.forEach(function(link) {
             var href = link.getAttribute('href') || '';
             if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
             href = href.split('?')[0].split('#')[0];
