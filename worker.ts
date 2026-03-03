@@ -691,40 +691,27 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
             return;
           }
           
-          // UPDATED: Modern link extraction - LinkedIn's current DOM structure
-          var allLinks = Array.from(container.querySelectorAll('a[href]'));
-          console.log('[Scraper] Container ' + idx + ' has ' + allLinks.length + ' links');
+          // BREAKTHROUGH FIX: LinkedIn uses data-urn attributes, NOT href links!
+          // Look for: <div data-urn="urn:li:activity:123456789">
+          var urnElement = container.querySelector('[data-urn*="activity"], [data-urn*="ugcPost"]');
           
-          var link = null;
-          
-          // Try to find post link by URL pattern
-          for (var i = 0; i < allLinks.length; i++) {
-            var a = allLinks[i];
-            var href = a.getAttribute('href') || '';
-            
-            // Match post patterns
-            if (href.includes('/posts/') || 
-                href.includes('/feed/update/urn:li:activity') || 
-                href.includes('/feed/update/urn:li:ugcPost') ||
-                href.match(/activity-\d{19}/) ||
-                href.match(/ugcPost-\d{19}/)) {
-              link = a;
-              console.log('[Scraper] Found post link in container ' + idx + ': ' + href.substring(0, 80));
-              break;
-            }
-          }
-          
-          if (!link) {
-            console.log('[Scraper] No post link found in container ' + idx);
+          if (!urnElement) {
+            console.log('[Scraper] No data-urn found in container ' + idx);
             return;
           }
           
+          // Extract URN from data-urn attribute
+          var urn = urnElement.getAttribute('data-urn');
+          if (!urn || (urn.indexOf('urn:li:activity:') === -1 && urn.indexOf('urn:li:ugcPost:') === -1)) {
+            console.log('[Scraper] Invalid URN in container ' + idx + ': ' + urn);
+            return;
+          }
+          
+          // Build post URL from URN
+          var href = 'https://www.linkedin.com/feed/update/' + urn;
+          console.log('[Scraper] Extracted post via URN in container ' + idx + ': ' + href.substring(0, 80));
+          
           window.__scraperDiagnostics.phase1Details.containersWithLinks++;
-
-          var href = link.getAttribute('href') || '';
-          if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
-          href = href.split('?')[0].split('#')[0]; // Remove query params and anchors
-          href = href.replace(/\/$/, ''); // Remove trailing slash
           
           // STRICT VALIDATION: Only accept real post URLs in Phase 1 too
           if (!isValidPostUrl(href)) {
