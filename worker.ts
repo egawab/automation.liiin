@@ -103,6 +103,7 @@ async function main() {
     await initializeBrowser();
 
     // Main loop
+    let isAuthenticated = false;
     while (isRunning) {
       try {
         // Fetch active user settings
@@ -110,6 +111,7 @@ async function main() {
 
         if (!settings) {
           console.log('⏸️  No active user found. Waiting...');
+          isAuthenticated = false;
           await sleep(10000); // Wait 10 seconds
           continue;
         }
@@ -121,6 +123,7 @@ async function main() {
         if (sessionChanged && currentUserId !== null) {
           console.log('🔄 User or session changed. Recreating browser context...');
           await recreateBrowserContext();
+          isAuthenticated = false; // Force re-auth on session change
         }
 
         // Set user context for broadcasts
@@ -131,12 +134,15 @@ async function main() {
           setApiBaseUrl(settings.platformUrl);
         }
 
-        // Authenticate LinkedIn session
-        const authenticated = await authenticateLinkedIn(settings.linkedinSessionCookie);
-        if (!authenticated) {
-          await broadcastError('LinkedIn authentication failed. Please update your session cookie.');
-          await sleep(60000); // Wait 1 minute before retry
-          continue;
+        // Authenticate only once per session (not every cycle)
+        if (!isAuthenticated) {
+          const authenticated = await authenticateLinkedIn(settings.linkedinSessionCookie);
+          if (!authenticated) {
+            await broadcastError('LinkedIn authentication failed. Please update your session cookie.');
+            await sleep(60000); // Wait 1 minute before retry
+            continue;
+          }
+          isAuthenticated = true;
         }
 
         await broadcastStatus('RUNNING', { message: 'Worker is active and processing keywords' });
@@ -342,61 +348,97 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     console.log(`   Navigating to: ${searchUrl}`);
 
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await sleep(3000); // Wait for dynamic content
+
+    // Wait for search results to load — try multiple known LinkedIn search result containers
+    await Promise.race([
+      page.waitForSelector('[data-view-name="search-entity-result-universal-template"]', { timeout: 8000 }).catch(() => null),
+      page.waitForSelector('.search-results-container', { timeout: 8000 }).catch(() => null),
+      page.waitForSelector('div.feed-shared-update-v2', { timeout: 8000 }).catch(() => null),
+      page.waitForSelector('.occludable-update', { timeout: 8000 }).catch(() => null),
+    ]);
+    await sleep(2000); // Let dynamic content settle
 
     // Take screenshot
     await broadcastScreenshot(page, `Searching for: ${keyword}`);
 
-    // Extract posts from search results
-    const postElements = await page.$$('div.feed-shared-update-v2');
+    // --- Strategy 1: Try modern LinkedIn search result containers ---
+    let postElements = await page.$$('[data-view-name="search-entity-result-universal-template"]');
+    if (postElements.length === 0) postElements = await page.$$('.occludable-update');
+    if (postElements.length === 0) postElements = await page.$$('div.feed-shared-update-v2');
+    if (postElements.length === 0) postElements = await page.$$('.update-components-actor');
+
     console.log(`   Found ${postElements.length} post elements on page`);
 
     for (const postElement of postElements) {
       try {
-        // Extract post URL
-        const linkElement = await postElement.$('a.app-aware-link[href*="/feed/update/"]');
-        if (!linkElement) continue;
+        // --- Extract post URL: try multiple link patterns ---
+        let postUrl: string | null = null;
 
-        const href = await linkElement.getAttribute('href');
-        if (!href) continue;
+        // Pattern 1: direct feed update links
+        const link1 = await postElement.$('a[href*="/feed/update/"]');
+        if (link1) postUrl = await link1.getAttribute('href');
 
-        const postUrl = href.includes('http') ? href : `https://www.linkedin.com${href}`;
+        // Pattern 2: activity links
+        if (!postUrl) {
+          const link2 = await postElement.$('a[href*="/activity/"]');
+          if (link2) postUrl = await link2.getAttribute('href');
+        }
 
-        // Extract engagement metrics
-        const socialCountsElement = await postElement.$('ul.social-details-social-counts');
+        // Pattern 3: any app-aware-link within the post
+        if (!postUrl) {
+          const link3 = await postElement.$('a.app-aware-link');
+          if (link3) postUrl = await link3.getAttribute('href');
+        }
 
+        if (!postUrl) continue;
+
+        // Normalize URL
+        if (!postUrl.includes('http')) postUrl = `https://www.linkedin.com${postUrl}`;
+        // Clean query params from URL to get canonical post link
+        postUrl = postUrl.split('?')[0];
+
+        // --- Extract engagement metrics ---
         let likes = 0;
         let comments = 0;
 
-        if (socialCountsElement) {
-          const likesText = await socialCountsElement.$eval(
-            'button[aria-label*="reaction"]',
-            (el) => el.textContent?.trim() || '0'
+        // Pattern 1: social-details-social-counts (classic)
+        const socialCounts = await postElement.$('ul.social-details-social-counts');
+        if (socialCounts) {
+          const likesText = await socialCounts.$eval(
+            'button[aria-label*="reaction"], button[aria-label*="like"]',
+            (el: Element) => (el as HTMLElement).textContent?.trim() || '0'
           ).catch(() => '0');
 
-          const commentsText = await socialCountsElement.$eval(
+          const commentsText = await socialCounts.$eval(
             'button[aria-label*="comment"]',
-            (el) => el.textContent?.trim() || '0'
+            (el: Element) => (el as HTMLElement).textContent?.trim() || '0'
           ).catch(() => '0');
 
           likes = parseEngagementNumber(likesText);
           comments = parseEngagementNumber(commentsText);
         }
 
-        posts.push({
-          url: postUrl,
-          likes,
-          comments,
-          distance: 0 // Will be calculated later
-        });
+        // Pattern 2: social-action-bar (newer LinkedIn)
+        if (likes === 0 && comments === 0) {
+          const likeBtn = await postElement.$('[aria-label*="reaction"], [aria-label*="Like"]');
+          const commentBtn = await postElement.$('[aria-label*="comment"], [aria-label*="Comment"]');
+          if (likeBtn) likes = parseEngagementNumber((await likeBtn.textContent() || '').trim());
+          if (commentBtn) comments = parseEngagementNumber((await commentBtn.textContent() || '').trim());
+        }
+
+        posts.push({ url: postUrl, likes, comments, distance: 0 });
 
       } catch (error) {
-        // Skip invalid posts
-        continue;
+        continue; // Skip invalid posts silently
       }
     }
 
     console.log(`   Extracted ${posts.length} valid posts with engagement data`);
+    if (posts.length > 0) {
+      posts.slice(0, 3).forEach((p, i) => {
+        console.log(`   [${i + 1}] ${p.url} | 👍 ${p.likes} | 💬 ${p.comments}`);
+      });
+    }
 
   } catch (error: any) {
     console.error(`   ❌ Error searching LinkedIn:`, error.message);
