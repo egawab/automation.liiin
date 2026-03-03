@@ -91,6 +91,7 @@ let page: Page | null = null;
 let isRunning = false;
 let currentUserId: string | null = null;
 let currentSessionCookie: string | null = null; // Track current session
+let isAuthenticated = false; // Global auth state
 
 // ============================================================================
 // MAIN WORKER LOOP
@@ -104,7 +105,6 @@ async function main() {
     await initializeBrowser();
 
     // Main loop
-    let isAuthenticated = false;
     while (isRunning) {
       try {
         // Fetch active user settings
@@ -162,6 +162,15 @@ async function main() {
 
         // Process each keyword
         for (const keyword of keywords) {
+          // Safety check: Ensure page is still valid
+          if (!page || page.isClosed()) {
+            console.log('   ⚠️ Browser page closed during cycle. Recreating context...');
+            await recreateBrowserContext();
+            isAuthenticated = false; // Need re-auth
+            await authenticateLinkedIn(settings.linkedinSessionCookie);
+            isAuthenticated = true;
+          }
+
           // Check if still active
           const stillActive = await isSystemStillActive(settings.userId);
           if (!stillActive) {
@@ -339,169 +348,177 @@ async function processKeyword(
 // ============================================================================
 
 async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
-  if (!page) throw new Error('Browser page not initialized');
+  // Stability check: Ensure browser and page are healthy
+  if (!browser || !page || page.isClosed()) {
+    console.log('   ⚠️ Browser or page invalid for search. Re-initializing...');
+    await recreateBrowserContext().catch(() => { });
+    if (!page) throw new Error('Could not initialize page for search');
+  }
 
   try {
     const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=date_posted`;
+    console.log(`\n🔍 Searching LinkedIn for: "${keyword}"`);
     console.log(`   Navigating to: ${searchUrl}`);
 
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-    // Scroll down slightly to trigger LinkedIn's lazy loader
-    await page.evaluate(() => window.scrollTo(0, 600));
-    await sleep(1500);
-    await page.evaluate(() => window.scrollTo(0, 1200));
-    await sleep(1500);
-
-    // Wait up to 10s for any post link to appear — INCLUDE /posts/ which is the primary format  
-    await Promise.race([
-      page.waitForSelector('a[href*="/posts/"]', { timeout: 10000 }).catch(() => null),
-      page.waitForSelector('a[href*="/feed/update/"]', { timeout: 10000 }).catch(() => null),
-      page.waitForSelector('a[href*="activity"]', { timeout: 10000 }).catch(() => null),
-    ]);
-    await sleep(2000);
-
-    await broadcastScreenshot(page, `Search results for: ${keyword}`);
-
-    // Run extraction entirely inside browser context
-    const rawPosts = await page.evaluate(() => {
-      const results: { url: string; likes: number; comments: number }[] = [];
-      const seen = new Set<string>();
-
-      // LinkedIn search posts use THREE main URL patterns:
-      // 1. /posts/username_slug-activity-XXXXXX/ 
-      // 2. /feed/update/urn:li:activity:XXXXXX/
-      // 3. /feed/update/urn:li:ugcPost:XXXXXX/
-      const allLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'));
-
-      // Filter to only post links — broad catch for ALL LinkedIn post URL patterns:
-      // /posts/xxx-activity-NNN/ (profile post links)
-      // /feed/update/urn:li:activity:NNN/ (classic)
-      // /feed/update/urn:li:ugcPost:NNN/
-      // /feed/update/urn:li:share:NNN/
-      // urn:li:activity:NNN (raw URN in href)
-      // /pulse/xxx/ (articles)
-      const postLinks = allLinks.filter(a => {
-        const h = a.getAttribute('href') || '';
-        return (
-          h.includes('/posts/') ||
-          h.includes('/feed/update/') ||
-          h.includes('urn%3Ali%3Aactivity') ||
-          h.includes('urn:li:activity') ||
-          h.includes('urn:li:ugcPost') ||
-          h.includes('urn:li:share') ||
-          (h.includes('/pulse/') && h.length > 20)
-        );
-      });
-
-      // Diagnostic: log total links found on page
-      (window as any).__debugLinkCount = allLinks.length;
-      (window as any).__debugPostLinkCount = postLinks.length;
-
-      for (const link of postLinks) {
-        let href = link.getAttribute('href') || '';
-        if (!href) continue;
-
-        if (!href.startsWith('http')) href = 'https://www.linkedin.com' + href;
-        href = href.split('?')[0];
-
-        if (seen.has(href)) continue;
-        seen.add(href);
-
-        // Walk up to find the post container (up to 15 levels)
-        let container: HTMLElement | null = link;
-        for (let i = 0; i < 15; i++) {
-          container = container?.parentElement ?? null;
-          if (!container) break;
-          if (
-            container.tagName === 'LI' ||
-            container.tagName === 'ARTICLE' ||
-            container.classList.contains('occludable-update') ||
-            container.classList.contains('feed-shared-update-v2') ||
-            container.hasAttribute('data-view-name') ||
-            container.getAttribute('data-entity-urn') !== null
-          ) break;
-        }
-
-        let likes = 0;
-        let comments = 0;
-
-        if (container) {
-          const parse = (t: string): number => {
-            if (!t) return 0;
-            const clean = t.toLowerCase().replace(/,/g, '.').trim();
-            if (clean.includes('k')) return Math.round(parseFloat(clean) * 1000);
-            if (clean.includes('m')) return Math.round(parseFloat(clean) * 1000000);
-            const n = parseInt(clean.replace(/[^0-9]/g, ''));
-            return isNaN(n) ? 0 : n;
-          };
-
-          // Check all buttons and spans with aria-labels
-          const allBtns = Array.from(container.querySelectorAll<HTMLElement>('button, span[aria-label]'));
-          for (const el of allBtns) {
-            const label = (el.getAttribute('aria-label') || '').toLowerCase();
-            const innerText = (el.textContent || '').trim();
-
-            // Reactions/likes: look for explicit number in label like "234 reactions"
-            const reactionMatch = label.match(/(\d[\d,\.]*[km]?)\s*(reaction|like)/i);
-            if (reactionMatch) {
-              likes = parse(reactionMatch[1]) || likes;
-            }
-
-            // Comments: look for "45 comments"
-            const commentMatch = label.match(/(\d[\d,\.]*[km]?)\s*comment/i);
-            if (commentMatch) {
-              comments = parse(commentMatch[1]) || comments;
-            }
-
-            // Fallback: button text when label is generic
-            if (likes === 0 && (label.includes('reaction') || label.includes('like'))) {
-              likes = parse(innerText) || likes;
-            }
-            if (comments === 0 && label.includes('comment')) {
-              comments = parse(innerText) || comments;
-            }
-          }
-        }
-
-        results.push({ url: href, likes, comments });
+    // Navigate - 'commit' fires immediately when HTTP headers arrive, avoids hanging on slow pages
+    await page.goto(searchUrl, { waitUntil: 'commit', timeout: 30000 }).catch(err => {
+      if (err.message.includes('closed') || err.message.includes('context')) {
+        throw new Error('BROWSER_CLOSED');
       }
-
-      return results;
+      // Timeout or other nav error — page may still have partially loaded, continue anyway
+      console.log(`   ⚠️ Navigation note: ${err.message.split('\n')[0]}`);
     });
 
-    // Rich diagnostic output
-    const diagInfo = await page.evaluate(() => ({
-      totalLinks: (window as any).__debugLinkCount || 0,
-      postLinks: (window as any).__debugPostLinkCount || 0,
-      sampleHrefs: (window as any).__debugSampleHrefs || [],
-      url: window.location.href
-    }));
+    // Wait for the main results container to appear
+    await page.waitForSelector('.reusable-search__result-container, .entity-result, [data-chameleon-result-urn]', { timeout: 20000 })
+      .catch(() => console.log('   ⚠️ Result containers not found in 20s, attempting extraction anyway...'));
 
-    console.log(`   📊 Page diagnostics: ${diagInfo.totalLinks} total links, ${diagInfo.postLinks} post links found`);
-    console.log(`   📍 Current URL: ${diagInfo.url}`);
-    console.log(`   🔗 Sample hrefs on page (first 25):`);
-    (diagInfo.sampleHrefs as string[]).forEach((h: string, i: number) => {
-      console.log(`      [${i + 1}] ${h}`);
-    });
-    console.log(`   Extracted ${rawPosts.length} posts with engagement data`);
+    await sleep(1000);
 
-    if (rawPosts.length === 0) {
-      console.log(`   ⚠️  Zero posts extracted. Check the sample hrefs above to identify the correct URL pattern.`);
-      console.log(`      - LinkedIn is showing a CAPTCHA or verification page`);
-      console.log(`      - Session cookie has expired`);
-      console.log(`      - Search results are empty for this keyword`);
-      console.log(`      - LinkedIn changed their DOM structure`);
+    // Scroll down to trigger lazy-loading of results
+    console.log(`   Scrolling to load more results...`);
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate('window.scrollBy(0, 1000)').catch(() => { });
+      await sleep(1200);
+
+      // Click "More results" button if present
+      const moreBtn = await page.$('button.search-results-bottom-pagination__button, button[aria-label="See more results"]').catch(() => null);
+      if (moreBtn) {
+        console.log(`   [Scroll] Clicking "See more results"...`);
+        await moreBtn.click().catch(() => { });
+        await sleep(2000);
+      }
     }
 
-    rawPosts.slice(0, 5).forEach((p, i) => {
-      console.log(`   [${i + 1}] 👍 ${p.likes} | 💬 ${p.comments} | ${p.url}`);
+    // Capture state for diagnostics
+    await broadcastScreenshot(page, `Search: ${keyword}`);
+
+    // SUPER SCRAPER SCRIPT - Extremely resilient extraction
+    const superScraper = `
+      (function() {
+        var results = [];
+        var seenUrls = {};
+        
+        function parseNum(t) {
+          if (!t) return 0;
+          var c = t.toLowerCase().replace(/,/g, '').trim();
+          var match = c.match(/([\\d\\.\\,]+)/);
+          if (!match) return 0;
+          var n = parseFloat(match[1].replace(/,/g, ''));
+          if (c.indexOf('k') !== -1) n *= 1000;
+          if (c.indexOf('m') !== -1) n *= 1000000;
+          return Math.round(n);
+        }
+
+        // --- PHASE 1: Container-based extraction (The Best Way) ---
+        var containers = Array.from(document.querySelectorAll('.reusable-search__result-container, .entity-result, [data-chameleon-result-urn], .search-results__cluster-item, .feed-shared-update-v2, [data-testid="update-card"]'));
+        
+        containers.forEach(function(container) {
+          var link = container.querySelector('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"]');
+          if (!link) {
+            var allLinks = Array.from(container.querySelectorAll('a[href]'));
+            link = allLinks.find(function(a) { 
+               var h = a.getAttribute('href') || '';
+               return h.includes('/posts/') || h.includes('/feed/update/') || h.includes('activity');
+            });
+          }
+          if (!link) return;
+
+          var href = link.getAttribute('href') || '';
+          if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
+          href = href.split('?')[0].split('&')[0];
+          
+          if (seenUrls[href]) return;
+          seenUrls[href] = true;
+
+          var likes = 0, comments = 0;
+          var socialElements = Array.from(container.querySelectorAll('button, span[aria-label], .social-details-social-counts__item, .entity-result__content-summary'));
+          socialElements.forEach(function(el) {
+            var label = (el.getAttribute('aria-label') || '').toLowerCase();
+            var text = (el.textContent || '').toLowerCase();
+            if (label.indexOf('reaction') !== -1 || label.indexOf('like') !== -1 || text.indexOf('reaction') !== -1 || text.indexOf('like') !== -1) {
+              likes = Math.max(likes, parseNum(label) || parseNum(text));
+            }
+            if (label.indexOf('comment') !== -1 || text.indexOf('comment') !== -1) {
+              comments = Math.max(comments, parseNum(label) || parseNum(text));
+            }
+          });
+          results.push({ url: href, likes: likes, comments: comments, method: 'container' });
+        });
+
+        // --- PHASE 2: Link-based Fallback (If containers fail) ---
+        if (results.length === 0) {
+          var allLinks = Array.from(document.querySelectorAll('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"]'));
+          allLinks.forEach(function(link) {
+            var href = link.getAttribute('href') || '';
+            if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
+            href = href.split('?')[0].split('&')[0];
+            if (seenUrls[href]) return;
+            seenUrls[href] = true;
+
+            // Try to find engagement by going up to a common parent
+            var parent = link;
+            for (var i = 0; i < 8; i++) {
+              if (!parent.parentElement) break;
+              parent = parent.parentElement;
+              if (parent.tagName === 'LI' || parent.tagName === 'ARTICLE' || parent.classList.contains('entity-result')) break;
+            }
+            
+            var l = 0, c = 0;
+            var text = parent.innerText || '';
+            var rMatch = text.match(/([\\d\\.\\,km]+)\\s*(reaction|like)/i);
+            if (rMatch) l = parseNum(rMatch[1]);
+            var cMatch = text.match(/([\\d\\.\\,km]+)\\s*comment/i);
+            if (cMatch) c = parseNum(cMatch[1]);
+            
+            results.push({ url: href, likes: l, comments: c, method: 'link-fallback' });
+          });
+        }
+
+        window.__scraperDiagnostics = {
+          containerCount: containers.length,
+          totalExtracted: results.length,
+          pageTitle: document.title,
+          noResultsFound: !!document.querySelector('.search-relevance-no-results, .artdeco-empty-state')
+        };
+
+        return results;
+      })()
+    `;
+
+    const rawPosts: any[] = await page.evaluate(superScraper).catch(err => {
+      console.log(`   ❌ Scraper script error: ${err.message}`);
+      return [];
     });
+
+    const diag: any = await page.evaluate('window.__scraperDiagnostics').catch(() => ({}));
+
+    console.log(`\n📊 Scraper Metrics:`);
+    console.log(`   Containers detected: ${diag.containerCount || 0}`);
+    console.log(`   Posts extracted: ${diag.totalExtracted || 0}`);
+    if (diag.noResultsFound) console.log(`   ⚠️ LinkedIn reports: "No results found"`);
+
+    if (rawPosts.length > 0) {
+      console.log(`   Sample matching posts:`);
+      rawPosts.slice(0, 5).forEach((p, i) => {
+        console.log(`      [${i + 1}] 👍 ${p.likes} | 💬 ${p.comments} | ${p.url} (${p.method})`);
+      });
+    } else {
+      console.log(`   ⚠️ No posts found for this keyword.`);
+      // Check for CAPTCHA
+      const hasCaptcha = await page.evaluate('document.body.innerText.includes("CAPTCHA") || !!document.querySelector("iframe[src*=\'captcha\']")');
+      if (hasCaptcha) console.log(`   🚨 CAPTCHA detected! Automation blocked.`);
+    }
 
     return rawPosts.map(p => ({ ...p, distance: 0 }));
 
   } catch (error: any) {
-    console.error(`   ❌ Error searching LinkedIn:`, error.message);
+    if (error.message === 'BROWSER_CLOSED' || error.message.includes('Target closed') || error.message.includes('context was destroyed')) {
+      console.error(`   ❌ Browser context failed. Attempting recovery...`);
+      await recreateBrowserContext().catch(() => { });
+      return [];
+    }
+    console.error(`   ❌ Search error:`, error.message);
     return [];
   }
 }
@@ -653,7 +670,11 @@ function selectBestPost(
   // We strictly need to pick from filtered posts as they are already within Min and Max.
   // If no filtered posts exist, return null.
   if (filteredPosts.length === 0) {
-    console.log(`   ⚠️  No posts matched reach criteria. Skipping.`);
+    console.log(`   ⚠️  No posts matched reach criteria. (Found ${allPosts.length} total, but none within ${settings.minLikes}-${settings.maxLikes} likes & ${settings.minComments}-${settings.maxComments} comments)`);
+    if (allPosts.length > 0) {
+      const bestCandidate = allPosts.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments))[0];
+      console.log(`      Best post found had 👍 ${bestCandidate.likes} | 💬 ${bestCandidate.comments}`);
+    }
     return null;
   }
 
@@ -706,53 +727,72 @@ async function initializeBrowser() {
 /**
  * Create a completely fresh browser context
  * Each context has isolated cookies, localStorage, sessionStorage
+ * IMPORTANT: closes previous context first to avoid tab leaks
  */
 async function createFreshContext() {
   if (!browser) throw new Error('Browser not initialized');
 
+  // Close ALL existing contexts first to prevent tab leaks
+  const existingContexts = browser.contexts();
+  for (const ctx of existingContexts) {
+    await ctx.close().catch(() => { });
+  }
+  page = null;
+
   console.log('🆕 Creating fresh browser context (isolated session)...');
 
-  // Create new context with clean state
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    // Ensure no data is persisted
     storageState: undefined,
-    // Clear all permissions
     permissions: [],
   });
 
   // Remove automation flags
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+  await context.addInitScript('Object.defineProperty(navigator, "webdriver", { get: () => false })');
+
+  // Dismiss any dialog popups automatically
+  context.on('page', newPage => {
+    newPage.on('dialog', dialog => dialog.dismiss().catch(() => { }));
   });
 
   page = await context.newPage();
+
+  // Dismiss dialogs on main page too
+  page.on('dialog', dialog => dialog.dismiss().catch(() => { }));
 
   console.log('✅ Fresh context created (clean cookies, storage, and session)\n');
 }
 
 /**
- * Recreate browser context when user/session changes
+ * Recreate browser context when user/session changes or recovery is needed
  * This ensures complete isolation between different users
  */
 async function recreateBrowserContext() {
-  console.log('🔄 Session change detected. Recreating browser context...');
-  console.log(`   Old user: ${currentUserId?.slice(0, 8)}`);
-  console.log(`   Old cookie: ${currentSessionCookie?.slice(0, 20)}...`);
+  console.log('🔄 Recreating browser context for isolation or recovery...');
 
-  // Close old page and context
-  if (page) {
-    const oldContext = page.context();
-    await page.close().catch(() => { });
-    await oldContext.close().catch(() => { });
-    page = null;
+  // Reset authentication state
+  isAuthenticated = false;
+
+  // Safely close old resources
+  try {
+    if (page) {
+      const oldContext = page.context();
+      await page.close().catch(() => { });
+      await oldContext.close().catch(() => { });
+      page = null;
+    }
+  } catch (e) {
+    // Ignore context closure errors
   }
+
+  // Use a short delay to let browser settle
+  await sleep(1000);
 
   // Create completely fresh context
   await createFreshContext();
 
-  console.log('✅ Browser context recreated with clean state\n');
+  console.log('✅ Browser context recreated successfully\n');
 }
 
 async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
