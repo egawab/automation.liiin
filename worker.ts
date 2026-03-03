@@ -89,6 +89,7 @@ let browser: Browser | null = null;
 let page: Page | null = null;
 let isRunning = false;
 let currentUserId: string | null = null;
+let currentSessionCookie: string | null = null; // Track current session
 
 // ============================================================================
 // MAIN WORKER LOOP
@@ -113,8 +114,18 @@ async function main() {
           continue;
         }
 
+        // Check if user or session changed - recreate browser context if needed
+        const sessionChanged = currentUserId !== settings.userId || 
+                              currentSessionCookie !== settings.linkedinSessionCookie;
+
+        if (sessionChanged && currentUserId !== null) {
+          console.log('🔄 User or session changed. Recreating browser context...');
+          await recreateBrowserContext();
+        }
+
         // Set user context for broadcasts
         currentUserId = settings.userId;
+        currentSessionCookie = settings.linkedinSessionCookie;
         setUserContext(settings.userId);
         if (settings.platformUrl) {
           setApiBaseUrl(settings.platformUrl);
@@ -591,18 +602,63 @@ async function initializeBrowser() {
     ]
   });
 
-  page = await browser.newPage({
-    viewport: { width: 1280, height: 720 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  });
-
-  // Remove automation flags
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-  });
+  // Create fresh browser context with isolated storage
+  await createFreshContext();
 
   isRunning = true;
   console.log('✅ Browser initialized\n');
+}
+
+/**
+ * Create a completely fresh browser context
+ * Each context has isolated cookies, localStorage, sessionStorage
+ */
+async function createFreshContext() {
+  if (!browser) throw new Error('Browser not initialized');
+
+  console.log('🆕 Creating fresh browser context (isolated session)...');
+
+  // Create new context with clean state
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    // Ensure no data is persisted
+    storageState: undefined,
+    // Clear all permissions
+    permissions: [],
+  });
+
+  // Remove automation flags
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+  });
+
+  page = await context.newPage();
+
+  console.log('✅ Fresh context created (clean cookies, storage, and session)\n');
+}
+
+/**
+ * Recreate browser context when user/session changes
+ * This ensures complete isolation between different users
+ */
+async function recreateBrowserContext() {
+  console.log('🔄 Session change detected. Recreating browser context...');
+  console.log(`   Old user: ${currentUserId?.slice(0, 8)}`);
+  console.log(`   Old cookie: ${currentSessionCookie?.slice(0, 20)}...`);
+
+  // Close old page and context
+  if (page) {
+    const oldContext = page.context();
+    await page.close().catch(() => {});
+    await oldContext.close().catch(() => {});
+    page = null;
+  }
+
+  // Create completely fresh context
+  await createFreshContext();
+
+  console.log('✅ Browser context recreated with clean state\n');
 }
 
 async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
@@ -610,8 +666,19 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
 
   try {
     console.log('🔐 Authenticating LinkedIn session...');
+    console.log(`   Cookie: ${sessionCookie.slice(0, 20)}...${sessionCookie.slice(-10)}`);
 
-    // Set session cookie
+    // Validate cookie format
+    if (!sessionCookie || sessionCookie.trim() === '') {
+      console.log('❌ Invalid cookie: empty or missing\n');
+      return false;
+    }
+
+    // Clear any existing cookies first (ensure clean state)
+    await page.context().clearCookies();
+    console.log('   Cleared existing cookies');
+
+    // Set fresh session cookie
     await page.context().addCookies([{
       name: 'li_at',
       value: sessionCookie,
@@ -621,26 +688,50 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       secure: true,
       sameSite: 'None'
     }]);
+    console.log('   Set new LinkedIn session cookie');
 
     // Navigate to LinkedIn to verify session
-    await page.goto('https://www.linkedin.com/feed', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await sleep(3000);
+    console.log('   Navigating to LinkedIn feed...');
+    await page.goto('https://www.linkedin.com/feed', { 
+      waitUntil: 'networkidle', 
+      timeout: 60000 
+    });
+    await sleep(5000); // Wait for page to fully load
 
     // Check if logged in (look for feed or profile element)
     const isLoggedIn = await page.$('div.feed-shared-update-v2') !== null ||
-                       await page.$('button[aria-label*="Start a post"]') !== null;
+                       await page.$('button[aria-label*="Start a post"]') !== null ||
+                       await page.$('button.share-box-feed-entry__trigger') !== null;
 
     if (isLoggedIn) {
       console.log('✅ LinkedIn authentication successful\n');
       await broadcastScreenshot(page, 'Authenticated on LinkedIn');
       return true;
     } else {
-      console.log('❌ LinkedIn authentication failed\n');
+      console.log('❌ LinkedIn authentication failed (not logged in)\n');
+      
+      // Take screenshot for debugging
+      await broadcastScreenshot(page, 'Authentication failed');
+      
+      // Check if we're on login page
+      const onLoginPage = await page.$('input[name="session_key"]') !== null;
+      if (onLoginPage) {
+        console.log('   Reason: Redirected to login page (invalid cookie)');
+      }
+      
       return false;
     }
 
   } catch (error: any) {
     console.error('❌ Authentication error:', error.message);
+    
+    // Provide helpful error messages
+    if (error.message.includes('ERR_TOO_MANY_REDIRECTS')) {
+      console.log('   Reason: Too many redirects (likely invalid/expired cookie)');
+    } else if (error.message.includes('Timeout')) {
+      console.log('   Reason: LinkedIn took too long to respond');
+    }
+    
     return false;
   }
 }
