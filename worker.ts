@@ -583,7 +583,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     await broadcastScreenshot(page, `Search: ${keyword}`);
 
     // SUPER SCRAPER SCRIPT - Ultra-resilient extraction with multiple fallback strategies
-    const superScraper = `
+    const superScraper = String.raw`
       (function() {
         var results = [];
         var seenUrls = {};
