@@ -1,23 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
-import { verifyToken } from '@/lib/auth';
+import { getUserFromToken, unauthorized } from '@/lib/auth';
 
 const prisma = new PrismaClient();
 
 // GET - Fetch saved posts for the user
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('Authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const payload = verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
-    const userId = payload.userId;
+    const userId = await getUserFromToken();
+    if (!userId) return unauthorized();
 
     // Get query parameters for filtering
     const { searchParams } = new URL(request.url);
@@ -54,17 +45,8 @@ export async function GET(request: NextRequest) {
 // DELETE - Remove a saved post
 export async function DELETE(request: NextRequest) {
   try {
-    const token = request.headers.get('Authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const payload = verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
-    const userId = payload.userId;
+    const userId = await getUserFromToken();
+    if (!userId) return unauthorized();
     const { searchParams } = new URL(request.url);
     const postId = searchParams.get('id');
 
@@ -91,17 +73,8 @@ export async function DELETE(request: NextRequest) {
 // PATCH - Mark post as visited
 export async function PATCH(request: NextRequest) {
   try {
-    const token = request.headers.get('Authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const payload = verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
-    const userId = payload.userId;
+    const userId = await getUserFromToken();
+    if (!userId) return unauthorized();
     const body = await request.json();
     const { postId, visited } = body;
 

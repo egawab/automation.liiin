@@ -41,16 +41,13 @@ export function SavedPostsPanel() {
   async function fetchPosts() {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      
       let url = '/api/saved-posts?';
       if (filterKeyword) url += `keyword=${encodeURIComponent(filterKeyword)}&`;
       if (filterVisited !== 'all') url += `visited=${filterVisited}&`;
 
       const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        // cookies (auth_token) are sent automatically for same-origin requests
+        credentials: 'include'
       });
 
       if (response.ok) {
@@ -66,12 +63,9 @@ export function SavedPostsPanel() {
 
   async function markAsVisited(postId: string) {
     try {
-      const token = localStorage.getItem('token');
-      
       await fetch('/api/saved-posts', {
         method: 'PATCH',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ postId, visited: true })
@@ -86,13 +80,9 @@ export function SavedPostsPanel() {
 
   async function deletePost(postId: string) {
     try {
-      const token = localStorage.getItem('token');
-      
       await fetch(`/api/saved-posts?id=${postId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include'
       });
 
       // Remove from local state
