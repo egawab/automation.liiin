@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
 import { cookies } from 'next/headers';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-default-key-change-in-production';
+export const JWT_SECRET = process.env.JWT_SECRET || 'change-this-to-a-very-long-random-string-in-production-min-32-chars';
 
 export async function getUserFromToken() {
     const cookieStore = await cookies();

@@ -1,9 +1,8 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'change-this-to-a-very-long-random-string-in-production-min-32-chars';
+import { JWT_SECRET } from '@/lib/auth';
 
 export async function POST(req: Request) {
     try {
