@@ -47,7 +47,7 @@ export default function CTA() {
 
               {/* CTA Buttons */}
               <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                <Link href="/login">
+                <Link href="/login?mode=register">
                   <button className="px-10 py-5 bg-white hover:bg-gray-100 text-gray-900 font-semibold rounded-xl transition-colors duration-200 flex items-center gap-2">
                     <span className="text-lg">Start Free Trial</span>
                     <ArrowRight className="w-5 h-5" />

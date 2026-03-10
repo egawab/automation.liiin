@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'motion/react';
 import { MessageSquare, PenTool, Mail, Lock, Sparkles, ArrowRight, Shield } from 'lucide-react';
 import { showToast } from '@/components/ui/Toast';
@@ -10,11 +10,19 @@ import NexoraLogo from '@/components/ui/NexoraLogo';
 
 export default function LoginPage() {
     const router = useRouter();
-    const [isLogin, setIsLogin] = useState(true);
+    const searchParams = useSearchParams();
+    // Default to registration mode when coming from "Get Started" / signup links (?mode=register)
+    const initialIsLogin = searchParams.get('mode') !== 'register';
+    const [isLogin, setIsLogin] = useState(initialIsLogin);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+
+    // Sync isLogin when URL changes (e.g., user navigates to /login?mode=register)
+    useEffect(() => {
+        setIsLogin(searchParams.get('mode') !== 'register');
+    }, [searchParams]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();

@@ -137,7 +137,7 @@ export default function Pricing() {
                   </div>
 
                   {/* CTA Button */}
-                  <Link href="/login" className="block mb-6">
+                  <Link href="/login?mode=register" className="block mb-6">
                     <button className={`w-full py-4 rounded-xl font-semibold transition-colors duration-200 ${
                       plan.popular
                         ? 'bg-white hover:bg-gray-100 text-gray-900'

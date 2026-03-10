@@ -41,7 +41,7 @@ export default function Hero() {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20"
           >
-            <Link href="/login">
+            <Link href="/login?mode=register">
               <button className="px-10 py-4 bg-white hover:bg-gray-100 text-gray-900 font-semibold rounded-xl transition-colors duration-200 flex items-center gap-2">
                 <span>Get Started Free</span>
                 <ArrowRight className="w-5 h-5" />

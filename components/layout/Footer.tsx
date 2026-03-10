@@ -79,7 +79,7 @@ export default function Footer() {
                 </a>
               </li>
               <li>
-                <Link href="/login" className="text-sm text-gray-400 hover:text-white transition-colors">
+                <Link href="/login?mode=register" className="text-sm text-gray-400 hover:text-white transition-colors">
                   Get Started
                 </Link>
               </li>

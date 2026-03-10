@@ -77,7 +77,7 @@ export default function Navigation() {
               >
                 Sign In
               </Link>
-              <Link href="/login">
+              <Link href="/login?mode=register">
                 <button className="px-6 py-2.5 bg-white hover:bg-gray-100 text-gray-900 font-semibold rounded-xl transition-colors duration-200">
                   Get Started
                 </button>
@@ -153,7 +153,7 @@ export default function Navigation() {
 
                 {/* Get Started Button - Clean Design */}
                 <div className="pt-4">
-                  <Link href="/login" onClick={() => setIsMobileMenuOpen(false)}>
+                  <Link href="/login?mode=register" onClick={() => setIsMobileMenuOpen(false)}>
                     <button className="w-full px-6 py-4 bg-white hover:bg-gray-100 text-gray-900 font-semibold rounded-xl transition-colors">
                       Get Started
                     </button>
