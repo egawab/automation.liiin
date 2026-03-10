@@ -696,7 +696,7 @@ async function detectCaptcha(): Promise<CaptchaDetection> {
       );
 
       const strongPhrases = [
-        \"let's do a quick security check\",
+        "let's do a quick security check",
         'unusual activity on your account',
         'to help keep your account safe',
         'we detected suspicious activity',
