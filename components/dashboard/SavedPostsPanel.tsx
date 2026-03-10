@@ -29,6 +29,15 @@ export function SavedPostsPanel() {
     fetchPosts();
   }, [filterKeyword, filterVisited]);
 
+  // Simple polling to keep dashboard updated in near real-time while open
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchPosts();
+    }, 30000); // every 30 seconds
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKeyword, filterVisited]);
+
   async function fetchPosts() {
     try {
       setLoading(true);

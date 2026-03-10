@@ -258,31 +258,54 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 
     console.log(`📊 Found ${posts.length} posts\n`);
 
-    // Filter by reach criteria
-    const filtered = posts.filter(post => 
+    // Filter by reach criteria (strict matches)
+    const strictMatches = posts.filter(post => 
       post.likes >= settings.minLikes &&
       post.likes <= settings.maxLikes &&
       post.comments >= settings.minComments &&
       post.comments <= settings.maxComments
     );
 
-    console.log(`✅ ${filtered.length} posts match reach criteria\n`);
-    await broadcastLog(`Found ${filtered.length} matching posts for "${keyword.keyword}"`);
+    console.log(`✅ ${strictMatches.length} posts match reach criteria\n`);
+    await broadcastLog(`Found ${strictMatches.length} matching posts for "${keyword.keyword}"`);
 
-    if (filtered.length === 0) {
-      console.log('⚠️  No posts match your reach criteria\n');
+    let postsToSave: PostCandidate[] = strictMatches;
+    let usedFallback = false;
+
+    // If no strict matches, fall back to closest posts by reach
+    if (postsToSave.length === 0) {
+      console.log('⚠️  No posts match your reach criteria exactly. Using closest posts by reach instead.\n');
+      postsToSave = getClosestByReach(posts, settings, 10); // up to 10 closest posts
+      usedFallback = postsToSave.length > 0;
+      if (usedFallback) {
+        await broadcastLog(
+          `No strict matches for "${keyword.keyword}". Using ${postsToSave.length} closest posts by reach instead.`,
+          'warn'
+        );
+      } else {
+        await broadcastLog(
+          `No posts with meaningful engagement for "${keyword.keyword}" (all zero likes/comments).`,
+          'warn'
+        );
+      }
+    }
+
+    if (postsToSave.length === 0) {
+      console.log('⚠️  No posts with meaningful engagement to save\n');
       return;
     }
 
-    // Save all filtered posts to database
+    // Save all selected posts to database
     let savedCount = 0;
-    for (const post of filtered) {
+    for (const post of postsToSave) {
       const saved = await savePostToDatabase(post, keyword.keyword, settings.userId);
       if (saved) savedCount++;
     }
 
     console.log(`💾 Saved ${savedCount} new posts to dashboard\n`);
-    await broadcastLog(`✅ Saved ${savedCount} posts for "${keyword.keyword}"`);
+    await broadcastLog(
+      `${usedFallback ? '✅ Saved closest-by-reach posts' : '✅ Saved strict matches'} for "${keyword.keyword}" (${savedCount} saved)`
+    );
 
   } catch (error: any) {
     console.error(`❌ Error processing keyword "${keyword.keyword}":`, error.message);
@@ -341,7 +364,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       );
 
       postElements.forEach((element, index) => {
-        if (index >= 20) return; // Limit to 20 posts
+        if (index >= 30) return; // Limit to 30 posts per keyword for safety
 
         try {
           // Extract post URL
@@ -518,6 +541,29 @@ async function savePostToDatabase(post: PostCandidate, keyword: string, userId: 
     console.error('❌ Database save error:', error.message);
     return false;
   }
+}
+
+// Select up to maxCount posts closest to the target reach (minLikes/minComments)
+function getClosestByReach(
+  posts: PostCandidate[],
+  settings: WorkerSettings,
+  maxCount: number
+): PostCandidate[] {
+  const targetLikes = settings.minLikes;
+  const targetComments = settings.minComments;
+
+  return posts
+    // Exclude posts with zero engagement (likely low-value or noise)
+    .filter(p => p.likes > 0 || p.comments > 0)
+    .map(p => {
+      const likeDiff = Math.abs(p.likes - targetLikes);
+      const commentDiff = Math.abs(p.comments - targetComments);
+      const distance = likeDiff + commentDiff;
+      return { post: p, distance };
+    })
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, maxCount)
+    .map(x => x.post);
 }
 
 // ============================================================================
