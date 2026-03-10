@@ -1,10 +1,10 @@
-﻿'use client';
+'use client';
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
   LayoutDashboard, Search, MessageSquareText, Settings, Activity, Users,
-  TrendingUp, AlertCircle, Play, Pause, Plus, Trash2, Bot, PenTool, Sparkles
+  TrendingUp, AlertCircle, Play, Pause, Plus, Trash2, Bot, PenTool, Sparkles, Shield
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import {
@@ -208,7 +208,15 @@ export default function Dashboard() {
       minDelayMins: Number(formData.get('minDelayMins')),
       maxDelayMins: Number(formData.get('maxDelayMins')),
       linkedinSessionCookie: formData.get('linkedinSessionCookie') as string,
-      searchOnlyMode: formData.get('searchOnlyMode') === 'on'
+      searchOnlyMode: formData.get('searchOnlyMode') === 'on',
+      workHoursOnly: formData.get('workHoursOnly') === 'on',
+      workHoursStart: Number(formData.get('workHoursStart') ?? 9),
+      workHoursEnd: Number(formData.get('workHoursEnd') ?? 18),
+      skipWeekends: formData.get('skipWeekends') === 'on',
+      maxSearchesPerHour: Number(formData.get('maxSearchesPerHour') ?? 6),
+      maxSearchesPerDay: Number(formData.get('maxSearchesPerDay') ?? 20),
+      minDelayBetweenSearchesMinutes: Number(formData.get('minDelayBetweenSearchesMinutes') ?? 5),
+      maxKeywordsPerCycle: Number(formData.get('maxKeywordsPerCycle') ?? 3)
     };
     await fetch('/api/settings', {
       method: 'POST',
@@ -795,6 +803,63 @@ export default function Dashboard() {
                           Enable Search-Only Mode
                         </span>
                       </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Conservative Search Limits (Search-Only Mode) */}
+                <div className="bg-gradient-to-br from-green-600 to-emerald-700 rounded-2xl p-6 shadow-xl">
+                  <h4 className="text-sm font-extrabold text-white mb-2 flex items-center gap-2">
+                    <Shield size={16} className="text-white" />
+                    Conservative Search Limits (Safest)
+                  </h4>
+                  <p className="text-xs text-green-100 mb-4">
+                    Limits to minimize CAPTCHA and detection. Recommended for first tests.
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-green-100 mb-1">Max Searches/Hour</label>
+                      <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="12"
+                        className="w-full px-3 py-2 rounded-lg bg-white/20 border border-white/30 text-white font-bold text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-green-100 mb-1">Max Searches/Day</label>
+                      <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 20} min="1" max="60"
+                        className="w-full px-3 py-2 rounded-lg bg-white/20 border border-white/30 text-white font-bold text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-green-100 mb-1">Min Delay (min)</label>
+                      <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="5" max="30"
+                        className="w-full px-3 py-2 rounded-lg bg-white/20 border border-white/30 text-white font-bold text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-green-100 mb-1">Keywords/Cycle</label>
+                      <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 3} min="1" max="10"
+                        className="w-full px-3 py-2 rounded-lg bg-white/20 border border-white/30 text-white font-bold text-sm" />
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" name="workHoursOnly" defaultChecked={settings.workHoursOnly ?? true}
+                        className="w-4 h-4 rounded border-2 border-white/50" />
+                      <span className="text-sm font-semibold text-white">Work hours only (09:00–18:00)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" name="skipWeekends" defaultChecked={settings.skipWeekends ?? true}
+                        className="w-4 h-4 rounded border-2 border-white/50" />
+                      <span className="text-sm font-semibold text-white">Skip weekends</span>
+                    </label>
+                  </div>
+                  <div className="mt-3 flex gap-4">
+                    <div>
+                      <label className="block text-xs text-green-100 mb-1">Start hour</label>
+                      <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
+                        className="w-20 px-2 py-1 rounded bg-white/20 border border-white/30 text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-green-100 mb-1">End hour</label>
+                      <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
+                        className="w-20 px-2 py-1 rounded bg-white/20 border border-white/30 text-white text-sm" />
                     </div>
                   </div>
                 </div>

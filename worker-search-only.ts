@@ -44,6 +44,14 @@ interface WorkerSettings {
   maxComments: number;
   systemActive: boolean;
   searchOnlyMode: boolean;
+  workHoursOnly: boolean;
+  workHoursStart: number;
+  workHoursEnd: number;
+  skipWeekends: boolean;
+  maxSearchesPerHour: number;
+  maxSearchesPerDay: number;
+  minDelayBetweenSearchesMinutes: number;
+  maxKeywordsPerCycle: number;
 }
 
 interface KeywordData {
@@ -103,6 +111,35 @@ async function main() {
         continue;
       }
 
+      // Check work hours (skip if outside working hours)
+      if (settings.workHoursOnly && !isWithinWorkHours(settings)) {
+        const msg = 'Outside work hours. Waiting until next work period...';
+        console.log(`⏰ ${msg}\n`);
+        await broadcastStatus(msg);
+        await sleep(300000); // Check again in 5 minutes
+        continue;
+      }
+
+      // Check daily search limit
+      const searchesToday = await getSearchCountInPeriod(settings.userId, 'day');
+      if (searchesToday >= settings.maxSearchesPerDay) {
+        const msg = `Daily limit reached (${searchesToday}/${settings.maxSearchesPerDay}). Resuming tomorrow.`;
+        console.log(`⏹️  ${msg}\n`);
+        await broadcastStatus(msg);
+        await sleep(3600000); // Check again in 1 hour
+        continue;
+      }
+
+      // Check hourly search limit
+      const searchesThisHour = await getSearchCountInPeriod(settings.userId, 'hour');
+      if (searchesThisHour >= settings.maxSearchesPerHour) {
+        const msg = `Hourly limit reached (${searchesThisHour}/${settings.maxSearchesPerHour}). Waiting...`;
+        console.log(`⏳ ${msg}\n`);
+        await broadcastStatus(msg);
+        await sleep(600000); // Wait 10 minutes before retry
+        continue;
+      }
+
       // Set user context for broadcasts
       setUserContext(settings.userId);
 
@@ -128,8 +165,9 @@ async function main() {
         await broadcastStatus('✅ Authenticated - Ready to search');
       }
 
-      // Fetch active keywords
-      const keywords = await getActiveKeywords(settings.userId);
+      // Fetch active keywords (limit to maxKeywordsPerCycle for safety)
+      let keywords = await getActiveKeywords(settings.userId);
+      keywords = keywords.slice(0, settings.maxKeywordsPerCycle);
       
       if (keywords.length === 0) {
         console.log('⚠️  No active keywords. Waiting...\n');
@@ -138,11 +176,21 @@ async function main() {
         continue;
       }
 
-      console.log(`📊 Processing ${keywords.length} keywords...\n`);
-      await broadcastStatus(`Searching ${keywords.length} keywords...`);
+      console.log(`📊 Processing ${keywords.length} keyword(s) (max ${settings.maxKeywordsPerCycle} per cycle)...\n`);
+      await broadcastStatus(`Searching ${keywords.length} keyword(s)...`);
 
       // Process each keyword
       for (const keyword of keywords) {
+        // Re-check limits before each search
+        if (await getSearchCountInPeriod(settings.userId, 'hour') >= settings.maxSearchesPerHour) {
+          console.log('⏹️  Hourly limit reached. Stopping cycle.\n');
+          break;
+        }
+        if (await getSearchCountInPeriod(settings.userId, 'day') >= settings.maxSearchesPerDay) {
+          console.log('⏹️  Daily limit reached. Stopping cycle.\n');
+          break;
+        }
+
         // Check if system is still active
         const stillActive = await isSystemStillActive(settings.userId);
         if (!stillActive) {
@@ -152,14 +200,15 @@ async function main() {
 
         await processKeyword(keyword, settings);
         
-        // Random delay between keywords (30-60 seconds)
-        const delaySeconds = randomBetween(30, 60);
-        console.log(`⏱️  Waiting ${delaySeconds}s before next keyword...\n`);
+        // Conservative delay between searches (5-10 minutes)
+        const delayMinutes = settings.minDelayBetweenSearchesMinutes;
+        const delaySeconds = randomBetween(delayMinutes * 60, (delayMinutes + 5) * 60);
+        console.log(`⏱️  Waiting ${Math.round(delaySeconds / 60)} min before next search (conservative mode)...\n`);
         await sleep(delaySeconds * 1000);
       }
 
-      // Longer delay between cycles (5-10 minutes)
-      const cycleDelayMinutes = randomBetween(5, 10);
+      // Longer delay between cycles (10-15 minutes in conservative mode)
+      const cycleDelayMinutes = randomBetween(10, 15);
       console.log(`\n✅ Cycle complete. Next cycle in ${cycleDelayMinutes} minutes.\n`);
       await broadcastStatus(`Cycle complete. Next run in ${cycleDelayMinutes}m`);
       await sleep(cycleDelayMinutes * 60 * 1000);
@@ -192,6 +241,9 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 
     // Search LinkedIn
     const posts = await searchLinkedInPosts(keyword.keyword);
+
+    // Log this search for rate limit tracking
+    await logSearch(settings.userId, keyword.keyword);
 
     if (posts.length === 0) {
       console.log('❌ No posts found\n');
@@ -362,6 +414,56 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
   } catch (error: any) {
     console.error('❌ Search error:', error.message);
     throw error;
+  }
+}
+
+// ============================================================================
+// RATE LIMITING & WORK HOURS
+// ============================================================================
+
+function isWithinWorkHours(settings: WorkerSettings): boolean {
+  const now = new Date();
+  
+  if (settings.skipWeekends) {
+    const day = now.getDay(); // 0=Sun, 6=Sat
+    if (day === 0 || day === 6) return false;
+  }
+
+  if (!settings.workHoursOnly) return true;
+
+  const hour = now.getHours();
+  return hour >= settings.workHoursStart && hour < settings.workHoursEnd;
+}
+
+async function getSearchCountInPeriod(userId: string, period: 'hour' | 'day'): Promise<number> {
+  const since = new Date();
+  if (period === 'hour') {
+    since.setHours(since.getHours() - 1);
+  } else {
+    since.setDate(since.getDate() - 1);
+  }
+
+  const count = await prisma.log.count({
+    where: {
+      userId,
+      action: 'SEARCH',
+      timestamp: { gte: since }
+    }
+  });
+  return count;
+}
+
+async function logSearch(userId: string, keyword: string): Promise<void> {
+  try {
+    await prisma.log.create({
+      data: {
+        userId,
+        action: 'SEARCH',
+        postUrl: `search:${keyword}`
+      }
+    });
+  } catch (err) {
+    console.error('Failed to log search:', err);
   }
 }
 
@@ -676,7 +778,15 @@ async function getActiveUserSettings(): Promise<WorkerSettings | null> {
     minComments: settings.minComments,
     maxComments: settings.maxComments,
     systemActive: settings.systemActive,
-    searchOnlyMode: settings.searchOnlyMode
+    searchOnlyMode: settings.searchOnlyMode,
+    workHoursOnly: settings.workHoursOnly ?? true,
+    workHoursStart: settings.workHoursStart ?? 9,
+    workHoursEnd: settings.workHoursEnd ?? 18,
+    skipWeekends: settings.skipWeekends ?? true,
+    maxSearchesPerHour: settings.maxSearchesPerHour ?? 6,
+    maxSearchesPerDay: settings.maxSearchesPerDay ?? 20,
+    minDelayBetweenSearchesMinutes: settings.minDelayBetweenSearchesMinutes ?? 5,
+    maxKeywordsPerCycle: settings.maxKeywordsPerCycle ?? 3
   };
 }
 

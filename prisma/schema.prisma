@@ -41,6 +41,11 @@ model Settings {
   linkedinSessionCookie String  @default("")
   platformUrl           String  @default("")
   searchOnlyMode        Boolean @default(true)
+  // Conservative search limits (safest configuration)
+  maxSearchesPerHour    Int     @default(6)
+  maxSearchesPerDay     Int     @default(20)
+  minDelayBetweenSearchesMinutes Int @default(5)
+  maxKeywordsPerCycle   Int     @default(3)
   
   userId                String  @unique
   user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
