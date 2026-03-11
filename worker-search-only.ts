@@ -38,6 +38,7 @@ const prisma = new PrismaClient();
 interface WorkerSettings {
   userId: string;
   linkedinSessionCookie: string;
+  platformUrl: string;
   minLikes: number;
   maxLikes: number;
   minComments: number;
@@ -142,6 +143,12 @@ async function main() {
 
       // Set user context for broadcasts
       setUserContext(settings.userId);
+      // Ensure broadcasts go to the correct deployed dashboard URL (prevents 404s)
+      if (settings.platformUrl && settings.platformUrl.trim()) {
+        setApiBaseUrl(settings.platformUrl.trim());
+      } else if (process.env.NEXT_PUBLIC_APP_URL) {
+        setApiBaseUrl(process.env.NEXT_PUBLIC_APP_URL);
+      }
 
       // Initialize browser if needed
       if (!browser || currentUserId !== settings.userId || currentSessionCookie !== settings.linkedinSessionCookie) {
@@ -950,6 +957,7 @@ async function getActiveUserSettings(): Promise<WorkerSettings | null> {
   return {
     userId: settings.userId,
     linkedinSessionCookie: settings.linkedinSessionCookie,
+    platformUrl: settings.platformUrl,
     minLikes: settings.minLikes,
     maxLikes: settings.maxLikes,
     minComments: settings.minComments,

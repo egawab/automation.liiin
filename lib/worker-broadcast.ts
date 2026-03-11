@@ -34,10 +34,9 @@ function getApiBaseUrl(): string {
   
   // 5. Check if DATABASE_URL indicates production (Neon)
   if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon.tech')) {
-    // Production database detected, use production platform URL
-    const productionUrl = 'https://automation-liiin-nfum.vercel.app';
-    console.log(`   📡 Production database detected, using: ${productionUrl}`);
-    return productionUrl;
+    // Production database detected, but platform URL must be explicit.
+    // Do NOT hardcode a Vercel URL here — it easily gets out of sync and causes 404s for worker broadcasts.
+    console.log(`   📡 Production database detected (Neon). Set NEXT_PUBLIC_APP_URL to enable live worker broadcasts.`);
   }
   
   // 6. Default to localhost for local development ONLY
