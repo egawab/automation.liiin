@@ -423,7 +423,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
   if (!page) throw new Error('Browser not initialized');
 
   try {
-    const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=date_posted`;
+    const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&datePosted=%22past-week%22&sortBy=%22date_posted%22`;
 
     console.log(`🔍 Navigating to search page...`);
 
@@ -446,7 +446,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       // Scroll to bottom of the last visible result card (triggers infinite scroll)
       await page.evaluate(() => {
         const cards = document.querySelectorAll(
-          '.reusable-search__result-container, li.artdeco-card, [data-chameleon-result-urn]'
+          '[role="listitem"], [data-view-name="feed-full-update"], .reusable-search__result-container, li.artdeco-card'
         );
         const last = cards[cards.length - 1];
         if (last) {
@@ -488,10 +488,10 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       await humanDelay(60000, 120000);
     }
 
+
     console.log(`📊 Extracting post data...`);
 
     // ── Extraction: plain JS string so esbuild never transforms it ────────────
-    // Double-escaped \\d etc. become \d inside the browser-evaluated string.
     const postsRaw = await Promise.race([
       page.evaluate(`(function() {
         var MAX = ${MAX_POSTS_PER_SEARCH};
@@ -510,103 +510,97 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           return Math.round(n);
         }
 
-        function normalizeUrl(href) {
-          if (!href) return '';
-          if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
-          return href.split('?')[0].split('#')[0].replace(/\\/$/, '');
+        function decodeTrackingScope(el) {
+          try {
+            var raw = el.getAttribute('data-view-tracking-scope');
+            if (!raw) return null;
+            var arr = JSON.parse(raw);
+            var items = Array.isArray(arr) ? arr : [arr];
+            for (var i = 0; i < items.length; i++) {
+              var item = items[i];
+              var data = item && item.breadcrumb && item.breadcrumb.content && item.breadcrumb.content.data;
+              if (data && Array.isArray(data)) {
+                var str = data.map(function(b) { return String.fromCharCode(b); }).join('');
+                var inner = JSON.parse(str);
+                var urn = inner.updateUrn || (inner.controlledUpdateRegion && inner.controlledUpdateRegion.updateUrn) || null;
+                if (urn) return urn;
+              }
+              var value = item && item.value;
+              if (value && Array.isArray(value)) {
+                var str2 = value.map(function(b) { return String.fromCharCode(b); }).join('');
+                var inner2 = JSON.parse(str2);
+                var urn2 = inner2.updateUrn || (inner2.controlledUpdateRegion && inner2.controlledUpdateRegion.updateUrn) || null;
+                if (urn2) return urn2;
+              }
+            }
+            return null;
+          } catch(e) { return null; }
         }
 
-        // isPostUrl — accepts only genuine post URLs, never profile pages.
-        // Valid:   /feed/update/urn:li:activity:…
-        //          /posts/<slug>-<digits>          (public post on profile)
-        // Invalid: /in/<name>/recent-activity/    (profile activity tab)
-        //          /in/<name>                      (profile page)
-        function isPostUrl(url) {
-          if (!url) return false;
-          if (url.indexOf('/feed/update/urn:li:') !== -1) return true;
-          // /posts/ path must NOT be under /in/ (profile pages)
-          var postsIdx = url.indexOf('/posts/');
-          if (postsIdx !== -1 && url.indexOf('/in/') === -1) return true;
-          return false;
+        var containers = Array.from(document.querySelectorAll('[role="listitem"], [data-view-name="feed-full-update"]'));
+        if (containers.length === 0) {
+          containers = Array.from(document.querySelectorAll('li.artdeco-card, .feed-shared-update-v2[data-urn], .entity-result, .reusable-search__result-container'));
         }
 
-        // ── Phase 1: URN-based (most reliable — builds canonical URL) ─────────
-        var containers = Array.from(document.querySelectorAll(
-          'li.artdeco-card, .feed-shared-update-v2[data-urn], .reusable-search__result-container, .entity-result, [data-chameleon-result-urn]'
-        ));
         containers.forEach(function(container) {
           if (results.length >= MAX) return;
-          var urnEl = container.querySelector('[data-urn*="activity:"], [data-urn*="ugcPost:"], .feed-shared-update-v2[data-urn]');
-          var urn = urnEl ? urnEl.getAttribute('data-urn') : null;
-          if (urn && (urn.indexOf('urn:li:activity:') !== -1 || urn.indexOf('urn:li:ugcPost:') !== -1)) {
-            var url = 'https://www.linkedin.com/feed/update/' + urn;
-            if (!seen[url]) { seen[url] = true; results.push({ url: url, likes: 0, comments: 0, _container: container }); }
+          var url = null;
+          var scopeEls = [container].concat(Array.from(container.querySelectorAll('[data-view-tracking-scope]')));
+          for (var i = 0; i < scopeEls.length; i++) {
+            var urn = decodeTrackingScope(scopeEls[i]);
+            if (urn && (urn.indexOf('urn:li:activity:') !== -1 || urn.indexOf('urn:li:ugcPost:') !== -1 || urn.indexOf('urn:li:share:') !== -1)) {
+              url = 'https://www.linkedin.com/feed/update/' + urn;
+              break;
+            }
           }
-        });
+          if (!url) {
+            var urnEl = container.querySelector('[data-urn*="activity:"], [data-urn*="ugcPost:"]');
+            if (urnEl) url = 'https://www.linkedin.com/feed/update/' + urnEl.getAttribute('data-urn');
+          }
+          if (!url || seen[url]) return;
+          seen[url] = true;
 
-        // ── Phase 2: Link fallback (only if Phase 1 found < 10 posts) ─────────
-        if (results.length < 10) {
-          Array.from(document.querySelectorAll('a[href]')).forEach(function(a) {
-            if (results.length >= MAX) return;
-            var href = a.getAttribute('href') || '';
-            if (!href) return;
-            var url = normalizeUrl(href);
-            if (!isPostUrl(url) || seen[url]) return;
-            seen[url] = true;
-            results.push({ url: url, likes: 0, comments: 0, _container: null });
-          });
-        }
-
-        // ── Phase 3: Engagement extraction ───────────────────────────────────
-        // Strategy A: aria-label on reaction/comment buttons (most accurate).
-        // Strategy B: text scan of the nearest LI/ARTICLE container (fallback).
-        results.forEach(function(r) {
           var like = 0, comm = 0;
           try {
-            // Find the post container — prefer the stored reference, else search by link
-            var root = r._container || null;
-            if (!root) {
-              var path = r.url.replace('https://www.linkedin.com', '');
-              var linkEl = document.querySelector('a[href*="' + path + '"]');
-              root = linkEl;
-              for (var i = 0; i < 10 && root && root.parentElement; i++) {
-                root = root.parentElement;
-                if (root.tagName === 'LI' || root.tagName === 'ARTICLE') break;
-              }
-            }
-            if (!root) return;
+            var text = (container.innerText || '').replace(/[\\n\\r]/g, ' ');
+            var mLike = text.match(/(\\d[\\d,]*)\\s*(reactions?|likes?)/i);
+            if (mLike) like = parseNum(mLike[1]);
+            var mComm = text.match(/(\\d[\\d,]*)\\s*comments?/i);
+            if (mComm) comm = parseNum(mComm[1]);
 
-            // Strategy A: aria-label attributes contain exact counts
-            // e.g. aria-label="234 reactions" or aria-label="12 comments"
-            var allEls = root.querySelectorAll('[aria-label]');
-            allEls.forEach(function(el) {
-              var label = (el.getAttribute('aria-label') || '').toLowerCase();
-              if (!like && (label.indexOf('reaction') !== -1 || label.indexOf('like') !== -1)) {
-                var lm = label.match(/([\\d,.km]+)/);
-                if (lm) like = parseNum(lm[1]);
+            if (!like || !comm) {
+              var allLabels = Array.from(container.querySelectorAll('[aria-label]'));
+              for (var l = 0; l < allLabels.length; l++) {
+                var label = (allLabels[l].getAttribute('aria-label') || '').toLowerCase();
+                if (!like && (label.indexOf('reaction') !== -1 || label.indexOf('like') !== -1)) {
+                  var ml = label.match(/(\\d[\\d,]*)/);
+                  if (ml) like = parseNum(ml[1]);
+                }
+                if (!comm && label.indexOf('comment') !== -1) {
+                  var mc = label.match(/(\\d[\\d,]*)/);
+                  if (mc) comm = parseNum(mc[1]);
+                }
               }
-              if (!comm && label.indexOf('comment') !== -1) {
-                var cm = label.match(/([\\d,.km]+)/);
-                if (cm) comm = parseNum(cm[1]);
-              }
-            });
-
-            // Strategy B: text scan if aria-labels gave nothing
-            if (!like && !comm) {
-              var text = root.innerText || '';
-              var m1 = text.match(/([\\d.,km]+)\\s*(reaction|like)/i);
-              if (m1) like = parseNum(m1[1]);
-              var m2 = text.match(/([\\d.,km]+)\\s*comment/i);
-              if (m2) comm = parseNum(m2[1]);
             }
           } catch(e) {}
-          r.likes = like;
-          r.comments = comm;
-          delete r._container;  // don't serialise DOM nodes
+          results.push({ url: url, likes: like, comments: comm });
         });
 
+        if (results.length < 5) {
+          Array.from(document.querySelectorAll('a[href*="/feed/update/urn:li:"]')).forEach(function(a) {
+            if (results.length >= MAX) return;
+            var url = a.href.split('?')[0].split('#')[0];
+            if (!seen[url]) {
+              seen[url] = true;
+              results.push({ url: url, likes: 0, comments: 0 });
+            }
+          });
+        }
         return results;
       })()`) as Promise<any[]>,
+
+
+
       (async () => {
         await sleep(25000);
         throw new Error('EXTRACTION_TIMEOUT');
