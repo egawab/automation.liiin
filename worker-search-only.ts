@@ -379,24 +379,8 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
         console.log('⚠️  No posts matching criteria or with engagement found. Skipping.\n');
         await broadcastLog(`No quality matches found for "${keyword.keyword}". Skipping.`, 'warn');
         return;
-      } closest-by-reach posts instead.`,
-            'warn'
-          );
-        } else {
-          await broadcastLog(
-            `No posts with meaningful engagement for "${keyword.keyword}" (all zero likes/comments).`,
-            'warn'
-          );
-        }
       }
-    }
 
-    if (postsToSave.length === 0) {
-      console.log('⚠️  No posts to save\n');
-      return;
-    }
-
-    // Save all selected posts in parallel for speed
     const saveResults = await Promise.allSettled(
       postsToSave.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
     );
