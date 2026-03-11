@@ -51,7 +51,8 @@ let API_BASE_URL = getApiBaseUrl();
  */
 export function setApiBaseUrl(url: string) {
   if (url && url.trim()) {
-    API_BASE_URL = url;
+    // Normalize to avoid double slashes and accidental trailing slash issues
+    API_BASE_URL = url.trim().replace(/\/+$/, '');
     console.log(`   📡 Platform URL set to: ${API_BASE_URL}`);
   }
 }

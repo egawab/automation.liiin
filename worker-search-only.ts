@@ -81,12 +81,86 @@ let currentSessionCookie: string | null = null;
 let isAuthenticated = false;
 
 // ============================================================================
+// DASHBOARD LOG MIRRORING (console -> SSE)
+// ============================================================================
+
+let dashboardLoggingEnabled = false;
+const logBuffer: Array<{ level: 'info' | 'warn' | 'error'; message: string }> = [];
+const MAX_BUFFERED_LOGS = 200;
+
+function bufferLog(level: 'info' | 'warn' | 'error', message: string) {
+  if (logBuffer.length >= MAX_BUFFERED_LOGS) logBuffer.shift();
+  logBuffer.push({ level, message });
+}
+
+async function flushBufferedLogsToDashboard() {
+  if (!dashboardLoggingEnabled) return;
+  while (logBuffer.length > 0) {
+    const item = logBuffer.shift();
+    if (!item) break;
+    await broadcastLog(item.message, item.level).catch(() => {});
+  }
+}
+
+function enableDashboardConsoleMirroring() {
+  if (dashboardLoggingEnabled) return;
+  dashboardLoggingEnabled = true;
+
+  const originalLog = console.log.bind(console);
+  const originalWarn = console.warn.bind(console);
+  const originalError = console.error.bind(console);
+
+  console.log = (...args: any[]) => {
+    originalLog(...args);
+    try {
+      const msg = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+      bufferLog('info', msg);
+      // Fire-and-forget; do not await inside console methods
+      void flushBufferedLogsToDashboard();
+    } catch {}
+  };
+
+  console.warn = (...args: any[]) => {
+    originalWarn(...args);
+    try {
+      const msg = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+      bufferLog('warn', msg);
+      void flushBufferedLogsToDashboard();
+    } catch {}
+  };
+
+  console.error = (...args: any[]) => {
+    originalError(...args);
+    try {
+      const msg = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+      bufferLog('error', msg);
+      void flushBufferedLogsToDashboard();
+    } catch {}
+  };
+}
+
+// ============================================================================
 // MAIN WORKER LOOP
 // ============================================================================
 
 async function main() {
   console.log('\n🔍 LinkedIn Search-Only Worker - Starting...\n');
   console.log('📋 Mode: Search and save links ONLY (no auto-commenting)\n');
+
+  // IMPORTANT: On startup, clear any previous "Start" flags so the worker
+  // does NOT immediately begin processing based on stale state.
+  // The worker will only act after a fresh Start click sets systemActive=true
+  // in the current session.
+  try {
+    await prisma.settings.updateMany({
+      data: {
+        systemActive: false,
+      },
+    });
+    console.log('🧹 Cleared existing systemActive flags on startup. Waiting for fresh Start.\n');
+  } catch (err: any) {
+    console.error('Failed to clear systemActive flags on startup:', err?.message || err);
+  }
 
   await broadcastStatus('Starting search-only worker...');
 
@@ -149,6 +223,8 @@ async function main() {
       } else if (process.env.NEXT_PUBLIC_APP_URL) {
         setApiBaseUrl(process.env.NEXT_PUBLIC_APP_URL);
       }
+      // Mirror worker terminal logs into the dashboard for this user/session
+      enableDashboardConsoleMirroring();
 
       // Initialize browser if needed
       if (!browser || currentUserId !== settings.userId || currentSessionCookie !== settings.linkedinSessionCookie) {
@@ -340,11 +416,22 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       timeout: 30000
     });
 
-    // Wait for results to load
-    await humanDelay(3000, 5000);
+    // Wait briefly and ensure at least some result container exists (don’t hang)
+    await humanDelay(2000, 4000);
+    await page.waitForSelector('.reusable-search__result-container, [data-urn*="activity"], [data-urn*="ugcPost"], [data-chameleon-result-urn]', { timeout: 15000 })
+      .catch(() => console.log('⚠️  Result containers not found quickly; attempting extraction anyway...'));
 
-    // Random scroll to simulate human behavior
-    await humanScroll(page);
+    // Scroll a few times to trigger lazy-loading (conservative)
+    for (let i = 0; i < 3; i++) {
+      await humanScroll(page);
+      await humanDelay(1200, 2400);
+      // Click “See more results” if present
+      const moreBtn = await page.$('button.search-results-bottom-pagination__button, button[aria-label="See more results"]').catch(() => null);
+      if (moreBtn) {
+        await moreBtn.click().catch(() => {});
+        await humanDelay(2000, 3500);
+      }
+    }
 
     // Check for CAPTCHA / anti-bot signals
     const detection = await detectCaptcha();
@@ -359,88 +446,109 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       await humanDelay(60000, 120000);
     }
 
-    // Extract post data
+    // Extract post data (multi-strategy, resilient)
     console.log(`📊 Extracting post data...`);
-    
-    const posts = await page.evaluate(() => {
-      const results: any[] = [];
-      
-      // Try multiple selectors for LinkedIn's dynamic structure
-      const postElements = document.querySelectorAll(
-        '.reusable-search__result-container, .search-results-container .feed-shared-update-v2, [data-id^="urn:li:activity"]'
-      );
 
-      postElements.forEach((element, index) => {
-        if (index >= 30) return; // Limit to 30 posts per keyword for safety
-
-        try {
-          // Extract post URL
-          let postUrl = '';
-          
-          // Method 1: data-urn attribute
-          const urn = element.getAttribute('data-urn') || element.getAttribute('data-id');
-          if (urn) {
-            const urnId = urn.split(':').pop();
-            postUrl = `https://www.linkedin.com/feed/update/${urn}`;
-          }
-          
-          // Method 2: Link in title/content
-          if (!postUrl) {
-            const link = element.querySelector('a[href*="/feed/update/"], a[href*="linkedin.com/posts/"]');
-            if (link) {
-              postUrl = link.getAttribute('href') || '';
-              if (postUrl && !postUrl.startsWith('http')) {
-                postUrl = 'https://www.linkedin.com' + postUrl;
-              }
-            }
-          }
-
-          if (!postUrl || !postUrl.includes('linkedin.com')) return;
-
-          // Extract author
-          const authorElement = element.querySelector('.update-components-actor__name, .feed-shared-actor__name');
-          const author = authorElement?.textContent?.trim() || 'Unknown';
-
-          // Extract post preview
-          const previewElement = element.querySelector('.feed-shared-text, .update-components-text');
-          const preview = previewElement?.textContent?.trim().substring(0, 200) || '';
-
-          // Extract engagement metrics
-          const socialCounts = element.querySelector('.social-details-social-counts');
-          
-          let likes = 0;
-          let comments = 0;
-
-          if (socialCounts) {
-            // Try to find likes
-            const likesText = socialCounts.textContent || '';
-            const likesMatch = likesText.match(/(\d+(?:,\d+)?)\s*(?:reaction|like)/i);
-            if (likesMatch) {
-              likes = parseInt(likesMatch[1].replace(/,/g, ''));
-            }
-
-            // Try to find comments
-            const commentsMatch = likesText.match(/(\d+(?:,\d+)?)\s*comment/i);
-            if (commentsMatch) {
-              comments = parseInt(commentsMatch[1].replace(/,/g, ''));
-            }
-          }
-
-          results.push({
-            url: postUrl,
-            author,
-            preview,
-            likes,
-            comments
-          });
-
-        } catch (err) {
-          // Skip this post on error
+    const superScraper = String.raw`
+      (function() {
+        var results = [];
+        var seen = {};
+        function parseNum(t) {
+          if (!t) return 0;
+          var c = String(t).toLowerCase().replace(/,/g, '').trim();
+          var m = c.match(/([\\d\\.\\,]+)/);
+          if (!m) return 0;
+          var n = parseFloat(m[1].replace(/,/g, ''));
+          if (c.indexOf('k') !== -1) n *= 1000;
+          if (c.indexOf('m') !== -1) n *= 1000000;
+          return Math.round(n);
         }
-      });
 
-      return results;
+        function normalizeUrl(href) {
+          if (!href) return '';
+          if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
+          href = href.split('?')[0].split('#')[0];
+          return href.replace(/\\/$/, '');
+        }
+
+        // Phase 1: URN-based extraction (most stable)
+        var containers = Array.from(document.querySelectorAll(
+          'li.artdeco-card, .feed-shared-update-v2[data-urn], .reusable-search__result-container, .entity-result, [data-chameleon-result-urn]'
+        ));
+
+        containers.forEach(function(container) {
+          var urnEl = container.querySelector('[data-urn*=\"activity\"], [data-urn*=\"ugcPost\"], .feed-shared-update-v2[data-urn]');
+          var urn = urnEl ? urnEl.getAttribute('data-urn') : null;
+          if (urn && (urn.indexOf('urn:li:activity:') !== -1 || urn.indexOf('urn:li:ugcPost:') !== -1)) {
+            var url = 'https://www.linkedin.com/feed/update/' + urn;
+            if (!seen[url]) {
+              seen[url] = true;
+              results.push({ url: url, likes: 0, comments: 0 });
+            }
+          }
+        });
+
+        // Phase 2: Link-based extraction fallback
+        if (results.length < 5) {
+          var links = Array.from(document.querySelectorAll('a[href]'));
+          links.forEach(function(a) {
+            var href = a.getAttribute('href') || '';
+            if (!href) return;
+            if (href.indexOf('/feed/update/') === -1 && href.indexOf('/posts/') === -1) return;
+            var url = normalizeUrl(href);
+            if (!url) return;
+            if (seen[url]) return;
+            seen[url] = true;
+            results.push({ url: url, likes: 0, comments: 0 });
+          });
+        }
+
+        // Phase 3: attempt engagement extraction by scanning nearby text
+        results = results.slice(0, 30);
+        results.forEach(function(r) {
+          var like = 0, comm = 0;
+          // best-effort: find any element containing the URL and then read parent text
+          try {
+            var linkEl = document.querySelector('a[href*=\"' + r.url.replace('https://www.linkedin.com','') + '\"]');
+            var root = linkEl;
+            for (var i = 0; i < 8 && root && root.parentElement; i++) {
+              root = root.parentElement;
+              if (root.tagName === 'LI' || root.tagName === 'ARTICLE') break;
+            }
+            var text = root ? (root.innerText || '') : '';
+            var m1 = text.match(/([\\d\\.\\,km]+)\\s*(reaction|like)/i);
+            if (m1) like = parseNum(m1[1]);
+            var m2 = text.match(/([\\d\\.\\,km]+)\\s*comment/i);
+            if (m2) comm = parseNum(m2[1]);
+          } catch (e) {}
+          r.likes = like;
+          r.comments = comm;
+        });
+
+        return results;
+      })()
+    `;
+
+    // Never hang in page.evaluate
+    const postsRaw = await Promise.race([
+      page.evaluate(superScraper) as Promise<any[]>,
+      (async () => {
+        await sleep(20000);
+        throw new Error('EXTRACTION_TIMEOUT');
+      })()
+    ]).catch(async (err: any) => {
+      console.log(`⚠️  Extraction script failed: ${err?.message || err}`);
+      await broadcastScreenshot(page!, `Extraction failed: ${err?.message || err}`).catch(() => {});
+      return [];
     });
+
+    const posts = (Array.isArray(postsRaw) ? postsRaw : []).map((p: any) => ({
+      url: p.url,
+      author: 'Unknown',
+      preview: '',
+      likes: typeof p.likes === 'number' ? p.likes : 0,
+      comments: typeof p.comments === 'number' ? p.comments : 0
+    })) as PostCandidate[];
 
     console.log(`✅ Extracted ${posts.length} posts\n`);
     
@@ -580,8 +688,15 @@ function getClosestByReach(
 async function initializeBrowser() {
   console.log('🌐 Initializing stealth browser...\n');
 
+  // Determine headless mode from environment:
+  // - HEADLESS="true"  -> run headless
+  // - HEADLESS="false" -> run headed (visible)
+  // - not set          -> default to headless (safe for demos / local runs)
+  const headlessEnv = (process.env.HEADLESS || '').toLowerCase();
+  const isHeadless = headlessEnv !== 'false';
+
   browser = await chromium.launch({
-    headless: false, // Visible browser reduces suspicion
+    headless: isHeadless,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
