@@ -250,7 +250,7 @@ async function main() {
 
       // Fetch active keywords (limit to maxKeywordsPerCycle for safety)
       let keywords = await getActiveKeywords(settings.userId);
-      keywords = keywords.slice(0, settings.maxKeywordsPerCycle);
+      keywords = keywords.slice(0, 10); // Phase 4: Overridden to 10 keywords
       
       if (keywords.length === 0) {
         console.log('⚠️  No active keywords. Waiting...\n');
@@ -357,29 +357,29 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
     console.log(`✅ ${strictMatches.length} posts match reach criteria\n`);
     await broadcastLog(`Found ${strictMatches.length} matching posts for "${keyword.keyword}" (${withEngagement.length} with engagement data)`);
 
-    let postsToSave: PostCandidate[] = strictMatches;
-    let usedFallback = false;
+          let postsToSave: PostCandidate[] = [...strictMatches];
+      
+      // Phase 4: Supplement strict matches with top engagement results if volume is low (target 15)
+      if (postsToSave.length < 15 && withEngagement.length > 0) {
+        const remainingTarget = 15 - postsToSave.length;
+        const potentialSupplements = withEngagement
+          .filter(p => !postsToSave.some(s => s.url === p.url))
+          .sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments))
+          .slice(0, remainingTarget);
+        
+        if (potentialSupplements.length > 0) {
+          console.log(`➕ Supplementing with ${potentialSupplements.length} high-reach posts to hit target volume.`);
+          postsToSave = [...postsToSave, ...potentialSupplements];
+        }
+      }
 
-    // Only use fallback if there are genuinely no strict matches.
-    // If most posts have zero engagement it likely means LinkedIn didn't render
-    // engagement counts — still prefer strict matches (empty set) over
-    // saving random posts, but log a warning so the user knows.
-    if (postsToSave.length === 0) {
-      if (withEngagement.length === 0) {
-        console.log('⚠️  All posts have zero engagement — LinkedIn may not have rendered counts.\n');
-        await broadcastLog(
-          `All ${posts.length} posts for "${keyword.keyword}" returned zero engagement. LinkedIn may not have loaded counts. Skipping fallback.`,
-          'warn'
-        );
-        postsToSave = []; // No strict matches and no engagement data - skip.
-      } else {
-        // Real engagement data exists — use closest-by-reach fallback
-        console.log('⚠️  No strict matches. Double-checked: engagement data exists. Using closest-by-reach fallback.\n');
-        postsToSave = getClosestByReach(posts, settings);
-        usedFallback = postsToSave.length > 0;
-        if (usedFallback) {
-          await broadcastLog(
-            `No strict reach matches for "${keyword.keyword}". Using ${postsToSave.length} closest-by-reach posts instead.`,
+      let usedFallback = postsToSave.length > strictMatches.length;
+
+      if (postsToSave.length === 0) {
+        console.log('⚠️  No posts matching criteria or with engagement found. Skipping.\n');
+        await broadcastLog(`No quality matches found for "${keyword.keyword}". Skipping.`, 'warn');
+        return;
+      } closest-by-reach posts instead.`,
             'warn'
           );
         } else {
@@ -496,7 +496,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       page.evaluate(`(function() {
         var MAX = ${MAX_POSTS_PER_SEARCH};
         var results = [];
-        var seen = {};
+        var seen = {}; var staleCount = 0;
 
         // ── Helpers ──────────────────────────────────────────────────────────
         function parseNum(t) {
@@ -591,8 +591,8 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
             // Filter out posts older than 6 months (7mo, 8mo, 9mo, 10mo, 11mo, 12mo, 1y, 2y, etc.)
             if (dateText.match(/(\d+mo|[\d.]+y)/)) {
               var m = dateText.match(/(\d+)mo/);
-              if (m && parseInt(m[1]) > 6) return; // Skip > 6 months
-              if (dateText.indexOf('y') !== -1) return; // Skip years
+              if (m && parseInt(m[1]) > 6) { staleCount++; return; }
+              if (dateText.indexOf('y') !== -1) { staleCount++; return; }
             }
           } catch(e) {}
           results.push({ url: url, likes: like, comments: comm });
@@ -632,7 +632,10 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       comments: typeof p.comments === 'number' ? p.comments : 0
     }));
 
-    console.log(`✅ Extracted ${posts.length} posts\n`);
+    // Phase 4: Extra wait for engagement counts to render fully before final extraction
+    console.log('⏳ Waiting for engagement counts to render...');
+    await sleep(15000);
+    console.log('✅ Extracted ${posts.length} posts\n');
     if (posts.length > 0) {
       console.log(`📋 Sample: ${posts[0].url}`);
       console.log(`   Likes: ${posts[0].likes} | Comments: ${posts[0].comments}\n`);
