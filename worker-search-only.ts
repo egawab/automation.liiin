@@ -247,7 +247,9 @@ async function workerLoop() {
         
         const authenticated = await authenticateLinkedIn(settings.linkedinSessionCookie);
         if (!authenticated) {
-          await broadcastError('LinkedIn authentication failed. Please update your session cookie.');
+          await broadcastError('LinkedIn authentication failed. Possible Redirect Loop or Checkpoint. Performing full reset.');
+          console.log('🔄 Auth failed - Clearing session and waiting 30s before retry...\n');
+          await cleanup().catch(() => {});
           await sleep(30000);
           continue;
         }
@@ -840,18 +842,28 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
   if (!page || !context) throw new Error('Browser not initialized');
 
   try {
-    console.log('🔐 Authenticating LinkedIn session...');
+    console.log('🔐 Authenticating LinkedIn session (Phase 8: Native Context)...');
 
     const cleanCookie = sessionCookie.trim().replace(/^["']|["']$/g, '');
 
-    // Phase 7: Visit landing page to get base cookies
-    try {
-      console.log('   Establishing technical context...');
-      await page.goto('https://www.linkedin.com', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-    } catch {}
+    // 1. Visit UAS login page UNAUTHENTICATED to let LinkedIn set "Native" cookies (bcookie, JSESSIONID, etc.)
+    console.log('   Acquiring native session context from LinkedIn...');
+    await page.goto('https://www.linkedin.com/uas/login', { 
+      waitUntil: 'networkidle', 
+      timeout: 35000 
+    }).catch(() => {});
 
-    // Phase 7: Inject JSESSIONID alongside li_at to prevent redirect loops
-    // JSESSIONID is often required for valid session context
+    // 2. Get the cookies set by LinkedIn natively
+    const nativeCookies = await context.cookies();
+    const nativeJSession = nativeCookies.find(c => c.name === 'JSESSIONID');
+    
+    if (nativeJSession) {
+       console.log('   Native JSESSIONID acquired: ' + nativeJSession.value.substring(0, 10) + '...');
+    } else {
+       console.log('   No native JSESSIONID found - will generate placeholder.');
+    }
+
+    // 3. Inject user session cookie while preserving or adding JSESSIONID
     await context.addCookies([
       {
         name: 'li_at',
@@ -864,7 +876,7 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       },
       {
         name: 'JSESSIONID',
-        value: `ajax:${Math.floor(Math.random() * 1000000000000000)}`,
+        value: nativeJSession ? nativeJSession.value : `ajax:${Math.floor(Math.random() * 1000000000000000)}`,
         domain: '.linkedin.com',
         path: '/',
         httpOnly: false,
@@ -873,38 +885,56 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       }
     ]);
 
-    console.log('   Applied authenticated cookies (li_at + JSESSIONID)');
+    console.log('   Session context stabilized (li_at + JSESSIONID)');
+
+    // 4. Trace redirects for diagnostics
+    const redirectChain: string[] = [];
+    const redirectListener = (response: any) => {
+      const status = response.status();
+      if (status >= 300 && status <= 399) {
+        redirectChain.push(`[${status}] ${response.url()} -> ${response.headers()['location']}`);
+      }
+    };
+    page.on('response', redirectListener);
 
     await randomSleep(2000, 4000);
     
-    // Phase 7: Detection of login checkpoints
     try {
-      const response = await page.goto('https://www.linkedin.com/feed', {
+      console.log('   Navigating to feed...');
+      await page.goto('https://www.linkedin.com/feed', {
         waitUntil: 'networkidle',
         timeout: 60000
       });
 
       const finalUrl = page.url();
       if (finalUrl.includes('/checkpoint/')) {
-        console.log('⚠️  SECURITY CHECKPOINT: LinkedIn requested manual verification (OTP/Captcha).');
-        await broadcastLog('Login blocked by LinkedIn Security Checkpoint. Manual intervention required.', 'error');
+        console.log('⚠️  SECURITY CHECKPOINT DETECTED: ' + finalUrl);
+        await broadcastLog('Login blocked by Security Checkpoint. Screenshot sent.', 'error');
         await broadcastScreenshot(page, 'Security Checkpoint');
+        page.removeListener('response', redirectListener);
         return false;
       }
 
       if (finalUrl.includes('/login') && !finalUrl.includes('feed')) {
-         console.log('❌ Session Invalid: Redirected to login page.');
+         console.log('❌ Session Invalid: Still on login page.');
+         page.removeListener('response', redirectListener);
          return false;
       }
 
     } catch (e: any) {
       if (e.message.includes('ERR_TOO_MANY_REDIRECTS')) {
-        console.log('⚠️  Redirect loop detected. This usually means the session is flagged or JSESSIONID mismatch.');
+        console.log('❌ REDIRECT LOOP DIAGNOSTICS:');
+        if (redirectChain.length === 0) console.log('   (No redirect responses captured before failure)');
+        redirectChain.forEach(step => console.log('   ' + step));
+        await broadcastLog('Locked in redirect loop. Diagnostics logged to terminal.', 'error');
+        page.removeListener('response', redirectListener);
         return false; 
       }
+      page.removeListener('response', redirectListener);
       throw e;
     }
 
+    page.removeListener('response', redirectListener);
     await randomSleep(3000, 5000);
 
     const isAuthenticated = await page.evaluate(() => {
@@ -914,11 +944,10 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
 
     if (isAuthenticated) {
       console.log('✅ LinkedIn authentication successful\n');
-      await broadcastScreenshot(page, 'Authenticated Success');
       await warmUpSession();
       return true;
     } else {
-      console.log('❌ Authentication Verification Failed\n');
+      console.log('❌ Verification failed: Navigation elements not found.');
       return false;
     }
 
