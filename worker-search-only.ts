@@ -998,6 +998,56 @@ async function randomSleep(min: number, max: number) {
   return sleep(ms);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function randomBetween(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1) + min);
+}
+
+async function randomSleep(min: number, max: number) {
+  const ms = Math.floor(Math.random() * (max - min) + min);
+  return sleep(ms);
+}
+
+async function humanDelay(min: number, max: number) {
+  return randomSleep(min, max);
+}
+
+async function detectCaptcha(): Promise<{ level: 'none' | 'soft' | 'hard'; reason: string }> {
+  if (!page) return { level: 'none', reason: '' };
+  
+  const url = page.url();
+  if (url.includes('/checkpoint/') || url.includes('/captcha') || url.includes('/security-check')) {
+    return { level: 'hard', reason: 'Security checkpoint or captcha URL detected' };
+  }
+
+  const isBlocked = await page.evaluate(() => {
+    const text = document.body.innerText.toLowerCase();
+    if (text.includes('please confirm you’re a real person')) return true;
+    if (text.includes('security verification')) return true;
+    if (text.includes('unusual activity')) return true;
+    return false;
+  }).catch(() => false);
+
+  if (isBlocked) return { level: 'hard', reason: 'On-page anti-bot challenge text' };
+  
+  return { level: 'none', reason: '' };
+}
+
+async function handleCaptcha(detection: { level: string; reason: string }) {
+  console.log('🚨 STOPPING: ' + detection.reason);
+  await broadcastError('Hard Anti-Bot detected: ' + detection.reason);
+  await broadcastScreenshot(page!, 'Hard CAPTCHA');
+  
+  // Pause worker for a long duration to avoid suspension
+  console.log('🔄 Worker entering deep pause (60m) due to anti-bot. Please check browser.');
+  await broadcastLog('Entering 60-minute cooling down period due to security checkpoint.', 'error');
+  await sleep(3600000); 
+  throw new Error('SECURITY_CHECKPOINT_MANUAL_ACTION_REQUIRED');
+}
+
 async function cleanup() {
   console.log('\n🧹 Cleaning up...');
 
