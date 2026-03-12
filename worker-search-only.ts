@@ -842,28 +842,29 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
   if (!page || !context) throw new Error('Browser not initialized');
 
   try {
-    console.log('🔐 Authenticating LinkedIn session (Phase 8: Native Context)...');
+    console.log('🔐 Authenticating LinkedIn session (Phase 10: Cookie Sanitization)...');
 
     const cleanCookie = sessionCookie.trim().replace(/^["']|["']$/g, '');
 
-    // 1. Visit UAS login page UNAUTHENTICATED to let LinkedIn set "Native" cookies (bcookie, JSESSIONID, etc.)
+    // 1. Visit UAS login page UNAUTHENTICATED to let LinkedIn set "Native" cookies
     console.log('   Acquiring native session context from LinkedIn...');
-    await page.goto('https://www.linkedin.com/uas/login', { 
+    const initialResponse = await page.goto('https://www.linkedin.com/uas/login', { 
       waitUntil: 'networkidle', 
       timeout: 35000 
-    }).catch(() => {});
+    }).catch(() => null);
 
-    // 2. Get the cookies set by LinkedIn natively
+    // 2. Get the cookies set by LinkedIn natively and SANITIZE them
     const nativeCookies = await context.cookies();
     const nativeJSession = nativeCookies.find(c => c.name === 'JSESSIONID');
     
+    // Phase 10: Strict quote removal for JSESSIONID
+    let cleanJSession = nativeJSession ? nativeJSession.value.replace(/^["']|["']$/g, '') : `ajax:${Math.floor(Math.random() * 1000000000000000)}`;
+
     if (nativeJSession) {
-       console.log('   Native JSESSIONID acquired: ' + JSON.stringify(nativeJSession.value.substring(0, 15)) + '...');
-    } else {
-       console.log('   No native JSESSIONID found - will generate placeholder.');
+       console.log('   Native JSESSIONID acquired (sanitized): ' + cleanJSession.substring(0, 15) + '...');
     }
 
-    // 3. Inject user session cookie while preserving or adding JSESSIONID
+    // 3. Inject user session cookie while preserving sanitized JSESSIONID
     await context.addCookies([
       {
         name: 'li_at',
@@ -876,7 +877,7 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       },
       {
         name: 'JSESSIONID',
-        value: nativeJSession ? nativeJSession.value : `ajax:${Math.floor(Math.random() * 1000000000000000)}`,
+        value: cleanJSession, // Use sanitized version
         domain: '.linkedin.com',
         path: '/',
         httpOnly: false,
@@ -887,7 +888,7 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
 
     console.log('   Session context stabilized (li_at + JSESSIONID)');
 
-    // 4. Trace redirects for diagnostics
+    // 4. Trace redirects/errors for diagnostics
     const redirectChain: string[] = [];
     const redirectListener = (response: any) => {
       const status = response.status();
@@ -901,12 +902,15 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
     
     try {
       console.log('   Navigating to feed...');
-      await page.goto('https://www.linkedin.com/feed', {
+      const feedResponse = await page.goto('https://www.linkedin.com/feed', {
         waitUntil: 'networkidle',
         timeout: 60000
       });
 
+      const finalStatus = feedResponse ? feedResponse.status() : 'No Response';
       const finalUrl = page.url();
+      const pageTitle = await page.title().catch(() => 'No Title');
+
       if (finalUrl.includes('/checkpoint/')) {
         console.log('⚠️  SECURITY CHECKPOINT DETECTED: ' + finalUrl);
         await broadcastLog('Login blocked by Security Checkpoint. Screenshot sent.', 'error');
@@ -920,11 +924,32 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
          page.removeListener('response', redirectListener);
          return false;
       }
+      
+      // Phase 10: Check for empty or blocked page
+      const isAuthenticated = await page.evaluate(() => {
+        const hasNav = document.querySelector('nav[aria-label="Primary Navigation"], .global-nav');
+        return !!hasNav;
+      });
+
+      if (isAuthenticated) {
+        console.log('✅ LinkedIn authentication successful\n');
+        page.removeListener('response', redirectListener);
+        await warmUpSession();
+        return true;
+      } else {
+        console.log(`❌ Verification failed at: ${finalUrl} (Status: ${finalStatus}, Title: "${pageTitle}")`);
+        const pageText = await page.evaluate(() => document.body.innerText.substring(0, 500).replace(/\n/g, ' ')).catch(() => '');
+        console.log(`   Page Content Snippet: "${pageText}..."`);
+        
+        await broadcastLog(`Verification failed on page: ${pageTitle} (Status: ${finalStatus}). See screenshot.`, 'warn');
+        await broadcastScreenshot(page, 'Auth Verification Failure');
+        page.removeListener('response', redirectListener);
+        return false;
+      }
 
     } catch (e: any) {
       if (e.message.includes('ERR_TOO_MANY_REDIRECTS')) {
         console.log('❌ REDIRECT LOOP DIAGNOSTICS:');
-        if (redirectChain.length === 0) console.log('   (No redirect responses captured before failure)');
         redirectChain.forEach(step => console.log('   ' + step));
         await broadcastLog('Locked in redirect loop. Diagnostics logged to terminal.', 'error');
         page.removeListener('response', redirectListener);
@@ -932,32 +957,6 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       }
       page.removeListener('response', redirectListener);
       throw e;
-    }
-
-    page.removeListener('response', redirectListener);
-    await randomSleep(3000, 5000);
-
-    const isAuthenticated = await page.evaluate(() => {
-      const hasNav = document.querySelector('nav[aria-label="Primary Navigation"], .global-nav');
-      return !!hasNav;
-    });
-
-    if (isAuthenticated) {
-      console.log('✅ LinkedIn authentication successful\n');
-      await warmUpSession();
-      return true;
-    } else {
-      const failUrl = page.url();
-      const pageTitle = await page.title().catch(() => 'No Title');
-      console.log(`❌ Verification failed at: ${failUrl} (Title: "${pageTitle}")`);
-      
-      // Phase 9: Log page text snippet to see what's blocking
-      const pageText = await page.evaluate(() => document.body.innerText.substring(0, 500).replace(/\n/g, ' ')).catch(() => '');
-      console.log(`   Page Content Snippet: "${pageText}..."`);
-      
-      await broadcastLog(`Verification failed on page: ${pageTitle}. See screenshot.`, 'warn');
-      await broadcastScreenshot(page, 'Authentication Verification Failure');
-      return false;
     }
 
   } catch (error: any) {
