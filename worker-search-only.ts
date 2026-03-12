@@ -998,19 +998,6 @@ async function randomSleep(min: number, max: number) {
   return sleep(ms);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function randomBetween(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1) + min);
-}
-
-async function randomSleep(min: number, max: number) {
-  const ms = Math.floor(Math.random() * (max - min) + min);
-  return sleep(ms);
-}
-
 async function humanDelay(min: number, max: number) {
   return randomSleep(min, max);
 }
