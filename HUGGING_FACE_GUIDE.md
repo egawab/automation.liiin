@@ -19,8 +19,26 @@ We will use **Hugging Face Spaces**. It is a platform for AI developers, and it 
 6.  **Space Hardware**: Choose **"CPU basic • 2 vCPU • 16 GB • Free"**.
 7.  Click **"Create Space"**.
 
-### **Step 3: Upload Your Files**
-Once the space is created, go to the **"Files"** tab and upload these files from your computer:
+### **Step 3: Fix the "Config Error" (Crucial)**
+If you see a "Config Error", it is because your `README.md` is missing the required instructions for Hugging Face.
+1. Go to the **"Files"** tab and click on **`README.md`**.
+2. Click the **"Edit"** (pencil icon).
+3. Paste this **EXACT** block at the very top of the file (above everything else):
+
+```yaml
+---
+title: Liiiinnll
+emoji: 🤖
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+---
+```
+4. Scroll down and click **"Commit changes to main"**.
+
+### **Step 4: Upload Your Files**
+Once the metadata is fixed, ensure these files are present:
 1.  `Dockerfile` (I have updated this for you below)
 2.  `worker.ts`
 3.  `package.json`
@@ -48,5 +66,40 @@ Once the space is created, go to the **"Files"** tab and upload these files from
 
 ---
 
-### **Updated Dockerfile (Copy this to your project first)**
-I have updated the `Dockerfile` in your project to work perfectly with Hugging Face. Just push it to GitHub or upload it directly to the Space.
+### **Updated Dockerfile (Copy this exactly)**
+```dockerfile
+# Use the official Playwright image
+FROM mcr.microsoft.com/playwright:v1.58.2-noble
+
+# Set working directory as root
+WORKDIR /app
+
+# Grant ownership of /app to UID 1000 (standard for Hugging Face)
+RUN chown -R 1000:1000 /app
+
+# Hugging Face uses UID 1000. Use it for the following steps.
+USER 1000
+
+# Set home environment
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
+
+# Copy package files (ensure they are owned by 1000)
+COPY --chown=1000:1000 package*.json ./
+COPY --chown=1000:1000 prisma ./prisma/
+
+# Install dependencies
+RUN npm install
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Copy the rest of the application
+COPY --chown=1000:1000 . .
+
+# Hugging Face Spaces port
+EXPOSE 7860
+
+# Start command
+CMD npx tsx -e "require('http').createServer((q,res)=>{res.writeHead(200);res.end('ok')}).listen(7860); require('./worker.ts')"
+```
