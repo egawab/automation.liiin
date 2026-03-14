@@ -4,9 +4,17 @@ FROM mcr.microsoft.com/playwright:v1.58.2-noble
 # Set working directory
 WORKDIR /app
 
-# Set up user permissions for Hugging Face (UID 1000)
-RUN useradd -m -u 1000 user
-USER user
+# Set working directory
+WORKDIR /app
+
+# Hugging Face uses UID 1000. In this image, UID 1000 already exists (usually named 'ubuntu' or 'pwuser').
+# We will find the existing user with UID 1000 and use it.
+RUN USR=$(getent passwd 1000 | cut -d: -f1) && \
+    echo "Using existing user: $USR" && \
+    mkdir -p /home/$USR && chown 1000:1000 /home/$USR
+
+# Use the user with UID 1000
+USER 1000
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH
 
