@@ -1,41 +1,41 @@
-# 📋 Render Deployment Guide (The "Docker" Way - 100% Reliable)
+# 📋 Render Deployment: Final Step-by-Step Fix
 
-The error you saw (`code 1`) happened because Render's standard environment doesn't allow the installation of browser libraries. We fixed this by adding a **`Dockerfile`**. 
+The reason your previous build failed is that there was a hidden `render.yaml` file in the project. That file was forcing Render to use the wrong settings (paid tier and native Node). 
 
-Follow these new steps to deploy successfully:
+**I have deleted that file.** Now, the deployment will work perfectly for free.
 
 ---
 
-### **Step 1: Create a New Web Service**
-1.  In Render, click **New +** and select **Web Service**.
-2.  Connect your GitHub repository and select the **`work`** branch.
-3.  **IMPORTANT**: Render should now automatically detect the **Dockerfile**. 
-    -   If it asks for "Runtime", select **Docker**.
-    -   You do **NOT** need to enter a Build Command or Start Command anymore (the Dockerfile handles it).
+### **Step 1: Update the Service on Render**
+1.  Go to your **Web Service** settings on Render.
+2.  In the **Connect Repo** section, make sure it is still linked to your repository and the **`work`** branch.
+3.  **MOST IMPORTANT**: Under "Environment" or "Runtime", verify it now says **Docker**. 
+    -   *Render should detect the Dockerfile automatically and switch to the Docker runtime now that the bad config file is gone.*
+4.  **Clear Commands**: If you see any "Build Command" or "Start Command" left in the settings, **delete them**. The Dockerfile handles both now.
 
-### **Step 2: Choose Plan**
--   Select the **Free** tier.
-
-### **Step 3: Environment Variables**
-Go to the **Environment** tab and add these:
+### **Step 2: Environment Variables**
+Ensure these are in the **Environment** tab:
 
 | Key | Value |
 | :--- | :--- |
-| `DATABASE_URL` | (Paste your Neon/Database URL) |
-| `NEXT_PUBLIC_APP_URL` | (Paste your Vercel Dashboard URL) |
+| `DATABASE_URL` | (Your Neon DB URL) |
+| `NEXT_PUBLIC_APP_URL` | (Your Vercel Dashboard URL) |
 | `NODE_ENV` | `production` |
 | `HEADLESS` | `true` |
 | `PORT` | `10000` |
 
 ---
 
-### **Step 4: Keep-Alive (UptimeRobot)**
-Once it's deployed, go to [UptimeRobot.com](https://uptimerobot.com) and set up a free monitor to "ping" your Render URL (found at the top of your Render page) every 5 minutes. 
--   This prevents the "Free Tier" from going to sleep.
+### **Step 3: Trigger a Fresh Deploy**
+1.  Click the **"Manual Deploy"** button at the top right.
+2.  Select **"Clear Build Cache & Deploy"**.
+3.  The build should now take about 2-3 minutes. It will download the Playwright browser image and start your worker correctly.
+
+### **Step 4: Keep-Alive**
+Don't forget to set up [UptimeRobot.com](https://uptimerobot.com) to ping your Render URL every 5 minutes so it doesn't sleep!
 
 ---
 
-### **Why this works:**
--   **No Sudo Required**: The Dockerfile uses a pre-built environment from Microsoft (Playwright) that already has all the Chrome libraries installed.
--   **Self-Healing**: It still uses the "Health Check" trick so Render stays happy.
--   **Untouched Code**: Your `worker.ts` remains exactly as it was!
+### **Why it's fixed now:**
+-   **No More Conflict**: Deleting `render.yaml` removed the hidden settings that were causing the `su: Authentication failure`.
+-   **Native Root Access**: The Docker environment comes with all Google Chrome dependencies pre-installed by Microsoft, so no password or root access is needed during build.
