@@ -131,8 +131,9 @@ export async function broadcastUpdate(options: BroadcastOptions): Promise<void> 
         // 402 Payment Required = Vercel broadcast limits reached
         // 405 Method Not Allowed = Likely CORS/routing issue
         if (response.status !== 402 && response.status !== 405) {
-          const errorText = await response.text().catch(() => response.statusText);
-          console.warn(`⚠️  Broadcast failed: ${response.status} ${errorText}`);
+          // Non-critical: Do not log broadcast failures as warnings to keep Hugging Face logs clean
+          // const errorText = await response.text().catch(() => response.statusText);
+          // console.warn(`⚠️  Broadcast failed: ${response.status} ${errorText}`);
         }
       } else {
         // Reset failures on successful broadcast

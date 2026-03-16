@@ -217,7 +217,8 @@ async function workerLoop() {
         setApiBaseUrl(process.env.NEXT_PUBLIC_APP_URL);
       }
       // Mirror worker terminal logs into the dashboard for this user/session
-      enableDashboardConsoleMirroring();
+      // DISABLED to prevent broadcast flooding on Hugging Face
+      // enableDashboardConsoleMirroring();
 
       // Initialize browser if needed
       if (!browser || currentUserId !== settings.userId || currentSessionCookie !== settings.linkedinSessionCookie) {
