@@ -19,6 +19,6 @@ COPY --chown=1000:1000 . .
 RUN npm install
 RUN npx prisma generate
 
-# Port and Start command (using reliable start.js)
+# Start the worker directly (Server is now internal to worker.ts)
 EXPOSE 7860
-CMD ["node", "start.js"]
+CMD ["npx", "tsx", "worker.ts"]

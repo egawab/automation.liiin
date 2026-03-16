@@ -19,6 +19,7 @@
 import 'dotenv/config';
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { PrismaClient } from '@prisma/client';
+import http from 'http';
 import {
   setUserContext,
   setApiBaseUrl,
@@ -1179,8 +1180,17 @@ async function isSystemStillActive(userId: string): Promise<boolean> {
 // ============================================================================
 
 async function main() {
-  console.log('\n🚀 LinkedIn Search-Only Worker Supervisor - Starting...\n');
-  
+  console.log('\n🚀 LinkedIn Search-Only Worker - Native Mode Starting...\n');
+
+  // 1. START INTERNAL HEALTH CHECK SERVER
+  const port = Number(process.env.PORT) || 7860;
+  http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('LinkedIn Worker is Active and Healthy\n');
+  }).listen(port, '0.0.0.0', () => {
+    console.log(`✅ [Internal Health Check] Listening on port ${port}`);
+  });
+
   while (true) {
     try {
       await workerLoop();
