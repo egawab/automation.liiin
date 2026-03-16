@@ -4,8 +4,7 @@ FROM mcr.microsoft.com/playwright:v1.58.2-noble
 # Switch to root to fix directory structure
 USER root
 
-# Hugging Face expect UID 1000. We'll just ensure the home directory exists
-# and is owned by UID 1000, regardless of the username.
+# Hugging Face expect UID 1000.
 RUN mkdir -p /home/user/app && chown -R 1000:1000 /home/user
 
 # Switch to UID 1000 (Standard for Hugging Face)
@@ -17,18 +16,15 @@ ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH \
     npm_config_cache=/home/user/.npm
 
-# Copy package files first for better caching
-COPY --chown=1000:1000 package*.json ./
-COPY --chown=1000:1000 prisma ./prisma/
+# Copy everything first (this includes package.json and prisma folder)
+# This is more robust for Hugging Face builds to avoid "not found" errors.
+COPY --chown=1000:1000 . .
 
-# Install dependencies (will now have correct permissions in /home/user)
+# Install dependencies (Prisma client will be generated if schema is present)
 RUN npm install
 
-# Generate Prisma client
+# Explicitly generate Prisma client just in case
 RUN npx prisma generate
-
-# Copy the rest of the application
-COPY --chown=1000:1000 . .
 
 # Hugging Face Spaces default port
 EXPOSE 7860
