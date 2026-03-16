@@ -1184,10 +1184,11 @@ async function main() {
   while (true) {
     try {
       await workerLoop();
-    } catch (error) {
-      console.error('\n💥 CRITICAL: Supervisor caught unhandled error in workerLoop:', error.message);
+    } catch (error: any) {
+      const errorMsg = error?.message || String(error);
+      console.error('\n💥 CRITICAL: Supervisor caught unhandled error in workerLoop:', errorMsg);
       try {
-        await broadcastError(`Supervisor Restoring Worker: ${error.message}`);
+        await broadcastError(`Supervisor Restoring Worker: ${errorMsg}`);
       } catch {}
       
       console.log('🔄 Supervisor: Performing full cleanup and restarting in 30 seconds...\n');

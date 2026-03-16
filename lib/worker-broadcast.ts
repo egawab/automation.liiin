@@ -177,8 +177,8 @@ export async function broadcastScreenshot(page: Page, message: string, metadata?
       screenshot: base64Screenshot,
       metadata,
     });
-  } catch (error) {
-    console.warn('Screenshot broadcast failed:', error);
+  } catch (error: any) {
+    console.warn('Screenshot broadcast failed:', error?.message || error);
   }
 }
 
