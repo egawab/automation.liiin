@@ -1,4 +1,12 @@
-﻿# 🤖 LinkedIn Comment Automation Platform
+﻿
+---
+sdk: docker
+app_port: 7860
+---
+
+
+
+# 🤖 LinkedIn Comment Automation Platform
 
 An automated LinkedIn engagement tool that helps you comment on relevant posts based on keywords.
 

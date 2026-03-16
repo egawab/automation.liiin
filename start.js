@@ -1,45 +1,40 @@
 const http = require('http');
 const { spawn } = require('child_process');
 
+// Hugging Face uses PORT 7860 by default
 const port = process.env.PORT || 7860;
 
-// 1. SIMPLE HEALTH CHECK SERVER (Mandatory for Hugging Face)
-// This must stay alive regardless of the worker's status
+// 1. Mandatory Health Check Server
+// Hugging Face will 503 if this isn't responding on the correct port
 http.createServer((req, res) => {
   res.writeHead(200);
-  res.end('Worker is supervised and health check is alive.');
+  res.end('Worker is active\n');
 }).listen(port, '0.0.0.0', () => {
-  console.log(`✅ Hugging Face Health Check Server live on port ${port}`);
+  console.log(`✅ [SYSTEM] Health check server listening on port ${port}`);
 });
 
-// 2. SUPERVISED WORKER EXECUTION
-function startWorker() {
-  console.log('🚀 Supervisor: Starting LinkedIn Worker (worker.ts)...');
-
-  // We use npx tsx to execute the typescript file directly in the container
+// 2. Resilient Worker Supervisor
+function runWorker() {
+  console.log('🚀 [SYSTEM] Spawning worker.ts...');
+  
   const worker = spawn('npx', ['tsx', 'worker.ts'], {
     stdio: 'inherit',
     env: { ...process.env, NODE_ENV: 'production' }
   });
 
-  worker.on('exit', (code, signal) => {
-    console.warn(`💥 Supervisor: Worker process exited with code ${code} and signal ${signal}`);
-    
-    // Auto-restart logic with a 5-second backoff
-    console.log('🔄 Supervisor: Restarting worker in 5 seconds...');
-    setTimeout(startWorker, 5000);
+  worker.on('exit', (code) => {
+    console.log(`⚠️ [SYSTEM] Worker exited with code ${code}. Restarting in 10s...`);
+    setTimeout(runWorker, 10000);
   });
 
   worker.on('error', (err) => {
-    console.error('❌ Supervisor: Failed to start worker process:', err);
-    setTimeout(startWorker, 10000);
+    console.error('❌ [SYSTEM] Spawn error:', err);
+    setTimeout(runWorker, 10000);
   });
 }
 
-// Initial start
-startWorker();
+// Kick off the worker
+runWorker();
 
-// Keep the process alive
-process.on('uncaughtException', (err) => {
-  console.error('⛔ Supervisor Header Exception:', err);
-});
+// Keep supervisor alive on exceptions
+process.on('uncaughtException', (err) => console.error('Supervisor error:', err));
