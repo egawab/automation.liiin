@@ -110,12 +110,10 @@ export async function broadcastUpdate(options: BroadcastOptions): Promise<void> 
       });
 
       if (!response.ok) {
-        // Only log on first failure or every 10th failure to reduce noise
-        if (response.status === 405) {
-          // 405 = Method Not Allowed - likely CORS or routing issue
-          // This is expected when worker runs locally but tries to hit production
-          // Silently skip - worker will still function
-        } else {
+        // 402 Payment Required = Vercel broadcast limits reached
+        // 405 Method Not Allowed = Likely CORS/routing issue
+        // These are non-fatal for the worker, so we skip logging them to avoid spam.
+        if (response.status !== 402 && response.status !== 405) {
           const errorText = await response.text().catch(() => response.statusText);
           console.warn(`⚠️  Broadcast failed: ${response.status} ${errorText}`);
         }

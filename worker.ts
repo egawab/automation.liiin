@@ -148,21 +148,6 @@ async function workerLoop() {
   console.log('\n🔍 LinkedIn Search-Only Worker - Starting...\n');
   console.log('📋 Mode: Search and save links ONLY (no auto-commenting)\n');
 
-  // IMPORTANT: On startup, clear any previous "Start" flags so the worker
-  // does NOT immediately begin processing based on stale state.
-  // The worker will only act after a fresh Start click sets systemActive=true
-  // in the current session.
-  try {
-    await prisma.settings.updateMany({
-      data: {
-        systemActive: false,
-      },
-    });
-    console.log('🧹 Cleared existing systemActive flags on startup. Waiting for fresh Start.\n');
-  } catch (err: any) {
-    console.error('Failed to clear systemActive flags on startup:', err?.message || err);
-  }
-
   await broadcastStatus('Starting search-only worker...');
 
   while (true) {
