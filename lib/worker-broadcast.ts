@@ -79,11 +79,21 @@ export function setUserContext(userId: string, sessionId?: string) {
   console.log(`   📡 User context set: ${userId.slice(0, 8)}... / ${currentSessionId}`);
 }
 
+let consecutiveFailures = 0;
+let lastFailureCooldownUntil = 0;
+const MAX_CONSECUTIVE_FAILURES = 5;
+const COOLDOWN_PERIOD_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
  * Send live update to dashboard
  * Non-blocking - runs in background, won't interrupt worker
  */
 export async function broadcastUpdate(options: BroadcastOptions): Promise<void> {
+  // Circuit breaker: Skip if in cooldown
+  if (Date.now() < lastFailureCooldownUntil) {
+    return;
+  }
+
   // Run broadcast in background - don't await
   setImmediate(async () => {
     try {
@@ -105,25 +115,37 @@ export async function broadcastUpdate(options: BroadcastOptions): Promise<void> 
           'Accept': 'application/json',
         },
         body: JSON.stringify(payload),
-        // Add timeout to prevent hanging
-        signal: AbortSignal.timeout(5000), // 5 second timeout
+        signal: AbortSignal.timeout(5000), 
       });
 
       if (!response.ok) {
+        consecutiveFailures++;
+        
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          console.warn(`🛑 Broadcast circuit breaker active. Silencing broadcasts for 5 minutes due to repeated failures.`);
+          lastFailureCooldownUntil = Date.now() + COOLDOWN_PERIOD_MS;
+          consecutiveFailures = 0; // Reset for after cooldown
+          return;
+        }
+
         // 402 Payment Required = Vercel broadcast limits reached
         // 405 Method Not Allowed = Likely CORS/routing issue
-        // These are non-fatal for the worker, so we skip logging them to avoid spam.
         if (response.status !== 402 && response.status !== 405) {
           const errorText = await response.text().catch(() => response.statusText);
           console.warn(`⚠️  Broadcast failed: ${response.status} ${errorText}`);
         }
+      } else {
+        // Reset failures on successful broadcast
+        consecutiveFailures = 0;
+        lastFailureCooldownUntil = 0;
       }
     } catch (error: any) {
-      // Silently fail - broadcasts are optional, worker must continue
-      // Only log if it's not a timeout or network error
-      if (!error.message?.includes('aborted') && !error.message?.includes('fetch')) {
-        console.warn('⚠️  Broadcast error (non-fatal):', error.message);
+      consecutiveFailures++;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+         lastFailureCooldownUntil = Date.now() + COOLDOWN_PERIOD_MS;
+         consecutiveFailures = 0;
       }
+      // Silently fail - broadcasts are optional
     }
   });
 }
