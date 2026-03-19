@@ -15,10 +15,10 @@ ENV HOME=/home/user \
 # Copy everything
 COPY --chown=1000:1000 . .
 
-# Install and build
+# Install dependencies and build the worker
 RUN npm install
+RUN npm run build:worker
 RUN npx prisma generate
 
-# Start the worker directly (Server is now internal to worker.ts)
-EXPOSE 7860
-CMD ["npx", "tsx", "worker.ts"]
+# Start the supervisor server directly (PID 1) for signal resilience
+CMD ["node", "dist/server.js"]

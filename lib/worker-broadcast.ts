@@ -12,33 +12,33 @@ function getApiBaseUrl(): string {
     console.log(`   📡 Using NEXT_PUBLIC_APP_URL: ${process.env.NEXT_PUBLIC_APP_URL}`);
     return process.env.NEXT_PUBLIC_APP_URL;
   }
-  
+
   // 2. Check if VERCEL_URL is set (automatic in Vercel deployments)
   if (process.env.VERCEL_URL) {
     const url = `https://${process.env.VERCEL_URL}`;
     console.log(`   📡 Using VERCEL_URL: ${url}`);
     return url;
   }
-  
+
   // 3. Check if running on Render (RENDER_EXTERNAL_URL)
   if (process.env.RENDER_EXTERNAL_URL) {
     console.log(`   📡 Using RENDER_EXTERNAL_URL: ${process.env.RENDER_EXTERNAL_URL}`);
     return process.env.RENDER_EXTERNAL_URL;
   }
-  
+
   // 4. Check if running on Railway (RAILWAY_STATIC_URL)
   if (process.env.RAILWAY_STATIC_URL) {
     console.log(`   📡 Using RAILWAY_STATIC_URL: ${process.env.RAILWAY_STATIC_URL}`);
     return process.env.RAILWAY_STATIC_URL;
   }
-  
+
   // 5. Check if DATABASE_URL indicates production (Neon)
   if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon.tech')) {
     // Production database detected, but platform URL must be explicit.
     // Do NOT hardcode a Vercel URL here — it easily gets out of sync and causes 404s for worker broadcasts.
     console.log(`   📡 Production database detected (Neon). Set NEXT_PUBLIC_APP_URL to enable live worker broadcasts.`);
   }
-  
+
   // 6. Default to localhost for local development ONLY
   console.log(`   📡 Using localhost (local development mode)`);
   return 'http://localhost:3000';
@@ -79,6 +79,9 @@ export function setUserContext(userId: string, sessionId?: string) {
   console.log(`   📡 User context set: ${userId.slice(0, 8)}... / ${currentSessionId}`);
 }
 
+let pendingBroadcasts = 0;
+const MAX_PENDING_BROADCASTS = 50;
+
 let consecutiveFailures = 0;
 let lastFailureCooldownUntil = 0;
 const MAX_CONSECUTIVE_FAILURES = 5;
@@ -93,6 +96,13 @@ export async function broadcastUpdate(options: BroadcastOptions): Promise<void> 
   if (Date.now() < lastFailureCooldownUntil) {
     return;
   }
+
+  // Queue limit: Skip if too many requests are already pending
+  if (pendingBroadcasts >= MAX_PENDING_BROADCASTS) {
+    return;
+  }
+
+  pendingBroadcasts++;
 
   // Run broadcast in background - don't await
   setImmediate(async () => {
@@ -115,25 +125,17 @@ export async function broadcastUpdate(options: BroadcastOptions): Promise<void> 
           'Accept': 'application/json',
         },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(5000), 
+        signal: AbortSignal.timeout(5000),
       });
 
       if (!response.ok) {
         consecutiveFailures++;
-        
+
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           console.warn(`🛑 Broadcast circuit breaker active. Silencing broadcasts for 5 minutes due to repeated failures.`);
           lastFailureCooldownUntil = Date.now() + COOLDOWN_PERIOD_MS;
           consecutiveFailures = 0; // Reset for after cooldown
           return;
-        }
-
-        // 402 Payment Required = Vercel broadcast limits reached
-        // 405 Method Not Allowed = Likely CORS/routing issue
-        if (response.status !== 402 && response.status !== 405) {
-          // Non-critical: Do not log broadcast failures as warnings to keep Hugging Face logs clean
-          // const errorText = await response.text().catch(() => response.statusText);
-          // console.warn(`⚠️  Broadcast failed: ${response.status} ${errorText}`);
         }
       } else {
         // Reset failures on successful broadcast
@@ -143,10 +145,11 @@ export async function broadcastUpdate(options: BroadcastOptions): Promise<void> 
     } catch (error: any) {
       consecutiveFailures++;
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-         lastFailureCooldownUntil = Date.now() + COOLDOWN_PERIOD_MS;
-         consecutiveFailures = 0;
+        lastFailureCooldownUntil = Date.now() + COOLDOWN_PERIOD_MS;
+        consecutiveFailures = 0;
       }
-      // Silently fail - broadcasts are optional
+    } finally {
+      pendingBroadcasts--;
     }
   });
 }
@@ -158,18 +161,18 @@ export async function broadcastScreenshot(page: Page, message: string, metadata?
   try {
     // Wait a moment for any animations to complete
     await page.waitForTimeout(500);
-    
+
     // Capture screenshot with better quality for live viewer
-    const screenshot = await page.screenshot({ 
+    const screenshot = await page.screenshot({
       type: 'jpeg',
       quality: 85, // Higher quality for clearer live view (was 70)
       fullPage: false, // Only visible viewport
       animations: 'disabled', // Disable animations for cleaner screenshot
     });
-    
+
     // Convert to base64
     const base64Screenshot = screenshot.toString('base64');
-    
+
     // Broadcast
     await broadcastUpdate({
       type: 'screenshot',

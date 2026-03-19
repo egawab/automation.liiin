@@ -19,7 +19,6 @@
 import 'dotenv/config';
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { PrismaClient } from '@prisma/client';
-import http from 'http';
 import {
   setUserContext,
   setApiBaseUrl,
@@ -100,7 +99,7 @@ async function flushBufferedLogsToDashboard() {
   while (logBuffer.length > 0) {
     const item = logBuffer.shift();
     if (!item) break;
-    await broadcastLog(item.message, item.level).catch(() => {});
+    await broadcastLog(item.message, item.level).catch(() => { });
   }
 }
 
@@ -119,7 +118,7 @@ function enableDashboardConsoleMirroring() {
       bufferLog('info', msg);
       // Fire-and-forget; do not await inside console methods
       void flushBufferedLogsToDashboard();
-    } catch {}
+    } catch { }
   };
 
   console.warn = (...args: any[]) => {
@@ -128,7 +127,7 @@ function enableDashboardConsoleMirroring() {
       const msg = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
       bufferLog('warn', msg);
       void flushBufferedLogsToDashboard();
-    } catch {}
+    } catch { }
   };
 
   console.error = (...args: any[]) => {
@@ -137,7 +136,7 @@ function enableDashboardConsoleMirroring() {
       const msg = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
       bufferLog('error', msg);
       void flushBufferedLogsToDashboard();
-    } catch {}
+    } catch { }
   };
 }
 
@@ -145,168 +144,146 @@ function enableDashboardConsoleMirroring() {
 // MAIN WORKER LOOP
 // ============================================================================
 
+// Helper for heartbeat sleeps
+const heartbeatSleep = async (totalMs: number) => {
+  const heartBeatInterval = 2 * 60 * 1000; // 2 minutes
+  let remaining = totalMs;
+  while (remaining > 0) {
+    const chunk = Math.min(remaining, heartBeatInterval);
+    await new Promise(resolve => setTimeout(resolve, chunk));
+    const mem = Math.round(process.memoryUsage().rss / 1024 / 1024);
+    console.log(`[WORKER_HEARTBEAT] Still alive | Mem: ${mem}MB`);
+    remaining -= chunk;
+  }
+};
+
 async function workerLoop() {
-  console.log('\n🔍 LinkedIn Search-Only Worker - Starting...\n');
-  console.log('📋 Mode: Search and save links ONLY (no auto-commenting)\n');
+  console.log('\n🔍 LinkedIn Search-Only Worker - GitHub Actions Mode\n');
+  console.log('📋 Mode: Single Cycle Execution\n');
 
-  await broadcastStatus('Starting search-only worker...');
+  await broadcastStatus('Starting GitHub Actions search cycle...');
 
-  while (true) {
-      // Phase 5: Self-healing periodic browser restart (every 4-6 hours)
-      const browserAgeHours = (Date.now() - lastBrowserRestart) / (1000 * 60 * 60);
-      if (browserAgeHours > 6) {
-        console.log('\n🔄 Phase 5: Proactive browser restart to maintain stability (Age: ' + Math.round(browserAgeHours) + 'h)...\n');
-        await cleanup().catch(() => {});
-        lastBrowserRestart = Date.now();
+  let browserInitialized = false;
+
+  try {
+    const settings = await getActiveUserSettings();
+
+    if (!settings) {
+      const totalUsers = await prisma.user.count().catch(() => 0);
+      console.log(`\n⏸️  [STATUS] No active users found. (DB Total: ${totalUsers})`);
+      console.log(`   Arabic: لا يوجد مستخدم مفعّل حالياً.\n`);
+      process.exit(0);
+    }
+
+    if (!settings.systemActive) {
+      console.log(`⏸️ [DIAGNOSTIC] System is INACTIVE for user ${settings.userId}. Toggle "System Active" in dashboard.\n`);
+      process.exit(0);
+    }
+
+    if (!settings.searchOnlyMode) {
+      console.log('⚠️ [DIAGNOSTIC] Search-only mode is DISABLED in dashboard. Exiting...\n');
+      await broadcastError('Search-only mode is disabled. Add permissions in dashboard.');
+      process.exit(0);
+    }
+
+    if (settings.workHoursOnly && !isWithinWorkHours(settings)) {
+      const msg = `⏰ [DIAGNOSTIC] Outside work hours (${settings.workHoursStart}:00-${settings.workHoursEnd}:00). Exiting...`;
+      console.log(`${msg}\n`);
+      await broadcastStatus(msg);
+      process.exit(0);
+    }
+
+    const searchesToday = await getSearchCountInPeriod(settings.userId, 'day');
+    if (searchesToday >= settings.maxSearchesPerDay) {
+      const msg = `⏹️ [DIAGNOSTIC] Daily search limit reached (${searchesToday}/${settings.maxSearchesPerDay}). Exiting...`;
+      console.log(`${msg}\n`);
+      await broadcastStatus(msg);
+      process.exit(0);
+    }
+
+    const searchesThisHour = await getSearchCountInPeriod(settings.userId, 'hour');
+    if (searchesThisHour >= settings.maxSearchesPerHour) {
+      const msg = `Hourly limit reached (${searchesThisHour}/${settings.maxSearchesPerHour}). Exiting...`;
+      console.log(`⏳ ${msg}\n`);
+      await broadcastStatus(msg);
+      process.exit(0);
+    }
+
+    setUserContext(settings.userId);
+    if (settings.platformUrl && settings.platformUrl.trim()) {
+      setApiBaseUrl(settings.platformUrl.trim());
+    } else if (process.env.NEXT_PUBLIC_APP_URL) {
+      setApiBaseUrl(process.env.NEXT_PUBLIC_APP_URL);
+    }
+
+    console.log('🔄 Initializing browser for GitHub Actions run...\n');
+    await initializeBrowser();
+    browserInitialized = true;
+
+    const authenticated = await authenticateLinkedIn(settings.linkedinSessionCookie);
+    if (!authenticated) {
+      await broadcastError('LinkedIn authentication failed. Please update your session cookie.');
+      await cleanup();
+      process.exit(1); // Fail the GitHub action if auth fails
+    }
+
+    isAuthenticated = true;
+    await broadcastStatus('✅ Authenticated - Ready to search');
+
+    let keywords = await getActiveKeywords(settings.userId);
+    keywords = keywords.slice(0, 10);
+
+    if (keywords.length === 0) {
+      console.log('⚠️  No active keywords. Exiting...\n');
+      await broadcastLog('No active keywords configured. Add keywords in dashboard.');
+      await cleanup();
+      process.exit(0);
+    }
+
+    console.log(`📊 Processing ${keywords.length} keyword(s)...\n`);
+    await broadcastStatus(`Searching ${keywords.length} keyword(s)...`);
+
+    for (const keyword of keywords) {
+      if (await getSearchCountInPeriod(settings.userId, 'hour') >= settings.maxSearchesPerHour) {
+        console.log('⏹️  Hourly limit reached. Stopping cycle.\n');
+        break;
       }
-    try {
-      // Fetch settings
-      const settings = await getActiveUserSettings();
-
-      if (!settings || !settings.systemActive) {
-        if (isRunning) {
-          console.log('⏸️  No active users. Pausing worker...\n');
-          await cleanup();
-        }
-        await sleep(5000);
-        continue;
-      }
-
-      // Check if search-only mode is enabled
-      if (!settings.searchOnlyMode) {
-        console.log('⚠️  Search-only mode is disabled. Please enable it in settings.\n');
-        await broadcastError('Search-only mode is disabled. Enable it in dashboard settings.');
-        await sleep(10000);
-        continue;
-      }
-
-      // Check work hours (skip if outside working hours)
-      if (settings.workHoursOnly && !isWithinWorkHours(settings)) {
-        const msg = 'Outside work hours. Waiting until next work period...';
-        console.log(`⏰ ${msg}\n`);
-        await broadcastStatus(msg);
-        await sleep(300000); // Check again in 5 minutes
-        continue;
-      }
-
-      // Check daily search limit
-      const searchesToday = await getSearchCountInPeriod(settings.userId, 'day');
-      if (searchesToday >= settings.maxSearchesPerDay) {
-        const msg = `Daily limit reached (${searchesToday}/${settings.maxSearchesPerDay}). Resuming tomorrow.`;
-        console.log(`⏹️  ${msg}\n`);
-        await broadcastStatus(msg);
-        await sleep(3600000); // Check again in 1 hour
-        continue;
-      }
-
-      // Check hourly search limit
-      const searchesThisHour = await getSearchCountInPeriod(settings.userId, 'hour');
-      if (searchesThisHour >= settings.maxSearchesPerHour) {
-        const msg = `Hourly limit reached (${searchesThisHour}/${settings.maxSearchesPerHour}). Waiting...`;
-        console.log(`⏳ ${msg}\n`);
-        await broadcastStatus(msg);
-        await sleep(600000); // Wait 10 minutes before retry
-        continue;
-      }
-
-      // Set user context for broadcasts
-      setUserContext(settings.userId);
-      // Ensure broadcasts go to the correct deployed dashboard URL (prevents 404s)
-      if (settings.platformUrl && settings.platformUrl.trim()) {
-        setApiBaseUrl(settings.platformUrl.trim());
-      } else if (process.env.NEXT_PUBLIC_APP_URL) {
-        setApiBaseUrl(process.env.NEXT_PUBLIC_APP_URL);
-      }
-      // Mirror worker terminal logs into the dashboard for this user/session
-      // DISABLED to prevent broadcast flooding on Hugging Face
-      // enableDashboardConsoleMirroring();
-
-      // Initialize browser if needed
-      if (!browser || currentUserId !== settings.userId || currentSessionCookie !== settings.linkedinSessionCookie) {
-        console.log('🔄 User/session changed. Reinitializing browser...\n');
-        
-        if (browser) await cleanup();
-        
-        currentUserId = settings.userId;
-        currentSessionCookie = settings.linkedinSessionCookie;
-        
-        await initializeBrowser();
-        
-        const authenticated = await authenticateLinkedIn(settings.linkedinSessionCookie);
-        if (!authenticated) {
-          await broadcastError('LinkedIn authentication failed. Please update your session cookie.');
-          await sleep(30000);
-          continue;
-        }
-        
-        isAuthenticated = true;
-        await broadcastStatus('✅ Authenticated - Ready to search');
+      if (await getSearchCountInPeriod(settings.userId, 'day') >= settings.maxSearchesPerDay) {
+        console.log('⏹️  Daily limit reached. Stopping cycle.\n');
+        break;
       }
 
-      // Fetch active keywords (limit to maxKeywordsPerCycle for safety)
-      let keywords = await getActiveKeywords(settings.userId);
-      keywords = keywords.slice(0, 10); // Phase 4: Overridden to 10 keywords
-      
-      if (keywords.length === 0) {
-        console.log('⚠️  No active keywords. Waiting...\n');
-        await broadcastLog('No active keywords configured. Add keywords in dashboard.');
-        await sleep(10000);
-        continue;
+      const stillActive = await isSystemStillActive(settings.userId);
+      if (!stillActive) {
+        console.log('⏹️  System deactivated by user. Stopping...\n');
+        break;
       }
 
-      console.log(`📊 Processing ${keywords.length} keyword(s) (max ${settings.maxKeywordsPerCycle} per cycle)...\n`);
-      await broadcastStatus(`Searching ${keywords.length} keyword(s)...`);
+      await processKeyword(keyword, settings);
 
-      // Process each keyword
-      for (const keyword of keywords) {
-        // Re-check limits before each search
-        if (await getSearchCountInPeriod(settings.userId, 'hour') >= settings.maxSearchesPerHour) {
-          console.log('⏹️  Hourly limit reached. Stopping cycle.\n');
-          break;
-        }
-        if (await getSearchCountInPeriod(settings.userId, 'day') >= settings.maxSearchesPerDay) {
-          console.log('⏹️  Daily limit reached. Stopping cycle.\n');
-          break;
-        }
+      const delayMinutes = Math.min(settings.minDelayBetweenSearchesMinutes, 2); // Cap delay in CI to save minutes
+      const delaySeconds = randomBetween(delayMinutes * 60, (delayMinutes + 2) * 60);
+      console.log(`⏱️  Waiting ${Math.round(delaySeconds / 60)} min before next search...\n`);
+      await sleep(delaySeconds * 1000);
+    }
 
-        // Check if system is still active
-        const stillActive = await isSystemStillActive(settings.userId);
-        if (!stillActive) {
-          console.log('⏹️  System deactivated by user. Stopping...\n');
-          break;
-        }
+    console.log(`\n✅ GitHub Actions cycle complete.\n`);
+    await broadcastStatus(`Cycle complete successfully.`);
+    await cleanup();
+    process.exit(0); // Success
 
-        await processKeyword(keyword, settings);
-        
-        // Conservative delay between searches (5-10 minutes)
-        const delayMinutes = settings.minDelayBetweenSearchesMinutes;
-        const delaySeconds = randomBetween(delayMinutes * 60, (delayMinutes + 5) * 60);
-        console.log(`⏱️  Waiting ${Math.round(delaySeconds / 60)} min before next search (conservative mode)...\n`);
-        await sleep(delaySeconds * 1000);
-      }
+  } catch (error: any) {
+    console.error('❌ Worker error:', error.message);
+    await broadcastError(`Worker error: ${error.message}`);
 
-      // Longer delay between cycles (10-15 minutes in conservative mode)
-      const cycleDelayMinutes = randomBetween(10, 15);
-      console.log(`\n✅ Cycle complete. Next cycle in ${cycleDelayMinutes} minutes.\n`);
-      await broadcastStatus(`Cycle complete. Next run in ${cycleDelayMinutes}m`);
-      await sleep(cycleDelayMinutes * 60 * 1000);
-
-    } catch (error: any) {
-      console.error('❌ Worker error:', error.message);
-      await broadcastError(`Worker error: ${error.message}`);
-      
-      // Check for CAPTCHA / anti-bot signals and respond based on severity
+    if (browserInitialized) {
       const detection = await detectCaptcha();
       if (detection.level === 'hard') {
         await handleCaptcha(detection);
-      } else if (detection.level === 'soft') {
-        console.log('⚠️ Soft anti-bot signal after error:', detection.reason);
-        await broadcastLog('Soft anti-bot signal after error. Cooling down briefly.', 'warn');
-        await sleep(180000); // 3 minute cool-down on soft signal
-      } else {
-        await sleep(60000); // Wait 1 minute on generic error
       }
+      await cleanup().catch(() => {});
     }
+    process.exit(1); // Fail the GitHub action on error so the user gets notified
   }
 }
 
@@ -324,8 +301,8 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 
     // Search LinkedIn
     const postsRaw = await searchLinkedInPosts(keyword.keyword);
-      // Sort by engagement descending (High Reach Priority)
-      const posts = postsRaw.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
+    // Sort by engagement descending (High Reach Priority)
+    const posts = postsRaw.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
 
     // Log this search for rate limit tracking
     await logSearch(settings.userId, keyword.keyword);
@@ -352,29 +329,29 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
     console.log(`✅ ${strictMatches.length} posts match reach criteria\n`);
     await broadcastLog(`Found ${strictMatches.length} matching posts for "${keyword.keyword}" (${withEngagement.length} with engagement data)`);
 
-          let postsToSave: PostCandidate[] = [...strictMatches];
-      
-      // Phase 4: Supplement strict matches with top engagement results if volume is low (target 15)
-      if (postsToSave.length < 15 && withEngagement.length > 0) {
-        const remainingTarget = 15 - postsToSave.length;
-        const potentialSupplements = withEngagement
-          .filter(p => !postsToSave.some(s => s.url === p.url))
-          .sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments))
-          .slice(0, remainingTarget);
-        
-        if (potentialSupplements.length > 0) {
-          console.log(`➕ Supplementing with ${potentialSupplements.length} high-reach posts to hit target volume.`);
-          postsToSave = [...postsToSave, ...potentialSupplements];
-        }
-      }
+    let postsToSave: PostCandidate[] = [...strictMatches];
 
-      let usedFallback = postsToSave.length > strictMatches.length;
+    // Phase 4: Supplement strict matches with top engagement results if volume is low (target 15)
+    if (postsToSave.length < 15 && withEngagement.length > 0) {
+      const remainingTarget = 15 - postsToSave.length;
+      const potentialSupplements = withEngagement
+        .filter(p => !postsToSave.some(s => s.url === p.url))
+        .sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments))
+        .slice(0, remainingTarget);
 
-      if (postsToSave.length === 0) {
-        console.log('⚠️  No posts matching criteria or with engagement found. Skipping.\n');
-        await broadcastLog(`No quality matches found for "${keyword.keyword}". Skipping.`, 'warn');
-        return;
+      if (potentialSupplements.length > 0) {
+        console.log(`➕ Supplementing with ${potentialSupplements.length} high-reach posts to hit target volume.`);
+        postsToSave = [...postsToSave, ...potentialSupplements];
       }
+    }
+
+    let usedFallback = postsToSave.length > strictMatches.length;
+
+    if (postsToSave.length === 0) {
+      console.log('⚠️  No posts matching criteria or with engagement found. Skipping.\n');
+      await broadcastLog(`No quality matches found for "${keyword.keyword}". Skipping.`, 'warn');
+      return;
+    }
 
     const saveResults = await Promise.allSettled(
       postsToSave.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
@@ -395,34 +372,101 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 }
 
 // ============================================================================
-// LINKEDIN SEA// Maximum number of posts to collect per keyword search
+// LINKEDIN SEARCH
+// ============================================================================
+
 const MAX_POSTS_PER_SEARCH = 150;
+
+/**
+ * Human-like search via LinkedIn's search box (bypasses datacenter IP block).
+ * Instead of navigating directly to the search URL, we type into the search box.
+ */
+async function navigateToSearchViaUI(keyword: string): Promise<void> {
+  if (!page) throw new Error('Browser not initialized');
+
+  console.log(`🔍 [UI] Navigating to LinkedIn feed first...`);
+  await page.goto('https://www.linkedin.com/feed', {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000
+  });
+  await humanDelay(2000, 3500);
+
+  // Try to find the search input box
+  const searchBoxSelectors = [
+    'input[placeholder*="Search"]',
+    'input[aria-label*="Search"]',
+    '.search-global-typeahead__input',
+    'input[data-artdeco-is-focused]',
+    '#global-nav-search input'
+  ];
+
+  let searchBox = null;
+  for (const sel of searchBoxSelectors) {
+    searchBox = await page.$(sel).catch(() => null);
+    if (searchBox) {
+      console.log(`🔍 [UI] Found search box with: ${sel}`);
+      break;
+    }
+  }
+
+  if (!searchBox) {
+    // Fallback: use direct URL if search box not found
+    console.log(`⚠️ [UI] Search box not found, falling back to direct URL...`);
+    const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}`;
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    return;
+  }
+
+  // Click the search box and type (character by character like a human)
+  await searchBox.click();
+  await humanDelay(500, 1000);
+  // @ts-ignore - Handle missing method in type definitions
+  await searchBox.triple_click?.() || await searchBox.click({ clickCount: 3 });
+  await humanDelay(200, 400);
+  await page.keyboard.type(keyword, { delay: 80 + Math.random() * 120 });
+  await humanDelay(800, 1500);
+
+  console.log(`🔍 [UI] Typed keyword: "${keyword}" — pressing Enter...`);
+  await page.keyboard.press('Enter');
+
+  // Wait for search results to load
+  await page.waitForLoadState('domcontentloaded').catch(() => {});
+  await humanDelay(2000, 3500);
+
+  // Click "Posts" tab if visible (to filter content search results)
+  const postsTabSelectors = [
+    'button[aria-label="Posts"]',
+    'a[href*="search/results/content"]',
+    '[data-control-name="filter_content"]',
+  ];
+  for (const sel of postsTabSelectors) {
+    const tab = await page.$(sel).catch(() => null);
+    if (tab) {
+      console.log(`🔍 [UI] Clicking Posts tab...`);
+      await tab.click().catch(() => {});
+      await humanDelay(2000, 3000);
+      break;
+    }
+  }
+
+  console.log(`✅ [UI] Search results page loaded for: "${keyword}"`);
+}
 
 async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
   if (!page) throw new Error('Browser not initialized');
 
   try {
-    const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}`;
+    // Navigate using human-like UI (bypasses datacenter IP block on direct search URL)
+    await navigateToSearchViaUI(keyword);
 
-    console.log(`🔍 Navigating to search page...`);
-
-    await page.goto(searchUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    });
-
-    // Wait for first batch of results (exit early if they load fast)
+    // Wait for first batch of results
     await page.waitForSelector(
       '.reusable-search__result-container, [data-urn*="activity"], [data-urn*="ugcPost"], [data-chameleon-result-urn]',
       { timeout: 12000 }
     ).catch(() => console.log('⚠️  Initial result containers slow — proceeding anyway...'));
 
-    // ── Scroll loop: 7 rounds to load as many posts as possible ──────────────
-    // After each scroll we wait for NEW content rather than a fixed delay,
-    // so fast-loading pages don't waste time.
     console.log('📜 Scrolling to load more posts...');
     for (let round = 0; round < 15; round++) {
-      // Scroll to bottom of the last visible result card (triggers infinite scroll)
       await page.evaluate(() => {
         const cards = document.querySelectorAll(
           '[role="listitem"], [data-view-name="feed-full-update"], .reusable-search__result-container, li.artdeco-card'
@@ -435,27 +479,23 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         }
       });
 
-      // Wait up to 3 s for new cards, then continue regardless
       await Promise.race([
         page.waitForSelector('[data-chameleon-result-urn], .reusable-search__result-container', {
           timeout: 3000
-        }).catch(() => {}),
+        }).catch(() => { }),
         sleep(1000)
       ]);
-      await humanDelay(800, 1500);  // shorter than before but still human-like
+      await humanDelay(800, 1500);
 
-      // Click "See more results" if visible
       const moreBtn = await page.$(
         'button.search-results-bottom-pagination__button, button[aria-label="See more results"]'
       ).catch(() => null);
       if (moreBtn) {
-        await moreBtn.click().catch(() => {});
+        await moreBtn.click().catch(() => { });
         await humanDelay(1500, 2500);
       }
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
-    // Check for CAPTCHA / anti-bot signals
     const detection = await detectCaptcha();
     if (detection.level === 'hard') {
       console.log('🚨 Hard CAPTCHA / checkpoint detected during search:', detection.reason);
@@ -467,17 +507,14 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       await humanDelay(60000, 120000);
     }
 
-
     console.log(`📊 Extracting post data...`);
 
-    // ── Extraction: plain JS string so esbuild never transforms it ────────────
     const postsRaw = await Promise.race([
       page.evaluate(`(function() {
         var MAX = ${MAX_POSTS_PER_SEARCH};
         var results = [];
         var seen = {}; var staleCount = 0;
 
-        // ── Helpers ──────────────────────────────────────────────────────────
         function parseNum(t) {
           if (!t) return 0;
           var c = String(t).toLowerCase().replace(/,/g,'').trim();
@@ -513,7 +550,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
               }
             }
             return null;
-          } catch(e) { return null; }
+            } catch(e) { return null; }
         }
 
         var containers = Array.from(document.querySelectorAll('[role="listitem"], [data-view-name="feed-full-update"]'));
@@ -562,14 +599,12 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
               }
             }
           } catch(e) {}
-                    // Extract date for 6-month filtering
           var dateText = '';
           try {
             var dateEl = container.querySelector('.update-components-actor__sub-description, .entity-result__simple-insight, .entity-result__caption');
             dateText = (dateEl ? dateEl.innerText : '').toLowerCase();
-            // Filter out posts older than 6 months (7mo, 8mo, 9mo, 10mo, 11mo, 12mo, 1y, 2y, etc.)
-            if (dateText.match(/(\d+mo|[\d.]+y)/)) {
-              var m = dateText.match(/(\d+)mo/);
+            if (dateText.match(/(\\d+mo|[\\d.]+y)/)) {
+              var m = dateText.match(/(\\d+)mo/);
               if (m && parseInt(m[1]) > 6) { staleCount++; return; }
               if (dateText.indexOf('y') !== -1) { staleCount++; return; }
             }
@@ -590,18 +625,15 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         return results;
       })()`) as Promise<any[]>,
 
-
-
       (async () => {
         await sleep(25000);
         throw new Error('EXTRACTION_TIMEOUT');
       })()
     ]).catch(async (err: any) => {
       console.log(`⚠️  Extraction script failed: ${err?.message || err}`);
-      await broadcastScreenshot(page!, `Extraction failed: ${err?.message || err}`).catch(() => {});
+      await broadcastScreenshot(page!, `Extraction failed: ${err?.message || err}`).catch(() => { });
       return [];
     });
-    // ─────────────────────────────────────────────────────────────────────────
 
     const posts = (Array.isArray(postsRaw) ? postsRaw : []).map((p: any): PostCandidate => ({
       url: p.url,
@@ -611,14 +643,9 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       comments: typeof p.comments === 'number' ? p.comments : 0
     }));
 
-    // Phase 4: Extra wait for engagement counts to render fully before final extraction
     console.log('⏳ Waiting for engagement counts to render...');
     await sleep(15000);
-    console.log('✅ Extracted ${posts.length} posts\n');
-    if (posts.length > 0) {
-      console.log(`📋 Sample: ${posts[0].url}`);
-      console.log(`   Likes: ${posts[0].likes} | Comments: ${posts[0].comments}\n`);
-    }
+    console.log(`✅ Extracted ${posts.length} posts\n`);
 
     return posts;
 
@@ -628,13 +655,14 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
   }
 }
 
+
 // ============================================================================
 // RATE LIMITING & WORK HOURS
 // ============================================================================
 
 function isWithinWorkHours(settings: WorkerSettings): boolean {
   const now = new Date();
-  
+
   if (settings.skipWeekends) {
     const day = now.getDay(); // 0=Sun, 6=Sat
     if (day === 0 || day === 6) return false;
@@ -647,25 +675,27 @@ function isWithinWorkHours(settings: WorkerSettings): boolean {
 }
 
 async function getSearchCountInPeriod(userId: string, period: 'hour' | 'day'): Promise<number> {
-  const since = new Date();
-  if (period === 'hour') {
-    since.setHours(since.getHours() - 1);
-  } else {
-    since.setDate(since.getDate() - 1);
-  }
-
-  const count = await prisma.log.count({
-    where: {
-      userId,
-      action: 'SEARCH',
-      timestamp: { gte: since }
+  return withRetry(async () => {
+    const since = new Date();
+    if (period === 'hour') {
+      since.setHours(since.getHours() - 1);
+    } else {
+      since.setDate(since.getDate() - 1);
     }
+
+    const count = await prisma.log.count({
+      where: {
+        userId,
+        action: 'SEARCH',
+        timestamp: { gte: since }
+      }
+    });
+    return count;
   });
-  return count;
 }
 
 async function logSearch(userId: string, keyword: string): Promise<void> {
-  try {
+  await withRetry(async () => {
     await prisma.log.create({
       data: {
         userId,
@@ -673,9 +703,7 @@ async function logSearch(userId: string, keyword: string): Promise<void> {
         postUrl: `search:${keyword}`
       }
     });
-  } catch (err) {
-    console.error('Failed to log search:', err);
-  }
+  }).catch(err => console.error('Failed to log search after retries:', err));
 }
 
 // ============================================================================
@@ -683,8 +711,7 @@ async function logSearch(userId: string, keyword: string): Promise<void> {
 // ============================================================================
 
 async function savePostToDatabase(post: PostCandidate, keyword: string, userId: string): Promise<boolean> {
-  try {
-    // Check if post already exists
+  return withRetry(async () => {
     const existing = await prisma.savedPost.findFirst({
       where: {
         userId,
@@ -693,10 +720,9 @@ async function savePostToDatabase(post: PostCandidate, keyword: string, userId: 
     });
 
     if (existing) {
-      return false; // Already saved
+      return false;
     }
 
-    // Save new post
     await prisma.savedPost.create({
       data: {
         userId,
@@ -711,32 +737,10 @@ async function savePostToDatabase(post: PostCandidate, keyword: string, userId: 
     });
 
     return true;
-
-  } catch (error: any) {
-    console.error('❌ Database save error:', error.message);
+  }).catch(error => {
+    console.error('❌ Database save error after retries:', error.message);
     return false;
-  }
-}
-
-// Return ALL posts with engagement sorted by closeness to target reach.
-// No arbitrary cap — the caller decides how many to use.
-function getClosestByReach(
-  posts: PostCandidate[],
-  settings: WorkerSettings
-): PostCandidate[] {
-  const targetLikes = settings.minLikes;
-  const targetComments = settings.minComments;
-
-  return posts
-    // Exclude posts with zero engagement (likely no data, not genuine zeros)
-    .filter(p => p.likes > 0 || p.comments > 0)
-    .map(p => {
-      const likeDiff = Math.abs(p.likes - targetLikes);
-      const commentDiff = Math.abs(p.comments - targetComments);
-      return { post: p, distance: likeDiff + commentDiff };
-    })
-    .sort((a, b) => a.distance - b.distance)
-    .map(x => x.post);
+  });
 }
 
 // ============================================================================
@@ -746,10 +750,6 @@ function getClosestByReach(
 async function initializeBrowser() {
   console.log('🌐 Initializing stealth browser...\n');
 
-  // Determine headless mode from environment:
-  // - HEADLESS="true"  -> run headless
-  // - HEADLESS="false" -> run headed (visible)
-  // - not set          -> default to headless (safe for demos / local runs)
   const headlessEnv = (process.env.HEADLESS || '').toLowerCase();
   const isHeadless = headlessEnv !== 'false';
 
@@ -763,61 +763,50 @@ async function initializeBrowser() {
       '--disable-web-security',
       '--disable-features=IsolateOrigins,site-per-process',
       '--disable-site-isolation-trials',
-      // Appear more human-like
       '--window-size=1920,1080',
       '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     ]
   });
 
-  // Create stealth context
   context = await browser.newContext({
     viewport: { width: 1920, height: 1080 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     locale: 'en-US',
     timezoneId: 'America/New_York',
     permissions: [],
-    // Add realistic browser properties
     deviceScaleFactor: 1,
     isMobile: false,
     hasTouch: false,
     colorScheme: 'light'
   });
 
-  // Advanced stealth scripts
   await context.addInitScript(() => {
-    // Hide webdriver
     Object.defineProperty(navigator, 'webdriver', {
       get: () => false
     });
 
-    // Fix Chrome detection
     (window as any).chrome = {
       runtime: {}
     };
 
-    // Add realistic plugins
     Object.defineProperty(navigator, 'plugins', {
       get: () => [1, 2, 3, 4, 5]
     });
 
-    // Fix permissions
     const originalQuery = window.navigator.permissions.query;
     window.navigator.permissions.query = (parameters: any) => (
-      parameters.name === 'notifications' 
+      parameters.name === 'notifications'
         ? Promise.resolve({ state: 'denied' } as PermissionStatus)
         : originalQuery(parameters)
     );
 
-    // Add realistic language
     Object.defineProperty(navigator, 'languages', {
       get: () => ['en-US', 'en']
     });
   });
 
   page = await context.newPage();
-
-  // Dismiss any dialogs
-  page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
+  page.on('dialog', dialog => dialog.dismiss().catch(() => { }));
 
   isRunning = true;
   console.log('✅ Stealth browser initialized\n');
@@ -829,7 +818,6 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
   try {
     console.log('🔐 Authenticating LinkedIn session...');
 
-    // Set LinkedIn cookie
     await context.addCookies([{
       name: 'li_at',
       value: sessionCookie,
@@ -842,9 +830,7 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
 
     console.log('   Set LinkedIn session cookie');
 
-    // Navigate to feed with human-like delay
     await humanDelay(2000, 4000);
-    
     await page.goto('https://www.linkedin.com/feed', {
       waitUntil: 'domcontentloaded',
       timeout: 30000
@@ -852,14 +838,10 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
 
     await humanDelay(3000, 5000);
 
-    // Check authentication
-    const currentUrl = page.url();
     const isAuthenticated = await page.evaluate(() => {
       if (!window.location.hostname.includes('linkedin.com')) return false;
       if (window.location.pathname.includes('/login')) return false;
       if (window.location.pathname.includes('/checkpoint')) return false;
-      
-      // Check for navigation elements
       const hasNav = document.querySelector('nav[aria-label="Primary Navigation"], .global-nav');
       return !!hasNav;
     });
@@ -867,10 +849,7 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
     if (isAuthenticated) {
       console.log('✅ LinkedIn authentication successful\n');
       await broadcastScreenshot(page, 'Authenticated on LinkedIn');
-
-      // Warm up session with human-like browsing before searches
       await warmUpSession();
-
       return true;
     } else {
       console.log('❌ LinkedIn authentication failed\n');
@@ -957,17 +936,12 @@ async function detectCaptcha(): Promise<CaptchaDetection> {
     }
 
     if (level !== 'none') {
-      console.log('\\n🚨 CAPTCHA / anti-bot signal detected');
+      console.log('\n🚨 CAPTCHA / anti-bot signal detected');
       console.log(`   URL: ${info.url}`);
       console.log(`   Title: ${info.title}`);
       console.log(`   Reason: ${reason}`);
-      console.log('   Snippet:', info.textSnippet?.slice(0, 200), '\\n');
 
-      await broadcastScreenshot(page, 'CAPTCHA / anti-bot signal detected').catch(() => {});
-      await broadcastLog(
-        `CAPTCHA / anti-bot signal (${level}): ${reason} at ${info.url}`,
-        level === 'hard' ? 'error' : 'warn'
-      ).catch(() => {});
+      await broadcastScreenshot(page, 'CAPTCHA / anti-bot signal detected').catch(() => { });
     }
 
     return {
@@ -984,16 +958,13 @@ async function detectCaptcha(): Promise<CaptchaDetection> {
 }
 
 async function handleCaptcha(detection: CaptchaDetection) {
-  console.log('\\n🚨 HARD CAPTCHA / CHECKPOINT DETECTED\\n');
+  console.log('\n🚨 HARD CAPTCHA / CHECKPOINT DETECTED\n');
   console.log('   The system has paused to avoid further detection.');
-  console.log('   Please check the browser window for any security prompts or challenges.');
-  console.log('   A longer cool-down will be applied before resuming.\\n');
 
   await broadcastError(
     `⚠️ Hard CAPTCHA detected (${detection.reason}). Worker entering extended cool-down.`
   );
 
-  // Longer cool-down for hard blocks (e.g. 20 minutes)
   const cooldownMinutes = 20;
   await broadcastStatus(`Hard CAPTCHA cool-down for ${cooldownMinutes} minutes`);
   await sleep(cooldownMinutes * 60 * 1000);
@@ -1013,9 +984,8 @@ async function humanDelay(minMs: number, maxMs: number) {
 
 async function humanScroll(page: Page) {
   try {
-    // Random scroll patterns
     const scrollCount = randomBetween(2, 5);
-    
+
     for (let i = 0; i < scrollCount; i++) {
       const scrollAmount = randomBetween(200, 600);
       await page.evaluate((amount) => {
@@ -1024,20 +994,18 @@ async function humanScroll(page: Page) {
           behavior: 'smooth'
         });
       }, scrollAmount);
-      
+
       await humanDelay(500, 1500);
     }
-    
-    // Scroll back up
+
     await page.evaluate(() => {
       window.scrollTo({
         top: 0,
         behavior: 'smooth'
       });
     });
-    
+
   } catch {
-    // Ignore scroll errors
   }
 }
 
@@ -1046,12 +1014,9 @@ async function warmUpSession() {
 
   try {
     console.log('🧊 Warming up LinkedIn session on feed...');
-
-    // Scroll the feed a bit to look like a real user
     await humanScroll(page);
     await humanDelay(3000, 6000);
 
-    // Optionally open 1–2 posts or profiles in the same tab
     const candidateLinks = await page.$$(
       'a[href*="/feed/update/"], a[href*="/in/"]:not([href*="miniProfileUrn"])'
     );
@@ -1067,7 +1032,6 @@ async function warmUpSession() {
         await page.goBack({ waitUntil: 'domcontentloaded', timeout: 30000 });
         await humanDelay(2000, 4000);
       } catch {
-        // Ignore single-link failures and continue
       }
     }
 
@@ -1093,17 +1057,17 @@ async function cleanup() {
   console.log('\n🧹 Cleaning up...');
 
   if (page) {
-    await page.close().catch(() => {});
+    await page.close().catch(() => { });
     page = null;
   }
 
   if (context) {
-    await context.close().catch(() => {});
+    await context.close().catch(() => { });
     context = null;
   }
 
   if (browser) {
-    await browser.close().catch(() => {});
+    await browser.close().catch(() => { });
     browser = null;
   }
 
@@ -1111,85 +1075,108 @@ async function cleanup() {
 
   isRunning = false;
   isAuthenticated = false;
-  
+
   console.log('✅ Cleanup complete\n');
 }
 
 // ============================================================================
-// DATABASE QUERIES
+// DATABASE RESILIENCE WRAPPER
 // ============================================================================
 
-async function getActiveUserSettings(): Promise<WorkerSettings | null> {
-  const settings = await prisma.settings.findFirst({
-    where: { systemActive: true },
-    include: { user: true }
+/**
+ * Executes a Prisma operation with retries.
+ * Critical for handling Neon DB "sleep" cycles or connection pool timeouts.
+ */
+async function withRetry<T>(operation: () => Promise<T>, retries = 3, delay = 5000): Promise<T> {
+  let lastError: any;
+  for (let i = 0; i < retries; i++) {
+    try {
+      // Ensure connection is active
+      await prisma.$connect().catch(() => { });
+      return await operation();
+    } catch (error: any) {
+      lastError = error;
+      const isConnectionError = error.message?.includes('Prisma') ||
+        error.code === 'P1001' ||
+        error.code === 'P2024';
+
+      if (isConnectionError && i < retries - 1) {
+        console.warn(`⚠️ [DB_RETRY] Connection issue (Attempt ${i + 1}/${retries}). Retrying in ${delay / 1000}s...`);
+        await sleep(delay);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
+// ============================================================================
+// DATABASE OPERATIONS
+// ============================================================================
+
+async function isSystemStillActive(userId: string): Promise<boolean> {
+  return withRetry(async () => {
+    const settings = await prisma.settings.findUnique({
+      where: { userId }
+    });
+    return settings?.systemActive ?? false;
   });
+}
 
-  if (!settings) return null;
+async function getActiveUserSettings(): Promise<WorkerSettings | null> {
+  return withRetry(async () => {
+    const settings = await prisma.settings.findFirst({
+      where: { systemActive: true },
+      include: { user: true }
+    });
 
-  return {
-    userId: settings.userId,
-    linkedinSessionCookie: settings.linkedinSessionCookie,
-    platformUrl: settings.platformUrl,
-    minLikes: settings.minLikes,
-    maxLikes: settings.maxLikes,
-    minComments: settings.minComments,
-    maxComments: settings.maxComments,
-    systemActive: settings.systemActive,
-    searchOnlyMode: settings.searchOnlyMode,
-    workHoursOnly: settings.workHoursOnly ?? true,
-    workHoursStart: settings.workHoursStart ?? 9,
-    workHoursEnd: settings.workHoursEnd ?? 18,
-    skipWeekends: settings.skipWeekends ?? true,
-    maxSearchesPerHour: settings.maxSearchesPerHour ?? 6,
-    maxSearchesPerDay: settings.maxSearchesPerDay ?? 20,
-    minDelayBetweenSearchesMinutes: settings.minDelayBetweenSearchesMinutes ?? 5,
-    maxKeywordsPerCycle: settings.maxKeywordsPerCycle ?? 3
-  };
+    if (!settings) return null;
+
+    return {
+      userId: settings.userId,
+      linkedinSessionCookie: settings.linkedinSessionCookie,
+      platformUrl: settings.platformUrl,
+      minLikes: settings.minLikes,
+      maxLikes: settings.maxLikes,
+      minComments: settings.minComments,
+      maxComments: settings.maxComments,
+      systemActive: settings.systemActive,
+      searchOnlyMode: settings.searchOnlyMode,
+      workHoursOnly: settings.workHoursOnly ?? true,
+      workHoursStart: settings.workHoursStart ?? 9,
+      workHoursEnd: settings.workHoursEnd ?? 18,
+      skipWeekends: settings.skipWeekends ?? true,
+      maxSearchesPerHour: settings.maxSearchesPerHour ?? 6,
+      maxSearchesPerDay: settings.maxSearchesPerDay ?? 20,
+      minDelayBetweenSearchesMinutes: settings.minDelayBetweenSearchesMinutes ?? 5,
+      maxKeywordsPerCycle: settings.maxKeywordsPerCycle ?? 3
+    };
+  });
 }
 
 async function getActiveKeywords(userId: string): Promise<KeywordData[]> {
-  const keywords = await prisma.keyword.findMany({
-    where: {
-      userId,
-      active: true
-    }
-  });
+  return withRetry(async () => {
+    const keywords = await prisma.keyword.findMany({
+      where: {
+        userId,
+        active: true
+      }
+    });
 
-  return keywords.map(k => ({
-    id: k.id,
-    keyword: k.keyword
-  }));
+    return keywords.map(k => ({
+      id: k.id,
+      keyword: k.keyword
+    }));
+  });
 }
 
-async function isSystemStillActive(userId: string): Promise<boolean> {
-  const settings = await prisma.settings.findUnique({
-    where: { userId }
-  });
-
-  return settings?.systemActive ?? false;
-}
-
-// ============================================================================
-// STARTUP
-// ============================================================================
-
-
-// ============================================================================
-// SUPERVISOR & ERROR HANDLING (Phase 5)
-// ============================================================================
-
-async function main() {
-  console.log('\n🚀 LinkedIn Search-Only Worker - Native Mode Starting...\n');
-
-  // 1. START INTERNAL HEALTH CHECK SERVER
-  const port = Number(process.env.PORT) || 7860;
-  http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('LinkedIn Worker is Active and Healthy\n');
-  }).listen(port, '0.0.0.0', () => {
-    console.log(`✅ [Internal Health Check] Listening on port ${port}`);
-  });
+/**
+ * Main entry point for the LinkedIn Worker logic.
+ * This is exported so server.ts can run it in a managed background loop.
+ */
+export async function startWorker() {
+  console.log('\n🚀 LinkedIn Search-Only Worker logic - Running...\n');
 
   while (true) {
     try {
@@ -1199,43 +1186,45 @@ async function main() {
       console.error('\n💥 CRITICAL: Supervisor caught unhandled error in workerLoop:', errorMsg);
       try {
         await broadcastError(`Supervisor Restoring Worker: ${errorMsg}`);
-      } catch {}
-      
+      } catch { }
+
       console.log('🔄 Supervisor: Performing full cleanup and restarting in 30 seconds...\n');
-      await cleanup().catch(() => {});
+      await cleanup().catch(() => { });
       await sleep(30000); // Backoff before restart
     }
   }
 }
 
+// Global process handlers for clean shutdown
 process.on('unhandledRejection', (reason, promise) => {
   console.error('🚨 UNHANDLED REJECTION at:', promise, 'reason:', reason);
-  // Log and keep process alive - Supervisor or next cycle will handle it
 });
 
 process.on('uncaughtException', async (error) => {
   console.error('🚨 UNCAUGHT EXCEPTION:', error);
-  // Controlled shutdown and let Supervisor-level or OS-level restarts handle it if possible
-  // For now, we try to cleanup and let the while(true) in main carry on if it's a non-fatal process error
   if (error.message && error.message.includes('Prisma')) {
     console.log('Database connection error. Supervisor will attempt reconnect.');
   }
 });
 
 process.on("SIGINT", async () => {
-  console.log('\n\n⏹️  Shutdown signal received...');
+  console.log('\n\n⏹️ Shutdown signal received...');
   await cleanup();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-  console.log('\n\n⏹️  Shutdown signal received...');
+  console.log('\n\n⏹️ Shutdown signal received...');
   await cleanup();
   process.exit(0);
 });
 
-main().catch(async (error) => {
-  console.error('💥 Fatal error:', error);
-  await cleanup();
-  process.exit(1);
-});
+// Guarded auto-start if run directly
+if (require.main === module) {
+  import('dotenv/config').then(() => {
+    startWorker().catch(err => {
+      console.error('Fatal startup error:', err);
+      process.exit(1);
+    });
+  });
+}
