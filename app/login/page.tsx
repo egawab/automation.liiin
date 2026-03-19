@@ -45,20 +45,32 @@ function LoginForm() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, password }),
-                credentials: 'include' // Important: include cookies
+                credentials: 'include'
             });
 
-            const data = await res.json();
+            // 🔍 DEBUG: Log raw status for Vercel troubleshooting
+            console.log(`[Diagnostic] ${endpoint} Status: ${res.status}`);
+
+            let data;
+            try {
+                data = await res.json();
+            } catch (e) {
+                console.error('[Diagnostic] Failed to parse API JSON response:', e);
+                throw new Error('Server returned invalid response. Check Vercel Logs for database connection issues.');
+            }
 
             if (!res.ok) {
+                console.error('❌ API Error Details:', data);
+                if (data.details) {
+                    console.error('🔍 Forensic Details:', data.details);
+                }
                 throw new Error(data.error || 'Something went wrong');
             }
 
             showToast.success(isLogin ? 'Welcome back!' : 'Account created successfully!');
-            
-            // Use window.location to ensure cookies are properly set before navigation
             window.location.href = '/dashboard';
         } catch (err: any) {
+            console.error('⚠️ Diagnostic Caught Error:', err.message);
             setError(err.message);
             showToast.error(err.message);
         } finally {
