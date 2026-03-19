@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { LayoutDashboard, Search, MessageSquareText, PenTool, Settings, Sparkles, Cookie, Bookmark } from 'lucide-react';
+import { LayoutDashboard, Search, MessageSquareText, PenTool, Settings, Sparkles, Shield, Bookmark } from 'lucide-react';
 import NexoraLogo from '@/components/ui/NexoraLogo';
 
 interface SidebarProps {
