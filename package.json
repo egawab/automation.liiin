@@ -8,7 +8,7 @@
     "scripts": {
         "dev": "next dev",
         "start": "node dist/worker.js",
-        "build": "next build",
+        "build": "npx prisma generate && next build",
         "build:worker": "npx tsc -p tsconfig.worker.json",
         "postinstall": "prisma generate",
         "lint": "eslint .",
