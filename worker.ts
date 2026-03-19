@@ -37,8 +37,9 @@ async function launchBrowser(settings: any) {
   console.log('🛡️ Launching Stealth-Optimized Scraper...');
   
   // 🛡️ EXTRACT PROXY FROM ENV OR SETTINGS
+  // NOTE: We use Port 80 by default because HF Spaces blocks 33335.
   const proxyConfig = {
-    server: `http://${process.env.PROXY_HOST || 'brd.superproxy.io'}:${process.env.PROXY_PORT || '33335'}`,
+    server: `http://${process.env.PROXY_HOST || 'brd.superproxy.io'}:${process.env.PROXY_PORT || '80'}`,
     username: process.env.PROXY_USER || 'brd-customer-hl_848e74c6-zone-datacenter_proxy1',
     password: process.env.PROXY_PASS || 'k2fui3km5bqg'
   };
