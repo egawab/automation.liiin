@@ -1,5 +1,5 @@
-# Use the official Playwright image
-FROM mcr.microsoft.com/playwright:v1.58.2-noble
+# Use official Playwright image for cloud-stable scraping
+FROM mcr.microsoft.com/playwright:v1.54.0-noble
 
 # Root for setup
 USER root
@@ -10,15 +10,16 @@ USER 1000
 WORKDIR /home/user/app
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH \
-    npm_config_cache=/home/user/.npm
+    npm_config_cache=/home/user/.npm \
+    PORT=3000
 
 # Copy everything
 COPY --chown=1000:1000 . .
 
-# Install dependencies and build the worker
+# Install dependencies and build
 RUN npm install
-RUN npm run build:worker
 RUN npx prisma generate
+RUN npm run build
 
-# Start the supervisor server directly (PID 1) for signal resilience
-CMD ["node", "dist/server.js"]
+# Start Next.js (which should handle the worker launch or keep-alive)
+CMD ["npm", "start"]

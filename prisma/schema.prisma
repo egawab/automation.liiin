@@ -48,6 +48,12 @@ model Settings {
   minDelayBetweenSearchesMinutes Int @default(5)
   maxKeywordsPerCycle   Int     @default(3)
   
+  // Cloud Proxy Configuration
+  proxyHost             String?
+  proxyPort             Int?
+  proxyUser             String?
+  proxyPass             String?
+  
   userId                String  @unique
   user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

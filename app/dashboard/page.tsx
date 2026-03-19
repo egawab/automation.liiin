@@ -191,7 +191,12 @@ export default function Dashboard() {
       maxSearchesPerHour: Number(formData.get('maxSearchesPerHour') ?? 6),
       maxSearchesPerDay: Number(formData.get('maxSearchesPerDay') ?? 20),
       minDelayBetweenSearchesMinutes: Number(formData.get('minDelayBetweenSearchesMinutes') ?? 5),
-      maxKeywordsPerCycle: Number(formData.get('maxKeywordsPerCycle') ?? 3)
+      maxKeywordsPerCycle: Number(formData.get('maxKeywordsPerCycle') ?? 3),
+      // Proxy Configuration
+      proxyHost: formData.get('proxyHost') as string || null,
+      proxyPort: formData.get('proxyPort') ? Number(formData.get('proxyPort')) : null,
+      proxyUser: formData.get('proxyUser') as string || null,
+      proxyPass: formData.get('proxyPass') as string || null
     };
     await fetch('/api/settings', {
       method: 'POST',
@@ -811,48 +816,65 @@ export default function Dashboard() {
       case 'settings':
         return (
           <div className="max-w-4xl mx-auto">
-            {/* Chrome Extension Integration */}
-            <Card className="mb-8 border-2 border-indigo-100 overflow-hidden shadow-sm">
-              <div className="p-6 md:p-8 border-b border-indigo-50 bg-gradient-to-r from-blue-50 to-indigo-50">
+            {/* Cloud Scraper Proxy Configuration */}
+            <Card className="mb-8 border-2 border-primary-100 overflow-hidden shadow-2xl ring-4 ring-primary-50">
+              <div className="p-6 md:p-8 border-b border-primary-50 bg-gradient-to-r from-gray-900 to-gray-800 text-white">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-indigo-500 text-white flex items-center justify-center shadow-md">
-                    <Shield className="w-5 h-5" />
+                  <div className="w-12 h-12 rounded-2xl bg-primary-500 text-white flex items-center justify-center shadow-lg">
+                    <Shield className="w-6 h-6" />
                   </div>
                   <div>
-                    <h3 className="text-xl font-extrabold text-gray-900">
-                      Chrome Extension Connection
-                    </h3>
-                    <p className="text-sm text-gray-600 font-medium mt-1">
-                      Link your local browser extension to this dashboard
-                    </p>
+                    <h3 className="text-2xl font-black">Cloud Proxy Settings</h3>
+                    <p className="text-sm text-primary-100/70 font-medium">Configure your industrial-scale network identity</p>
                   </div>
                 </div>
               </div>
-              <div className="p-6 md:p-8 bg-white">
-                <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 flex flex-col md:flex-row items-center justify-between gap-4">
-                  <div className="flex-1 text-center md:text-left">
-                    <p className="text-sm font-extrabold text-gray-800 uppercase tracking-wide">
-                      Your Dashboard API Key (User ID)
-                    </p>
-                    <p className="text-xs text-gray-500 mb-3 mt-1 font-medium">
-                      Copy and paste this exact key into the Chrome Extension popup window to authenticate it.
-                    </p>
-                    <code className="bg-indigo-50 border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg font-mono text-base font-bold select-all block break-all">
-                      {settings.userId || 'Loading...'}
-                    </code>
+              <div className="p-8 bg-white space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest">Proxy Host/IP</label>
+                    <input 
+                      type="text" 
+                      name="proxyHost"
+                      defaultValue={settings.proxyHost || ''} 
+                      placeholder="e.g. 1.23.45.67"
+                      className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold focus:border-primary-500 outline-none transition-all"
+                    />
                   </div>
-                  <Button 
-                    onClick={() => {
-                      if (settings.userId) {
-                        navigator.clipboard.writeText(settings.userId);
-                        alert('✅ API Key copied to clipboard!');
-                      }
-                    }}
-                    variant="primary"
-                    className="shrink-0 w-full md:w-auto shadow-md"
-                  >
-                    Copy API Key
-                  </Button>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest">Proxy Port</label>
+                    <input 
+                      type="number" 
+                      name="proxyPort"
+                      defaultValue={settings.proxyPort || ''} 
+                      placeholder="e.g. 8080"
+                      className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold focus:border-primary-500 outline-none transition-all"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest">Proxy Username</label>
+                    <input 
+                      type="text" 
+                      name="proxyUser"
+                      defaultValue={settings.proxyUser || ''} 
+                      className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold focus:border-primary-500 outline-none transition-all"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest">Proxy Password</label>
+                    <input 
+                      type="password" 
+                      name="proxyPass"
+                      defaultValue={settings.proxyPass || ''} 
+                      className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold focus:border-primary-500 outline-none transition-all"
+                    />
+                  </div>
+                </div>
+                <div className="pt-4 p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
+                   <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                   <p className="text-xs text-amber-800 font-medium leading-relaxed">
+                     <strong>Security Note:</strong> Your proxy credentials are used strictly by the Cloud Worker to route LinkedIn traffic. Ensure your proxy supports <strong>HTTP/HTTPS</strong>.
+                   </p>
                 </div>
               </div>
             </Card>
@@ -967,26 +989,25 @@ export default function Dashboard() {
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                       <div className="space-y-3">
                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">
-                          Your API License Key (User ID)
+                          LinkedIn Session Cookie (li_at)
                         </label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            readOnly
-                            value={settings.userId || ''}
-                            className="flex-1 px-4 py-3 bg-gray-800 border-2 border-gray-700 rounded-xl text-sm font-mono font-bold text-primary-400 outline-none"
-                          />
-                        </div>
-                        <p className="text-[10px] text-gray-500 font-medium">Use this key inside your Chrome Extension to connect this dashboard.</p>
+                        <input
+                          type="text"
+                          name="linkedinSessionCookie"
+                          defaultValue={settings.linkedinSessionCookie || ''}
+                          placeholder="Paste your li_at cookie here"
+                          className="w-full px-4 py-3 bg-gray-800 border-2 border-gray-700 rounded-xl text-sm font-mono font-bold text-primary-400 outline-none focus:border-primary-500 transition-all"
+                        />
+                        <p className="text-[10px] text-gray-500 font-medium italic">Crucial for server-side authentication. Do not share.</p>
                       </div>
                       
                       <div className="space-y-3">
                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">
                           Network Status
                         </label>
-                        <div className="px-5 py-3 bg-success-500/10 border-2 border-success-500/20 rounded-xl text-sm font-bold text-success-400 flex items-center gap-3">
-                           <div className="w-2.5 h-2.5 rounded-full bg-success-500 animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.6)]" />
-                           Browser Integrated Mode active
+                        <div className="px-5 py-3 bg-primary-500/10 border-2 border-primary-500/20 rounded-xl text-sm font-bold text-primary-400 flex items-center gap-3">
+                           <div className="w-2.5 h-2.5 rounded-full bg-primary-500 animate-pulse shadow-[0_0_10px_rgba(59,130,246,0.6)]" />
+                           Cloud Scraper Mode Active
                         </div>
                       </div>
                     </div>
