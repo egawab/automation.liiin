@@ -90,21 +90,27 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
         }
     }
     
-    console.log("[Ext-Worker] Scrolling to load infinite content...");
-    // Deep Extraction: 10 human-like scrolls for maximum content
-    for (let i = 0; i < 10; i++) {
-        window.scrollBy({ top: window.innerHeight * 0.8, behavior: 'smooth' });
-        await humanDelay(2500, 5000);
+    console.log("[Ext-Worker] Scrolling to load infinite content for MAXIMUM volume...");
+    // Industrial Extraction: 20 human-like scrolls for maximum content depth
+    for (let i = 0; i < 20; i++) {
+        window.scrollBy({ top: window.innerHeight * 1.5, behavior: 'smooth' });
+        await humanDelay(1500, 3000);
+        // If "No more results" or "See more" appears, try to handle it
+        const seeMore = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('See more') || b.innerText.includes('عرض المزيد'));
+        if (seeMore) {
+            seeMore.click();
+            await humanDelay(2000, 3000);
+        }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    await humanDelay(1500, 3000);
+    await humanDelay(1000, 2000);
 
-    const MAX_POSTS = 40;
+    const TARGET_POSTS_MIN = 15; // User specifically asked for 10-20
+    const MAX_POSTS_BUFFER = 50; 
     const results = [];
-    const fallbackResults = [];
+    const allCandidatePosts = [];
     const seen = {};
     let rawCount = 0;
-    let staleCount = 0;
 
     // NEW: Dashboard & Login check
     const isLoginPage = document.title.toLowerCase().includes('log in') || document.title.toLowerCase().includes('login') || !!document.querySelector('form.login__form');
@@ -186,7 +192,7 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
     // ... (Navigation already handled above) ...
 
     containers.forEach((container, idx) => {
-      if (results.length >= MAX_POSTS) return;
+      if (allCandidatePosts.length >= MAX_POSTS_BUFFER) return;
       
       let url = null;
       
@@ -212,36 +218,38 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
       let like = 0, comm = 0;
       let text = (container.innerText || '').replace(/[\n\r]/g, ' ');
       
-      // Advanced Reach Extraction
+      // Advanced Reach Extraction (Multilingual)
       try {
         let allLabels = Array.from(container.querySelectorAll('[aria-label]'));
         for (let l = 0; l < allLabels.length; l++) {
           let label = (allLabels[l].getAttribute('aria-label') || '').toLowerCase();
-          if (!like && (label.indexOf('reaction') !== -1 || label.indexOf('like') !== -1)) {
+          // Reactions / Likes
+          if (!like && (label.indexOf('reaction') !== -1 || label.indexOf('like') !== -1 || label.indexOf('إعجاب') !== -1)) {
             let ml = label.match(/(\d[\d,]*)/);
             if (ml) like = parseNum(ml[1]);
           }
+          // Comments
           if (!comm && (label.indexOf('comment') !== -1 || label.indexOf('تعليق') !== -1)) {
             let mc = label.match(/(\d[\d,]*)/);
             if (mc) comm = parseNum(mc[1]);
           }
         }
         
-        // Match regex if labels failed
+        // Fallback to regex if labels failed
         if (!like) {
-           let mLike = text.match(/(\d[\d,]*)\s*(reactions?|likes?)/i);
+           let mLike = text.match(/(\d[\d,]*)\s*(reactions?|likes?|إعجاب|تفاعل)/i);
            if (mLike) like = parseNum(mLike[1]);
         }
         if (!comm) {
-           let mComm = text.match(/(\d[\d,]*)\s*comments?/i);
+           let mComm = text.match(/(\d[\d,]*)\s*(comments?|تعليق)/i);
            if (mComm) comm = parseNum(mComm[1]);
         }
       } catch (e) {}
 
-      // Author & Preview Accuracy
+      // Author extraction
       let author = 'LinkedIn User';
       try {
-          let actorEl = container.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title span');
+          let actorEl = container.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title span, .update-components-actor__container [aria-hidden="true"]');
           if (actorEl) author = actorEl.innerText.split('\n')[0].trim();
       } catch(e) {}
 
@@ -250,30 +258,38 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
         likes: like, 
         comments: comm, 
         author, 
-        preview: text.substring(0, 200).trim(), 
-        score: (like * 2) + comm 
+        preview: text.substring(0, 300).trim(), 
+        // Quality Score: Prioritize engagement but allow "close" matches
+        score: (like * 1) + (comm * 5) // Comments are rarer/more valuable
       };
 
-      // SOFT FILTERING LOGIC
-      const minL = settings.minLikes || 0;
-      const minC = settings.minComments || 0;
-
-      if (like >= minL && comm >= minC) {
-         results.push(postData);
-      } else {
-         fallbackResults.push(postData);
-      }
+      allCandidatePosts.push(postData);
     });
 
-    // If we didn't meet the target, provide the "closest matches" (Top 10 highest reach)
-    let finalResults = results;
-    if (results.length === 0 && fallbackResults.length > 0) {
-        console.log(`[Ext-Worker] No exact matches for L:${settings.minLikes}/C:${settings.minComments}. Returning closest matches.`);
-        fallbackResults.sort((a, b) => b.score - a.score);
-        finalResults = fallbackResults.slice(0, 10);
+    // INDUSTRIAL SORTING & FILTERING
+    const minL = settings.minLikes || 0;
+    const minC = settings.minComments || 0;
+
+    // 1. First, take posts that EXACTLY match criteria
+    let perfectMatches = allCandidatePosts.filter(p => p.likes >= minL && p.comments >= minC);
+    
+    // 2. If we don't have enough, fill with the next "highest engagement" posts (Fuzzy matches)
+    let finalResults = [];
+    if (perfectMatches.length >= TARGET_POSTS_MIN) {
+        console.log(`[Ext-Worker] Found ${perfectMatches.length} perfect matches. Returning top performance.`);
+        perfectMatches.sort((a,b) => b.score - a.score);
+        finalResults = perfectMatches.slice(0, 30);
+    } else {
+        console.log(`[Ext-Worker] Only found ${perfectMatches.length} perfect matches. Supplementing with closest high-reach posts.`);
+        // Combine them, but prioritize perfect matches by putting them first
+        const remainingBuffer = allCandidatePosts
+            .filter(p => !perfectMatches.includes(p))
+            .sort((a,b) => b.score - a.score);
+        
+        finalResults = perfectMatches.concat(remainingBuffer).slice(0, 25);
     }
 
-    console.log(`[Ext-Worker] Done. Final selected: ${finalResults.length} posts.`);
+    console.log(`[Ext-Worker] Done. Final Extraction Volume: ${finalResults.length} posts (Raw candidates: ${allCandidatePosts.length})`);
 
     if (finalResults.length > 0) {
       await submitResultsToDashboard(finalResults, keyword, dashboardUrl, userId);
