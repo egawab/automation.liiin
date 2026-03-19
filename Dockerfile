@@ -11,7 +11,7 @@ WORKDIR /home/user/app
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH \
     npm_config_cache=/home/user/.npm \
-    PORT=3000
+    PORT=7860
 
 # Copy everything
 COPY --chown=1000:1000 . .

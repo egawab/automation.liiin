@@ -1,12 +1,14 @@
-﻿
 ---
+title: Nexora Sovereign Scraper
+emoji: 🏗️
+colorFrom: blue
+colorTo: indigo
 sdk: docker
 app_port: 7860
+pinned: false
 ---
 
-
-
-# 🤖 LinkedIn Comment Automation Platform
+# 🤖 Nexora Sovereign: LinkedIn Industrial Scraper (Cloud Edition)
 
 An automated LinkedIn engagement tool that helps you comment on relevant posts based on keywords.
 

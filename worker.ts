@@ -35,8 +35,16 @@ const SLEEP_LONG = 5000;
 async function launchBrowser(settings: any) {
   console.log('🌐 Launching Industrial Cloud Scraper...');
   
+  // 🛡️ INDUSTRIAL PROXY SETTINGS
+  const proxyConfig = {
+    server: 'http://brd.superproxy.io:33335',
+    username: 'brd-customer-hl_848e74c6-zone-datacenter_proxy1',
+    password: 'k2fui3km5bqg'
+  };
+
   const launchOptions: any = {
     headless: process.env.HEADLESS !== 'false',
+    proxy: proxyConfig,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -46,20 +54,7 @@ async function launchBrowser(settings: any) {
     ]
   };
 
-  // 🛡️ PROXY INTEGRATION
-  if (settings.proxyHost && settings.proxyPort) {
-    console.log(`📡 Using Proxy: ${settings.proxyHost}:${settings.proxyPort}`);
-    launchOptions.proxy = {
-      server: `http://${settings.proxyHost}:${settings.proxyPort}`
-    };
-    if (settings.proxyUser && settings.proxyPass) {
-      launchOptions.proxy.username = settings.proxyUser;
-      launchOptions.proxy.password = settings.proxyPass;
-    }
-  } else {
-    console.log('📡 No Proxy configured. Using direct connection.');
-  }
-
+  console.log(`📡 Connecting through Proxy: ${proxyConfig.server}`);
   browser = await chromium.launch(launchOptions);
   
   context = await browser!.newContext({
@@ -67,7 +62,7 @@ async function launchBrowser(settings: any) {
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   });
 
-  // Inject Cookies for Authentication
+  // Inject Cookies for Authentication (li_at + JSESSIONID)
   if (settings.linkedinSessionCookie) {
     const cookies = [
       {
@@ -77,11 +72,49 @@ async function launchBrowser(settings: any) {
         path: '/'
       }
     ];
+    
+    // Attempt to extract JSESSIONID if present in a larger cookie string
+    if (settings.linkedinSessionCookie.includes('JSESSIONID=')) {
+        const jid = settings.linkedinSessionCookie.match(/JSESSIONID="?([^";s]+)"?/)?.[1];
+        if (jid) {
+            cookies.push({
+                name: 'JSESSIONID',
+                value: jid,
+                domain: '.www.linkedin.com',
+                path: '/'
+            });
+        }
+    }
+
     await context.addCookies(cookies);
     console.log('🔑 Session cookies injected.');
   }
 
   page = await context.newPage();
+
+  // 🕵️ PHASE 0: FORENSIC VERIFICATION
+  try {
+    console.log('🕵️ Verification Phase: Checking IP and Connectivity...');
+    await page.goto('https://api.ipify.org', { timeout: 30000 });
+    const ip = await page.innerText('body');
+    console.log(`✅ Using Proxy IP: ${ip}`);
+    await broadcastLog(`Cloud Scraper Active - Proxy IP: ${ip}`);
+
+    console.log('🕵️ Checking LinkedIn Session Health...');
+    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+    const currentUrl = page.url();
+    
+    if (currentUrl.includes('/checkpoint/') || currentUrl.includes('/login')) {
+      console.log(`🚨 ALERT: Security Checkpoint detected! URL: ${currentUrl}`);
+      await broadcastError(`Security Checkpoint Triggered! Session may need refresh. URL: ${currentUrl}`);
+    } else {
+      console.log('✅ LinkedIn Feed loaded successfully. Session is healthy.');
+      await broadcastStatus('LinkedIn Session: Healthy & Verified');
+    }
+  } catch (e: any) {
+    console.log(`⚠️ Verification failed: ${e.message}`);
+    await broadcastError(`Cloud connectivity check failed: ${e.message}`);
+  }
 }
 
 async function closeBrowser() {
