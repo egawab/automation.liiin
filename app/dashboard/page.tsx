@@ -105,39 +105,14 @@ export default function Dashboard() {
     const newState = !systemActive;
     setSystemActive(newState);
     
-    // ✅ Update settings to toggle systemActive flag
+    // ✅ Update settings to toggle systemActive flag for the Extension
     await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ systemActive: newState })
     });
-    
-    // ✅ USER ACTION: Start worker only when user clicks "Start"
-    if (newState) {
-      console.log('🚀 User clicked START - Initiating worker for CURRENT session...');
-      console.log('🧹 This will clear any old sessions and use ONLY your current data');
-      try {
-        const response = await fetch('/api/worker/start', { method: 'POST' });
-        const result = await response.json();
-        if (result.success) {
-          console.log('✅ Worker started successfully for YOUR account:', result);
-          console.log(`   • Worker PID: ${result.pid}`);
-          console.log(`   • User ID: ${result.userId}`);
-          console.log(`   • Started at: ${result.startedAt}`);
-          console.log('✅ Worker will ONLY process YOUR keywords and settings');
-        } else {
-          console.error('❌ Failed to start worker:', result);
-          if (result.error) {
-            alert(`Failed to start worker: ${result.error}`);
-          }
-        }
-      } catch (error) {
-        console.error('❌ Error starting worker:', error);
-        alert('Failed to start worker. Please try again.');
-      }
-    } else {
-      console.log('⏸️ User clicked PAUSE - Worker will stop after current cycle');
-    }
+
+    console.log(`🤖 Extension Pilot: ${newState ? 'ACTIVE' : 'PAUSED'}`);
   };
 
   const addKeyword = async () => {
@@ -289,23 +264,34 @@ export default function Dashboard() {
                         Extension Active
                       </Badge>
                     </div>
-                    <h3 className="text-xl font-bold mb-2">Browser Integration</h3>
-                    <p className="text-sm text-primary-100 mb-6 flex-1">
-                      Your LinkedIn automation is powered by the Nexora Chrome Extension for maximum safety and performance.
-                    </p>
-                    <div className="flex items-center gap-3 pt-4 border-t border-white/10">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-primary-200 uppercase tracking-wider">Status</p>
-                        <p className="text-sm font-bold truncate">Connected & Monitoring</p>
+                    <div className="flex flex-col gap-4 pt-4 border-t border-white/10">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <p className="text-xs font-medium text-primary-200 uppercase tracking-wider">Agent Pilot</p>
+                          <p className="text-sm font-bold truncate">{systemActive ? 'ACTIVE & MONITORING' : 'PAUSED'}</p>
+                        </div>
+                        <button
+                          onClick={toggleSystem}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                            systemActive 
+                              ? 'bg-success-500 text-white shadow-lg shadow-success-500/20' 
+                              : 'bg-white/20 text-white hover:bg-white/30'
+                          }`}
+                        >
+                          {systemActive ? '⏸️ PAUSE AGENT' : '🚀 START AGENT'}
+                        </button>
                       </div>
-                      <Button
-                        onClick={() => setActiveTab('extension-connect')}
-                        variant="secondary"
-                        size="sm"
-                        className="bg-white text-primary-600 hover:bg-primary-50"
-                      >
-                        Manage
-                      </Button>
+                      <div className="flex justify-between items-center">
+                        <p className="text-xs font-medium text-primary-200">INTEGRATION</p>
+                        <Button
+                          onClick={() => setActiveTab('extension-connect')}
+                          variant="secondary"
+                          size="sm"
+                          className="bg-white text-primary-600 hover:bg-primary-50 px-4 py-1.5 h-auto text-[10px] font-bold uppercase tracking-wider"
+                        >
+                          Manage
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </Card>
@@ -626,7 +612,7 @@ export default function Dashboard() {
                     {[
                       { step: '01', title: 'Extract ZIP', desc: 'Unzip the downloaded file onto your desktop.' },
                       { step: '02', title: 'Load Unpacked', desc: 'Go to chrome://extensions, enable Developer Mode, and click "Load Unpacked".' },
-                      { step: '03', title: 'Sync & Run', desc: 'Open the extension, paste your keys above, and click Sync & Run.' }
+                      { step: '03', title: 'Sync & Run', desc: `Open extension, paste keys, and click Sync. (Agent Pilot: ${systemActive ? '✅ ON' : '❌ PAUSED'})` }
                     ].map((s) => (
                       <div key={s.step} className="p-6 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary-300 transition-all group">
                          <span className="text-3xl font-black text-gray-100 group-hover:text-primary-100 transition-colors block mb-4">{s.step}</span>
