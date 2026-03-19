@@ -831,10 +831,22 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
     console.log('   Set LinkedIn session cookie');
 
     await humanDelay(2000, 4000);
-    await page.goto('https://www.linkedin.com/feed', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    });
+    try {
+      await page.goto('https://www.linkedin.com/feed', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      });
+    } catch (e: any) {
+      if (e.message.includes('ERR_TOO_MANY_REDIRECTS') || e.message.includes('ERR_ABORTED')) {
+        console.log('⚠️ Caught redirect loop on /feed. Falling back to base URL...');
+        await page.goto('https://www.linkedin.com/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        }).catch(() => {}); // Catch and continue to check isAuthenticated
+      } else {
+        throw e;
+      }
+    }
 
     await humanDelay(3000, 5000);
 
