@@ -154,7 +154,7 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
     // Strategy D: Semantic Discovery (The Ultimate Hunter)
     const allDivs = document.querySelectorAll('div, li, article');
     allDivs.forEach(el => {
-        if (containers.length >= MAX_POSTS) return;
+        if (containers.length >= MAX_POSTS_BUFFER) return;
         if (containers.includes(el)) return;
         
         const text = el.innerText || '';
