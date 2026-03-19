@@ -1,12 +1,12 @@
-﻿import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 
 const prismaClientSingleton = () => {
+  if (!process.env.DATABASE_URL) {
+    console.error('❌ CRITICAL: DATABASE_URL is not set in environment variables!');
+  }
+  
   return new PrismaClient({
-    datasources: {
-      db: {
-        url: process.env.DATABASE_URL || 'file:./dev.db'
-      }
-    }
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
   });
 };
 
