@@ -278,31 +278,33 @@ export default function Dashboard() {
                 delay={0.2}
               />
 
-              <div className="md:col-span-1">
-                <Card hover>
-                  <div className="flex items-center justify-between h-full">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">
-                        System Status
-                      </p>
-                      <h3 className="text-xl font-extrabold text-gray-900">
-                        {systemActive ? 'Autopilot Active' : 'Standby Mode'}
-                      </h3>
+              <div className="lg:col-span-1">
+                <Card className="h-full bg-gradient-to-br from-primary-600 to-primary-700 border-none shadow-xl shadow-primary-500/20">
+                  <div className="p-6 text-white h-full flex flex-col">
+                    <div className="flex justify-between items-start mb-6">
+                      <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md">
+                        <Shield className="w-6 h-6 text-white" />
+                      </div>
+                      <Badge variant="success" size="sm" className="bg-white/20 text-white border-white/30 backdrop-blur-md">
+                        Extension Active
+                      </Badge>
                     </div>
-                    <div className="flex flex-col items-end gap-3">
-                      {systemActive && (
-                        <span className="relative flex h-4 w-4">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-4 w-4 bg-success-500"></span>
-                        </span>
-                      )}
+                    <h3 className="text-xl font-bold mb-2">Browser Integration</h3>
+                    <p className="text-sm text-primary-100 mb-6 flex-1">
+                      Your LinkedIn automation is powered by the Nexora Chrome Extension for maximum safety and performance.
+                    </p>
+                    <div className="flex items-center gap-3 pt-4 border-t border-white/10">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-primary-200 uppercase tracking-wider">Status</p>
+                        <p className="text-sm font-bold truncate">Connected & Monitoring</p>
+                      </div>
                       <Button
-                        onClick={toggleSystem}
-                        variant={systemActive ? 'secondary' : 'primary'}
+                        onClick={() => setActiveTab('extension-connect')}
+                        variant="secondary"
                         size="sm"
-                        leftIcon={systemActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                        className="bg-white text-primary-600 hover:bg-primary-50"
                       >
-                        {systemActive ? 'Pause' : 'Start'}
+                        Manage
                       </Button>
                     </div>
                   </div>
@@ -549,110 +551,89 @@ export default function Dashboard() {
             </div>
           </Card>
         );
-      case 'cookie-helper':
+      case 'extension-connect':
         return (
-          <div className="max-w-5xl mx-auto">
-            {/* Cookie Helper - Integrated Version */}
-            <Card className="overflow-hidden">
-              <div className="p-6 md:p-8 border-b border-gray-100 bg-gradient-to-r from-primary-50 to-secondary-50">
-                <div className="flex items-center gap-3 mb-3">
-                  <span className="text-4xl">🍪</span>
-                  <div>
-                    <h3 className="text-2xl font-bold text-gray-900">
-                      LinkedIn Cookie Helper
-                    </h3>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Get your LinkedIn session cookie in 6 simple steps
-                    </p>
-                  </div>
+          <div className="max-w-5xl mx-auto space-y-8">
+            {/* Professional Setup Card */}
+            <Card className="overflow-hidden border-2 border-primary-100 shadow-2xl">
+              <div className="p-8 md:p-12 border-b border-gray-100 bg-gradient-to-br from-gray-900 to-gray-800 text-white relative">
+                <div className="absolute top-0 right-0 p-12 opacity-10 pointer-events-none">
+                  <Shield className="w-48 h-48" />
+                </div>
+                
+                <div className="relative z-10">
+                  <Badge variant="primary" className="mb-4 bg-primary-500 text-white border-none">Step-by-Step Guide</Badge>
+                  <h3 className="text-4xl font-black mb-4">Connect Nexora <span className="text-primary-400">Pro</span></h3>
+                  <p className="text-lg text-gray-300 max-w-2xl leading-relaxed">
+                    Transform your browser into a high-powered LinkedIn automation hub. 
+                    Simple, safe, and 100% automated.
+                  </p>
                 </div>
               </div>
 
-              <div className="p-6 md:p-8">
-                {/* Why Section */}
-                <div className="mb-8 bg-blue-50 rounded-xl p-6 border-2 border-blue-200">
-                  <div className="flex items-start gap-3">
-                    <span className="text-2xl">💡</span>
+              <div className="p-8 md:p-12 space-y-12">
+                {/* Credentials Section */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div className="space-y-6">
                     <div>
-                      <h4 className="text-lg font-bold text-blue-900 mb-2">Why do we need your cookie?</h4>
-                      <p className="text-gray-800 text-sm leading-relaxed font-medium">
-                        The LinkedIn cookie allows our automation to act on your behalf. It's like giving the 
-                        automation a temporary "key" to access LinkedIn as you.
-                      </p>
-                      <div className="mt-3 flex items-center gap-2 flex-wrap">
-                        <Badge variant="success">✓ Safe</Badge>
-                        <Badge variant="success">✓ Encrypted</Badge>
-                        <Badge variant="success">✓ Never Shared</Badge>
+                      <h4 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">1. Your Connection Keys</h4>
+                      <div className="space-y-4">
+                        <div className="group">
+                          <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Dashboard URL</label>
+                          <div className="flex gap-2">
+                            <input 
+                              readOnly 
+                              value={typeof window !== 'undefined' ? window.location.origin : ''} 
+                              className="flex-1 px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-mono font-bold text-gray-700 outline-none"
+                            />
+                            <Button variant="secondary" onClick={() => navigator.clipboard.writeText(window.location.origin)}>Copy</Button>
+                          </div>
+                        </div>
+                        <div className="group">
+                          <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Your Private API Key (User ID)</label>
+                          <div className="flex gap-2">
+                            <input 
+                              readOnly 
+                              value={settings.userId || 'Loading...'} 
+                              className="flex-1 px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-mono font-bold text-primary-700 outline-none"
+                            />
+                            <Button variant="secondary" onClick={() => navigator.clipboard.writeText(settings.userId)}>Copy</Button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
+
+                  <div className="bg-primary-50 rounded-3xl p-8 border-2 border-primary-100 flex flex-col justify-center">
+                    <h4 className="text-xl font-bold text-primary-900 mb-4 flex items-center gap-2">
+                       <Sparkles className="w-6 h-6" /> Install Extension
+                    </h4>
+                    <p className="text-primary-800 mb-8 text-sm leading-relaxed font-medium">
+                      Download the Nexora Industrial-Strength extension and load it into your Chrome browser to begin automated extraction.
+                    </p>
+                    <a href="/LinkedInExtension.zip" download className="w-full">
+                      <Button variant="primary" size="lg" className="w-full shadow-xl shadow-primary-500/30 py-6 text-lg">
+                        Download Extension (.ZIP)
+                      </Button>
+                    </a>
+                  </div>
                 </div>
 
-                {/* Step-by-Step Instructions */}
-                <div className="space-y-3 mb-8">
-                  {[
-                    { icon: '🌐', title: 'Open LinkedIn', desc: 'Go to linkedin.com and log in' },
-                    { icon: '🔧', title: 'Press F12', desc: 'Open Developer Tools (F12 or Ctrl+Shift+I)' },
-                    { icon: '📱', title: 'Application Tab', desc: 'Click "Application" tab in DevTools' },
-                    { icon: '🍪', title: 'Find Cookies', desc: 'Expand "Cookies" → Click "https://www.linkedin.com"' },
-                    { icon: '📋', title: 'Copy li_at', desc: 'Find "li_at" cookie and copy its VALUE' },
-                    { icon: '✅', title: 'Paste Below', desc: 'Paste the cookie in the settings form above' },
-                  ].map((step, idx) => (
-                    <div key={idx} className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors border border-gray-200">
-                      <div className="flex-shrink-0">
-                        <div className="w-10 h-10 rounded-full bg-primary-500 text-white flex items-center justify-center text-sm font-bold shadow-md">
-                          {idx + 1}
-                        </div>
+                {/* Installation Steps */}
+                <div className="pt-8 border-t border-gray-100">
+                  <h4 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-8">2. Quick Installation</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {[
+                      { step: '01', title: 'Extract ZIP', desc: 'Unzip the downloaded file onto your desktop.' },
+                      { step: '02', title: 'Load Unpacked', desc: 'Go to chrome://extensions, enable Developer Mode, and click "Load Unpacked".' },
+                      { step: '03', title: 'Sync & Run', desc: 'Open the extension, paste your keys above, and click Sync & Run.' }
+                    ].map((s) => (
+                      <div key={s.step} className="p-6 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary-300 transition-all group">
+                         <span className="text-3xl font-black text-gray-100 group-hover:text-primary-100 transition-colors block mb-4">{s.step}</span>
+                         <h5 className="font-bold text-gray-900 mb-2">{s.title}</h5>
+                         <p className="text-sm text-gray-500 leading-relaxed font-medium">{s.desc}</p>
                       </div>
-                      <div className="flex-1 flex items-center gap-3">
-                        <span className="text-2xl">{step.icon}</span>
-                        <div>
-                          <h5 className="text-base font-bold text-gray-900">{step.title}</h5>
-                          <p className="text-sm text-gray-600 font-medium">{step.desc}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Direct to Settings */}
-                <div className="bg-gradient-to-r from-primary-500 to-secondary-500 rounded-xl p-6 text-center">
-                  <h4 className="text-xl font-bold text-white mb-3">Ready to add your cookie?</h4>
-                  <p className="text-white/90 text-sm mb-4">
-                    Once you've copied the li_at value, go to Settings and paste it in the LinkedIn Session Cookie field
-                  </p>
-                  <Button
-                    onClick={() => setActiveTab('settings')}
-                    variant="secondary"
-                    size="lg"
-                    className="bg-white hover:bg-gray-100 text-primary-600"
-                  >
-                    <Settings className="w-5 h-5 mr-2" />
-                    Go to Settings
-                  </Button>
-                </div>
-
-                {/* Security Notice */}
-                <div className="mt-6 bg-amber-50 rounded-xl p-6 border-2 border-amber-300">
-                  <div className="flex items-start gap-3">
-                    <span className="text-2xl">🔒</span>
-                    <div>
-                      <h4 className="text-lg font-bold text-amber-900 mb-2">Security Notice</h4>
-                      <ul className="text-gray-800 space-y-1.5 text-sm font-medium">
-                        <li className="flex items-start gap-2">
-                          <span className="text-amber-600 font-bold">•</span>
-                          <span>Your cookie is encrypted before being stored</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="text-amber-600 font-bold">•</span>
-                          <span>Never share your cookie with anyone else</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="text-amber-600 font-bold">•</span>
-                          <span>Update if automation stops working</span>
-                        </li>
-                      </ul>
-                    </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -910,227 +891,101 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* LinkedIn Cookie Section */}
-                <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                {/* API & Connection Profile Section */}
+                <div className="bg-gray-900 rounded-2xl p-8 border border-gray-800 shadow-2xl relative overflow-hidden">
                   <div className="absolute right-0 top-0 text-white/5 opacity-50 scale-150 -translate-y-1/4 translate-x-1/4">
-                    <Bot size={200} />
+                    <Shield size={200} />
                   </div>
-                  <div className="relative z-10">
-                    <h4 className="text-sm font-extrabold text-white mb-3 flex items-center gap-2">
-                      <AlertCircle size={16} className="text-primary-500" />
-                      LinkedIn Session Cookie
-                    </h4>
-                    <input
-                      type="password"
-                      name="linkedinSessionCookie"
-                      defaultValue={settings.linkedinSessionCookie}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500/50 font-mono text-sm placeholder:text-gray-500"
-                      placeholder="AQEDATX..."
-                    />
-                    <p className="text-xs text-gray-400 mt-2">
-                      The <code className="px-1.5 py-0.5 bg-gray-800 rounded text-primary-400">li_at</code> cookie required for authentication
-                    </p>
-                  </div>
-                </div>
-
-                {/* Rate Limits & Engagement Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* Rate Limits */}
-                  <div>
-                    <h4 className="text-xs font-bold text-gray-900 mb-4 uppercase tracking-wide flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-primary-500" />
-                      Rate Limits
-                    </h4>
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wide">
-                          Max Comments / Day
-                        </label>
-                        <input
-                          type="number"
-                          name="maxCommentsPerDay"
-                          defaultValue={settings.maxCommentsPerDay ?? 50}
-                          className="w-full px-4 py-3 bg-white border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all text-sm font-bold text-gray-900"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wide">
-                          Max Profile Views / Day
-                        </label>
-                        <input
-                          type="number"
-                          name="maxProfileViewsPerDay"
-                          defaultValue={settings.maxProfileViewsPerDay ?? 100}
-                          className="w-full px-4 py-3 bg-white border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all text-sm font-bold text-gray-900"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Engagement Thresholds */}
-                  <div>
-                    <h4 className="text-xs font-bold text-gray-900 mb-4 uppercase tracking-wide flex items-center gap-2">
-                      <Users className="w-4 h-4 text-secondary-500" />
-                      Engagement Thresholds
-                    </h4>
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">
-                          Minimum Likes to Comment
-                        </label>
-                        <input
-                          type="number"
-                          name="minLikes"
-                          defaultValue={settings.minLikes ?? 10}
-                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all text-sm font-medium"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">
-                          Minimum Existing Comments
-                        </label>
-                        <input
-                          type="number"
-                          name="minComments"
-                          defaultValue={settings.minComments ?? 2}
-                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all text-sm font-medium"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Post Targeting Criteria Section */}
-                <div className="bg-gradient-to-br from-primary-50 to-secondary-50 rounded-2xl p-6 border-2 border-primary-200">
-                  <h4 className="text-sm font-bold text-gray-900 mb-4 uppercase tracking-wide flex items-center gap-2">
-                    <Search className="w-5 h-5 text-primary-600" />
-                    🎯 Post Targeting Criteria
-                  </h4>
-                  <p className="text-xs text-gray-700 mb-6 font-medium">
-                    Define the exact reach range for posts you want to target during searches
-                  </p>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Likes Range */}
-                    <div className="space-y-4">
-                      <h5 className="text-xs font-bold text-primary-900 uppercase tracking-wide flex items-center gap-2">
-                        👍 Likes Range
-                      </h5>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2">
-                          Minimum Likes
+                  <div className="relative z-10 space-y-8">
+                    <h4 className="text-sm font-extrabold text-white mb-6 uppercase tracking-widest flex items-center gap-3">
+                       <Shield className="w-5 h-5 text-primary-500" />
+                       Connection Profile
+                    </h4>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                      <div className="space-y-3">
+                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">
+                          Your API License Key (User ID)
                         </label>
-                        <input
-                          type="number"
-                          name="minLikes"
-                          defaultValue={settings.minLikes ?? 10}
-                          min="0"
-                          className="w-full px-4 py-3 bg-white border-2 border-primary-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all text-sm font-bold text-gray-900"
-                          placeholder="e.g., 100"
-                        />
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={settings.userId || ''}
+                            className="flex-1 px-4 py-3 bg-gray-800 border-2 border-gray-700 rounded-xl text-sm font-mono font-bold text-primary-400 outline-none"
+                          />
+                        </div>
+                        <p className="text-[10px] text-gray-500 font-medium">Use this key inside your Chrome Extension to connect this dashboard.</p>
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2">
-                          Maximum Likes (Optional)
+                      
+                      <div className="space-y-3">
+                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">
+                          Network Status
                         </label>
-                        <input
-                          type="number"
-                          name="maxLikes"
-                          defaultValue={settings.maxLikes ?? 10000}
-                          min="0"
-                          className="w-full px-4 py-3 bg-white border-2 border-primary-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all text-sm font-bold text-gray-900"
-                          placeholder="e.g., 5000"
-                        />
-                        <p className="text-xs text-gray-600 mt-1 font-medium">Leave high to target viral posts</p>
+                        <div className="px-5 py-3 bg-success-500/10 border-2 border-success-500/20 rounded-xl text-sm font-bold text-success-400 flex items-center gap-3">
+                           <div className="w-2.5 h-2.5 rounded-full bg-success-500 animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.6)]" />
+                           Browser Integrated Mode active
+                        </div>
                       </div>
                     </div>
-
-                    {/* Comments Range */}
-                    <div className="space-y-4">
-                      <h5 className="text-xs font-bold text-secondary-900 uppercase tracking-wide flex items-center gap-2">
-                        💬 Comments Range
-                      </h5>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2">
-                          Minimum Comments
-                        </label>
-                        <input
-                          type="number"
-                          name="minComments"
-                          defaultValue={settings.minComments ?? 2}
-                          min="0"
-                          className="w-full px-4 py-3 bg-white border-2 border-secondary-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-secondary-500 focus:border-secondary-500 transition-all text-sm font-bold text-gray-900"
-                          placeholder="e.g., 5"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2">
-                          Maximum Comments (Optional)
-                        </label>
-                        <input
-                          type="number"
-                          name="maxComments"
-                          defaultValue={settings.maxComments ?? 1000}
-                          min="0"
-                          className="w-full px-4 py-3 bg-white border-2 border-secondary-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-secondary-500 focus:border-secondary-500 transition-all text-sm font-bold text-gray-900"
-                          placeholder="e.g., 500"
-                        />
-                        <p className="text-xs text-gray-600 mt-1 font-medium">Leave high for active discussions</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Helper Info */}
-                  <div className="mt-6 bg-white/70 rounded-lg p-4 border border-primary-200">
-                    <p className="text-xs font-bold text-gray-800 mb-2">💡 How This Works:</p>
-                    <ul className="text-xs text-gray-700 space-y-1 font-medium">
-                      <li>• <strong>Min Likes:</strong> Only target posts with at least this many likes</li>
-                      <li>• <strong>Max Likes:</strong> Skip posts that are too viral (set high for no limit)</li>
-                      <li>• <strong>Min Comments:</strong> Ensure posts have active engagement</li>
-                      <li>• <strong>Max Comments:</strong> Avoid overly saturated discussions</li>
-                    </ul>
                   </div>
                 </div>
 
-                {/* Divider */}
-                <div className="border-t border-gray-100"></div>
-
-                {/* Human Emulation */}
-                <div>
-                  <h4 className="text-xs font-bold text-gray-900 mb-4 uppercase tracking-wide flex items-center gap-2">
-                    <Bot className="w-4 h-4 text-accent-500" />
-                    Human Emulation (Delays)
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wide">
-                        Min Delay (Minutes)
-                      </label>
-                      <input
-                        type="number"
-                        name="minDelayMins"
-                        defaultValue={settings.minDelayMins ?? 15}
-                        className="w-full px-4 py-3 bg-white border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all text-sm font-bold text-gray-900"
-                      />
+                {/* Post Targeting & Human Emulation Grid */}
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                  {/* Targeting Criteria */}
+                  <div className="bg-white border-2 border-gray-100 rounded-3xl p-8 hover:border-primary-200 transition-all shadow-sm">
+                    <h4 className="text-sm font-bold text-gray-900 mb-6 uppercase tracking-widest flex items-center gap-2">
+                      <Search className="w-5 h-5 text-primary-600" />
+                      Targeting Criteria
+                    </h4>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Min Likes</label>
+                        <input type="number" name="minLikes" defaultValue={settings.minLikes ?? 10} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Max Likes</label>
+                        <input type="number" name="maxLikes" defaultValue={settings.maxLikes ?? 10000} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Min Comm.</label>
+                        <input type="number" name="minComments" defaultValue={settings.minComments ?? 2} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Max Comm.</label>
+                        <input type="number" name="maxComments" defaultValue={settings.maxComments ?? 1000} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wide">
-                        Max Delay (Minutes)
-                      </label>
-                      <input
-                        type="number"
-                        name="maxDelayMins"
-                        defaultValue={settings.maxDelayMins ?? 45}
-                        className="w-full px-4 py-3 bg-white border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all text-sm font-bold text-gray-900"
-                      />
+                  </div>
+
+                  {/* Safety Delays */}
+                  <div className="bg-white border-2 border-gray-100 rounded-3xl p-8 hover:border-accent-200 transition-all shadow-sm">
+                    <h4 className="text-sm font-bold text-gray-900 mb-6 uppercase tracking-widest flex items-center gap-2">
+                      <Bot className="w-5 h-5 text-accent-500" />
+                      Safety Delays
+                    </h4>
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Min (Mins)</label>
+                          <input type="number" name="minDelayMins" defaultValue={settings.minDelayMins ?? 15} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Max (Mins)</label>
+                          <input type="number" name="maxDelayMins" defaultValue={settings.maxDelayMins ?? 45} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-gray-400 italic">Randomized delays emulate human behavior to prevent detection.</p>
                     </div>
                   </div>
                 </div>
 
                 {/* Submit Button */}
-                <div className="pt-4 flex justify-end border-t border-gray-100">
-                  <Button type="submit" variant="primary" size="lg">
-                    Save Changes
+                <div className="pt-8 flex justify-end">
+                  <Button type="submit" variant="primary" size="lg" className="px-16 py-6 text-lg shadow-2xl shadow-primary-500/30">
+                    Apply Global Settings
                   </Button>
                 </div>
               </form>
@@ -1156,7 +1011,7 @@ export default function Dashboard() {
         {/* Header */}
         <Header 
           title={activeTab} 
-          sessionConnected={!!settings.linkedinSessionCookie} 
+          sessionConnected={true} 
         />
 
         {/* Main Content */}

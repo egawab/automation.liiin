@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Badge from '@/components/ui/Badge';
-import { CheckCircle, AlertCircle } from 'lucide-react';
+import { CheckCircle, AlertCircle, Shield } from 'lucide-react';
 
 interface HeaderProps {
   title: string;
@@ -20,12 +20,12 @@ export default function Header({ title, sessionConnected }: HeaderProps) {
       {/* Session Status */}
       <div className="flex items-center gap-4">
         <Badge
-          variant={sessionConnected ? 'success' : 'warning'}
+          variant="success"
           size="md"
           dot
-          icon={sessionConnected ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+          icon={<Shield className="w-3.5 h-3.5" />}
         >
-          {sessionConnected ? 'Session Connected' : 'Setup Required'}
+          Extension Mode: Active
         </Badge>
       </div>
     </header>

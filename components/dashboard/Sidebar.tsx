@@ -23,7 +23,7 @@ const navItems: NavItem[] = [
   { id: 'keywords', label: 'Target Keywords', icon: Search },
   { id: 'comments', label: 'Comment Bank', icon: MessageSquareText },
   { id: 'autoposts', label: 'Auto Posts', icon: Sparkles },
-  { id: 'cookie-helper', label: 'Cookie Helper', icon: Cookie },
+  { id: 'extension-connect', label: 'Connect Extension', icon: Shield },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
