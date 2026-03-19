@@ -618,21 +618,83 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Installation Steps */}
-                <div className="pt-8 border-t border-gray-100">
-                  <h4 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-8">2. Quick Installation</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {[
-                      { step: '01', title: 'Extract ZIP', desc: 'Unzip the downloaded file onto your desktop.' },
-                      { step: '02', title: 'Load Unpacked', desc: 'Go to chrome://extensions, enable Developer Mode, and click "Load Unpacked".' },
-                      { step: '03', title: 'Sync & Run', desc: `Open extension, paste keys, and click Sync. (Agent Pilot: ${systemActive ? '✅ ON' : '❌ PAUSED'})` }
-                    ].map((s) => (
-                      <div key={s.step} className="p-6 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary-300 transition-all group">
-                         <span className="text-3xl font-black text-gray-100 group-hover:text-primary-100 transition-colors block mb-4">{s.step}</span>
-                         <h5 className="font-bold text-gray-900 mb-2">{s.title}</h5>
-                         <p className="text-sm text-gray-500 leading-relaxed font-medium">{s.desc}</p>
+                   {/* Comprehensive Installation Masterclass */}
+                <div className="pt-12 border-t border-gray-100">
+                  <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-12">
+                    <div>
+                      <h4 className="text-sm font-bold text-primary-500 uppercase tracking-widest mb-2">2. Visual Setup Masterclass</h4>
+                      <h3 className="text-3xl font-black text-gray-900">Step-by-Step Implementation</h3>
+                    </div>
+                    <p className="text-sm text-gray-500 font-medium max-w-xs md:text-right">
+                      Follow these 4 steps to activate your industrial-scale automation.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                    {/* Step 1 */}
+                    <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
+                      <div className="aspect-video bg-gray-50 relative overflow-hidden">
+                        <img src="/img/step1.png" alt="Extracting ZIP" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                        <div className="absolute top-4 left-4 bg-gray-900 text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">01</div>
                       </div>
-                    ))}
+                      <div className="p-8">
+                        <h5 className="text-xl font-black text-gray-900 mb-2">فك الضغط عن الملف (Extract ZIP)</h5>
+                        <p className="text-sm text-gray-600 leading-relaxed font-medium">
+                          بعد تحميل الملف، قم بالضغط عليه بزر الفأرة الأيمن واختر <strong>Extract All</strong>. تأكد من فكه في مجلد واضح على سطح المكتب.
+                          <br /><span className="text-xs text-gray-400 mt-2 block italic">Right-click the ZIP and extract it to your desktop.</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Step 2 */}
+                    <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
+                      <div className="aspect-video bg-gray-50 relative overflow-hidden">
+                        <img src="/img/step2.png" alt="Developer Mode" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                        <div className="absolute top-4 left-4 bg-gray-900 text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">02</div>
+                      </div>
+                      <div className="p-8">
+                        <h5 className="text-xl font-black text-gray-900 mb-2">تفعيل وضع المطور (Developer Mode)</h5>
+                        <p className="text-sm text-gray-600 leading-relaxed font-medium">
+                          اذهب إلى <strong>chrome://extensions</strong> في متصفحك. قم بتفعيل زر <strong>Developer Mode</strong> الموجود في أعلى يمين الصفحة.
+                          <br /><span className="text-xs text-gray-400 mt-2 block italic">Go to extensions settings and toggle the Developer Mode switch ON.</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Step 3 */}
+                    <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
+                      <div className="aspect-video bg-gray-50 relative overflow-hidden">
+                        <img src="/img/step3.png" alt="Load Unpacked" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                        <div className="absolute top-4 left-4 bg-gray-900 text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">03</div>
+                      </div>
+                      <div className="p-8">
+                        <h5 className="text-xl font-black text-gray-900 mb-2">تحميل الإضافة (Load Unpacked)</h5>
+                        <p className="text-sm text-gray-600 leading-relaxed font-medium">
+                          اضغط على زر <strong>Load Unpacked</strong> واختر المجلد الذي قمت بفك ضغطه في الخطوة الأولى. ستظهر لك إضافة Nexora فوراً.
+                          <br /><span className="text-xs text-gray-400 mt-2 block italic">Click "Load Unpacked" and select the extracted folder.</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Step 4 */}
+                    <div className="bg-white border-2 border-primary-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group ring-4 ring-primary-50">
+                      <div className="aspect-video bg-primary-50 relative overflow-hidden">
+                        <img src="/img/step4.png" alt="Sync and Run" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                        <div className="absolute top-4 left-4 bg-primary-600 text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">04</div>
+                      </div>
+                      <div className="p-8">
+                        <h5 className="text-xl font-black text-primary-900 mb-2">المزامنة والتشغيل (Sync & Run)</h5>
+                        <div className="space-y-3">
+                          <p className="text-sm text-gray-700 leading-relaxed font-bold">
+                            افتح الإضافة، الصق مفاتيح الربط (Keys) المذكورة أعلاه، واضغط على <strong>Sync & Run Now</strong>.
+                          </p>
+                          <div className={`px-4 py-2 rounded-xl text-[10px] font-black inline-flex items-center gap-2 ${systemActive ? 'bg-success-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                             <div className={`w-2 h-2 rounded-full ${systemActive ? 'bg-white animate-pulse' : 'bg-gray-400'}`} />
+                             AGENT STATUS: {systemActive ? 'READY TO WORK' : 'PAUSED (START PILOT FIRST)'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
