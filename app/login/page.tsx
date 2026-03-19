@@ -60,9 +60,14 @@ function LoginForm() {
             }
 
             if (!res.ok) {
-                console.error('❌ API Error Details:', data);
+                console.error('❌ API Error Details:', JSON.stringify(data, null, 2));
                 if (data.details) {
-                    console.error('🔍 Forensic Details:', data.details);
+                    console.error('🔍 Forensic Details (Expanded):', JSON.stringify(data.details, null, 2));
+                    
+                    // Specific hint for common Vercel errors
+                    if (JSON.stringify(data.details).includes('DATABASE_URL')) {
+                        console.error('💡 HINT: Go to Vercel Settings > Environment Variables and add DATABASE_URL!');
+                    }
                 }
                 throw new Error(data.error || 'Something went wrong');
             }

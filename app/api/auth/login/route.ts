@@ -61,12 +61,17 @@ export async function POST(req: Request) {
     } catch (error: any) {
         console.error('❌ Login API Error:', error);
         
+        // 🚨 CRITICAL DIAGNOSTIC DATA
+        const isDbMissing = !process.env.DATABASE_URL;
+        const msg = isDbMissing ? 'MISSING_DATABASE_URL' : error.message;
+
         return NextResponse.json({ 
-            error: 'Internal login error',
+            error: isDbMissing ? 'CRITICAL: Database environment variable is missing in Vercel!' : 'Internal login error',
             details: {
-                message: error.message,
-                code: error.code,
-                meta: error.meta
+                diagnostic_msg: msg,
+                prisma_code: error.code,
+                meta: error.meta,
+                timestamp: new Date().toISOString()
             }
         }, { status: 500 });
     }
