@@ -1,5 +1,5 @@
-# Use official Playwright image for cloud-stable scraping
-FROM mcr.microsoft.com/playwright:v1.54.0-noble
+# Use official Playwright image aligned with package.json (v1.58.2)
+FROM mcr.microsoft.com/playwright:v1.58.2-noble
 
 # Root for setup
 USER root
