@@ -769,6 +769,52 @@ export default function Dashboard() {
       case 'settings':
         return (
           <div className="max-w-4xl mx-auto">
+            {/* Chrome Extension Integration */}
+            <Card className="mb-8 border-2 border-indigo-100 overflow-hidden shadow-sm">
+              <div className="p-6 md:p-8 border-b border-indigo-50 bg-gradient-to-r from-blue-50 to-indigo-50">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500 text-white flex items-center justify-center shadow-md">
+                    <Shield className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-extrabold text-gray-900">
+                      Chrome Extension Connection
+                    </h3>
+                    <p className="text-sm text-gray-600 font-medium mt-1">
+                      Link your local browser extension to this dashboard
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="p-6 md:p-8 bg-white">
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 flex flex-col md:flex-row items-center justify-between gap-4">
+                  <div className="flex-1 text-center md:text-left">
+                    <p className="text-sm font-extrabold text-gray-800 uppercase tracking-wide">
+                      Your Dashboard API Key (User ID)
+                    </p>
+                    <p className="text-xs text-gray-500 mb-3 mt-1 font-medium">
+                      Copy and paste this exact key into the Chrome Extension popup window to authenticate it.
+                    </p>
+                    <code className="bg-indigo-50 border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg font-mono text-base font-bold select-all block break-all">
+                      {settings.userId || 'Loading...'}
+                    </code>
+                  </div>
+                  <Button 
+                    onClick={() => {
+                      if (settings.userId) {
+                        navigator.clipboard.writeText(settings.userId);
+                        alert('✅ API Key copied to clipboard!');
+                      }
+                    }}
+                    variant="primary"
+                    className="shrink-0 w-full md:w-auto shadow-md"
+                  >
+                    Copy API Key
+                  </Button>
+                </div>
+              </div>
+            </Card>
+
             <Card>
               <div className="p-6 md:p-8 border-b border-gray-100">
                 <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
