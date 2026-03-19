@@ -44,7 +44,7 @@ export async function GET(req: Request) {
       settings: {
         minLikes: settings.minLikes || 0,
         minComments: settings.minComments || 0,
-        maxKeywordsPerCycle: settings.maxKeywordsPerCycle || 3
+        maxKeywordsPerCycle: 3
       },
       keywords: keywords.map(k => ({ id: k.id, keyword: k.keyword }))
     }, { status: 200 }));
