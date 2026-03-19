@@ -264,33 +264,46 @@ export default function Dashboard() {
                         Extension Active
                       </Badge>
                     </div>
-                    <div className="flex flex-col gap-4 pt-4 border-t border-white/10">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <p className="text-xs font-medium text-primary-200 uppercase tracking-wider">Agent Pilot</p>
-                          <p className="text-sm font-bold truncate">{systemActive ? 'ACTIVE & MONITORING' : 'PAUSED'}</p>
-                        </div>
-                        <button
-                          onClick={toggleSystem}
-                          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                            systemActive 
-                              ? 'bg-success-500 text-white shadow-lg shadow-success-500/20' 
-                              : 'bg-white/20 text-white hover:bg-white/30'
-                          }`}
-                        >
-                          {systemActive ? '⏸️ PAUSE AGENT' : '🚀 START AGENT'}
-                        </button>
+
+                    <div className="flex flex-col flex-1 justify-between">
+                      <div className="mb-6">
+                        <h3 className="text-lg font-extrabold mb-1 truncate">Browser Active</h3>
+                        <p className="text-[11px] text-primary-100 font-medium leading-tight">
+                          Integrated with Chrome for maximum safety.
+                        </p>
                       </div>
-                      <div className="flex justify-between items-center">
-                        <p className="text-xs font-medium text-primary-200">INTEGRATION</p>
-                        <Button
-                          onClick={() => setActiveTab('extension-connect')}
-                          variant="secondary"
-                          size="sm"
-                          className="bg-white text-primary-600 hover:bg-primary-50 px-4 py-1.5 h-auto text-[10px] font-bold uppercase tracking-wider"
-                        >
-                          Manage
-                        </Button>
+
+                      <div className="space-y-3 pt-4 border-t border-white/10">
+                        {/* Agent Pilot Row */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-bold text-primary-200 uppercase tracking-widest">Pilot</p>
+                            <p className="text-xs font-black truncate">{systemActive ? 'ACTIVE' : 'PAUSED'}</p>
+                          </div>
+                          <button
+                            onClick={toggleSystem}
+                            type="button"
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all ${
+                              systemActive 
+                                ? 'bg-success-400 text-white shadow-md shadow-success-500/30' 
+                                : 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
+                            }`}
+                          >
+                            {systemActive ? '⏸️ PAUSE' : '🚀 START'}
+                          </button>
+                        </div>
+
+                        {/* Manage Row */}
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[10px] font-bold text-primary-200 uppercase tracking-widest">Extension</p>
+                          <button
+                            onClick={() => setActiveTab('extension-connect')}
+                            type="button"
+                            className="bg-white/10 hover:bg-white/20 text-white border border-white/30 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all"
+                          >
+                            Manage
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
