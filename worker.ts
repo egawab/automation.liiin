@@ -91,26 +91,33 @@ async function launchBrowser(settings: any) {
 
   page = await context.newPage();
 
-  // 🕵️ IP & NAVIGATION VERIFICATION
+  // 🕵️ IP & NAVIGATION VERIFICATION (Non-blocking fallback)
   try {
-    await page.goto('https://api.ipify.org', { timeout: 30000 });
+    console.log('📡 Verifying Proxy Connection (60s timeout)...');
+    await page.goto('https://api.ipify.org', { timeout: 60000 });
     const ip = await page.innerText('body');
     console.log(`✅ Verified Proxy IP: ${ip}`);
     await broadcastLog(`Proxy Active: ${ip}`);
+  } catch (e: any) {
+    console.warn(`⚠️ IP Verification Timeout/Failed: ${e.message}. Proceeding to LinkedIn anyway...`);
+    await broadcastLog('Proxy Verification Slow/Failed - Proceeding to LinkedIn');
+  }
 
-    // STABILITY FLOW: FEED FIRST
-    console.log('🎭 Stability Warm-up: Navigating to Feed...');
-    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+  // STABILITY FLOW: FEED FIRST
+  try {
+    console.log('🎭 Stability Warm-up: Navigating to Feed (60s timeout)...');
+    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     
     // Check for Redirects/Checkpoints Early
     const url = page.url();
     if (url.includes('/checkpoint/') || url.includes('/login')) {
+      console.error(`🚨 SECURITY TRIGGERED: ${url}`);
       throw new Error(`SECURITY_TRIGGERED: ${url}`);
     }
 
-    console.log('🕒 Simulating Human Browsing (15s)...');
-    await humanScroll(3); // Slight scroll on feed
-    await page.waitForTimeout(randomInt(10000, 20000));
+    console.log('🕒 Simulating Human Browsing (20s)...');
+    await humanScroll(2);
+    await page.waitForTimeout(randomInt(15000, 25000));
     
   } catch (e: any) {
     console.error(`❌ Launch Verification Failed: ${e.message}`);
