@@ -52,14 +52,22 @@ export async function POST(req: Request) {
         const response = NextResponse.json({ success: true, userId: user.id });
         response.cookies.set('auth_token', token, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
+            secure: true,
             sameSite: 'strict',
             maxAge: 60 * 60 * 24 * 7
         });
 
         return response;
-    } catch (error) {
-        console.error('Login error:', error);
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    } catch (error: any) {
+        console.error('❌ Login API Error:', error);
+        
+        return NextResponse.json({ 
+            error: 'Internal login error',
+            details: {
+                message: error.message,
+                code: error.code,
+                meta: error.meta
+            }
+        }, { status: 500 });
     }
 }

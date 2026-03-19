@@ -54,35 +54,30 @@ export async function POST(req: Request) {
         const response = NextResponse.json({ success: true, userId: user.id });
         response.cookies.set('auth_token', token, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
+            secure: true,
             sameSite: 'strict',
             maxAge: 60 * 60 * 24 * 7
         });
 
         return response;
     } catch (error: any) {
-        console.error('Registration error:', error);
+        console.error('❌ Registration API Error:', error);
         
-        // Detailed error logging for debugging
-        if (error.code === 'P2002') {
-            return NextResponse.json({ error: 'User already exists' }, { status: 400 });
-        }
-        
-        if (error.code === 'P2003') {
-            return NextResponse.json({ error: 'Database constraint error. Please contact support.' }, { status: 500 });
-        }
-        
-        // Log the actual error for debugging
-        console.error('Full error details:', {
+        // Expose errors for debugging on Vercel
+        const errorDetails = {
             message: error.message,
             code: error.code,
             meta: error.meta,
-            stack: error.stack
-        });
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        };
+
+        if (error.code === 'P2002') {
+            return NextResponse.json({ error: 'User already exists', details: errorDetails }, { status: 409 });
+        }
         
         return NextResponse.json({ 
-            error: 'Internal server error',
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+            error: 'Internal registration error',
+            details: errorDetails
         }, { status: 500 });
     }
 }
