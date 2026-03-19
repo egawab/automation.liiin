@@ -44,12 +44,13 @@ export async function POST(req: Request) {
     } catch(e) { console.error("Log creation failed:", e); }
 
     let savedCount = 0;
+    let updatedCount = 0;
     
-    // Process posts in parallel for performance
+    // Process posts in parallel for maximum performance
     if (posts && posts.length > 0) {
         await Promise.all(posts.map(async (post) => {
           try {
-            // Use findUnique if possible, else findFirst
+            // Check for existing post for THIS user
             const existing = await prisma.savedPost.findFirst({
               where: { userId, postUrl: post.url }
             });
@@ -68,14 +69,30 @@ export async function POST(req: Request) {
                 }
               });
               savedCount++;
+            } else {
+              // OPTIMIZATION: Update reach metrics for existing post to show "Action"
+              await prisma.savedPost.update({
+                where: { id: existing.id },
+                data: {
+                  likes: Number(post.likes || 0),
+                  comments: Number(post.comments || 0),
+                  savedAt: new Date() // Refresh timestamp to show it was recently seen
+                }
+              });
+              updatedCount++;
             }
           } catch (err) {
-            console.warn(`[API] Failed to save post ${post.url}:`, err);
+            console.warn(`[API] Failed to process post ${post.url}:`, err);
           }
         }));
     }
 
-    return setCorsHeaders(NextResponse.json({ success: true, savedCount, message: `Processed ${posts.length} posts. Saved ${savedCount} new ones.` }, { status: 200 }));
+    return setCorsHeaders(NextResponse.json({ 
+      success: true, 
+      savedCount, 
+      updatedCount, 
+      message: `Processed ${posts.length} posts. ${savedCount} New, ${updatedCount} Refreshed.` 
+    }, { status: 200 }));
 
   } catch (error: any) {
     console.error('Extension Results API Error:', error);
