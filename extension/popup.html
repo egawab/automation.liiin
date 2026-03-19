@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LinkedIn Auto-Worker</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      width: 320px;
+      padding: 0;
+      margin: 0;
+      color: #1f2937;
+      background: #f9fafb;
+    }
+    .container {
+      padding: 20px;
+    }
+    .card {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h3 {
+      margin: 0 0 16px 0;
+      color: #0077b5;
+      font-size: 18px;
+    }
+    label {
+      font-weight: 600;
+      font-size: 12px;
+      display: block;
+      margin-bottom: 4px;
+      color: #4b5563;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px;
+      margin-bottom: 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+    #saveBtn {
+      background: #0077b5;
+      color: white;
+      margin-bottom: 16px;
+    }
+    #saveBtn:hover { background: #005e8d; }
+    
+    #syncBtn {
+      background: #10b981;
+      color: white;
+    }
+    #syncBtn:hover { background: #059669; }
+    #syncBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    #status {
+      margin-top: 12px;
+      font-size: 12px;
+      text-align: center;
+      min-height: 18px;
+      font-weight: 500;
+    }
+    .info {
+      font-size: 11px;
+      color: #6b7280;
+      background: #f3f4f6;
+      padding: 12px;
+      margin-top: 16px;
+      border-radius: 0 0 0 0;
+      border-top: 1px solid #e5e7eb;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h3>🚀 Auto-Worker Config</h3>
+      
+      <label for="dashboardUrl">Dashboard URL</label>
+      <input type="text" id="dashboardUrl" placeholder="https://your-app.vercel.app">
+      
+      <label for="userId">Dashboard API Key (User ID)</label>
+      <input type="text" id="userId" placeholder="67baea48-...">
+      
+      <button id="saveBtn">Save Settings</button>
+      
+      <div style="border-top: 1px dotted #e5e7eb; margin: 16px 0; padding-top: 16px;">
+        <button id="syncBtn">🔄 Sync & Run Now</button>
+      </div>
+
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <div class="info">
+    <b>Status:</b> Runs in background. Ensure your Dashboard "System Active" is ON for this to process jobs.
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

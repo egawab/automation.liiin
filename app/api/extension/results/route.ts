@@ -21,7 +21,11 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { keyword, posts } = body;
+    const { keyword, posts, debugInfo } = body;
+
+    if (debugInfo) {
+      console.log(`[Ext-Diagnostic] User ${userId} reported empty page for ${keyword}. Snippet:`, debugInfo);
+    }
 
     if (!posts || !Array.isArray(posts)) {
       return setCorsHeaders(NextResponse.json({ error: 'Invalid payload: posts array required' }, { status: 400 }));
@@ -57,7 +61,8 @@ export async function POST(req: Request) {
       data: {
         userId,
         action: 'SEARCH',
-        postUrl: `ext-search:${keyword}`
+        postUrl: posts.length === 0 && debugInfo ? `ext-search:DEBUG_EMPTY_PAGE` : `ext-search:${keyword}`,
+        comment: debugInfo || null
       }
     });
 
