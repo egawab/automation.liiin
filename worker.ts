@@ -25,21 +25,22 @@ let context: BrowserContext | null = null;
 let page: Page | null = null;
 let isSystemActive = true;
 
-const SLEEP_SHORT = 2000;
-const SLEEP_LONG = 5000;
+// Throttling for Datacenter Stability
+const MAX_SEARCHES_PER_RUN = 2;
+const MAX_POSTS_PER_RUN = 20;
 
 // ============================================================================
-// BROWSER LIFECYCLE
+// BROWSER LIFECYCLE (STABILITY OPTIMIZED)
 // ============================================================================
 
 async function launchBrowser(settings: any) {
-  console.log('🌐 Launching Industrial Cloud Scraper...');
+  console.log('🛡️ Launching Stealth-Optimized Scraper...');
   
-  // 🛡️ INDUSTRIAL PROXY SETTINGS
+  // 🛡️ EXTRACT PROXY FROM ENV OR SETTINGS
   const proxyConfig = {
-    server: 'http://brd.superproxy.io:33335',
-    username: 'brd-customer-hl_848e74c6-zone-datacenter_proxy1',
-    password: 'k2fui3km5bqg'
+    server: `http://${process.env.PROXY_HOST || 'brd.superproxy.io'}:${process.env.PROXY_PORT || '33335'}`,
+    username: process.env.PROXY_USER || 'brd-customer-hl_848e74c6-zone-datacenter_proxy1',
+    password: process.env.PROXY_PASS || 'k2fui3km5bqg'
   };
 
   const launchOptions: any = {
@@ -50,19 +51,22 @@ async function launchBrowser(settings: any) {
       '--disable-setuid-sandbox',
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
-      '--window-size=1920,1080'
+      '--window-size=1920,1080',
+      '--lang=en-US'
     ]
   };
 
-  console.log(`📡 Connecting through Proxy: ${proxyConfig.server}`);
+  console.log(`📡 Deployment Proxy: ${proxyConfig.server}`);
   browser = await chromium.launch(launchOptions);
   
   context = await browser!.newContext({
     viewport: { width: 1920, height: 1080 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    locale: 'en-US',
+    timezoneId: 'America/New_York'
   });
 
-  // Inject Cookies for Authentication (li_at + JSESSIONID)
+  // Inject Dedicated LinkedIn Cookies
   if (settings.linkedinSessionCookie) {
     const cookies = [
       {
@@ -73,16 +77,11 @@ async function launchBrowser(settings: any) {
       }
     ];
     
-    // Attempt to extract JSESSIONID if present in a larger cookie string
+    // Attempt extract JSESSIONID
     if (settings.linkedinSessionCookie.includes('JSESSIONID=')) {
         const jid = settings.linkedinSessionCookie.match(/JSESSIONID="?([^";s]+)"?/)?.[1];
         if (jid) {
-            cookies.push({
-                name: 'JSESSIONID',
-                value: jid,
-                domain: '.www.linkedin.com',
-                path: '/'
-            });
+            cookies.push({ name: 'JSESSIONID', value: jid, domain: '.www.linkedin.com', path: '/' });
         }
     }
 
@@ -92,28 +91,31 @@ async function launchBrowser(settings: any) {
 
   page = await context.newPage();
 
-  // 🕵️ PHASE 0: FORENSIC VERIFICATION
+  // 🕵️ IP & NAVIGATION VERIFICATION
   try {
-    console.log('🕵️ Verification Phase: Checking IP and Connectivity...');
     await page.goto('https://api.ipify.org', { timeout: 30000 });
     const ip = await page.innerText('body');
-    console.log(`✅ Using Proxy IP: ${ip}`);
-    await broadcastLog(`Cloud Scraper Active - Proxy IP: ${ip}`);
+    console.log(`✅ Verified Proxy IP: ${ip}`);
+    await broadcastLog(`Proxy Active: ${ip}`);
 
-    console.log('🕵️ Checking LinkedIn Session Health...');
+    // STABILITY FLOW: FEED FIRST
+    console.log('🎭 Stability Warm-up: Navigating to Feed...');
     await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 45000 });
-    const currentUrl = page.url();
     
-    if (currentUrl.includes('/checkpoint/') || currentUrl.includes('/login')) {
-      console.log(`🚨 ALERT: Security Checkpoint detected! URL: ${currentUrl}`);
-      await broadcastError(`Security Checkpoint Triggered! Session may need refresh. URL: ${currentUrl}`);
-    } else {
-      console.log('✅ LinkedIn Feed loaded successfully. Session is healthy.');
-      await broadcastStatus('LinkedIn Session: Healthy & Verified');
+    // Check for Redirects/Checkpoints Early
+    const url = page.url();
+    if (url.includes('/checkpoint/') || url.includes('/login')) {
+      throw new Error(`SECURITY_TRIGGERED: ${url}`);
     }
+
+    console.log('🕒 Simulating Human Browsing (15s)...');
+    await humanScroll(3); // Slight scroll on feed
+    await page.waitForTimeout(randomInt(10000, 20000));
+    
   } catch (e: any) {
-    console.log(`⚠️ Verification failed: ${e.message}`);
-    await broadcastError(`Cloud connectivity check failed: ${e.message}`);
+    console.error(`❌ Launch Verification Failed: ${e.message}`);
+    await broadcastError(`Launch Error: ${e.message}`);
+    throw e;
   }
 }
 
@@ -125,72 +127,82 @@ async function closeBrowser() {
 }
 
 // ============================================================================
-// SCRAPING LOGIC
+// STABILITY-FIRST SCRAPING
 // ============================================================================
 
 async function scrapeKeyword(keyword: string) {
   if (!page) return [];
   
   const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=SWITCH_SEARCH_VERTICAL`;
-  console.log(`🔍 Navigating to: ${keyword}`);
+  console.log(`🔍 Navigating to Search: ${keyword}`);
   
   await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await broadcastStatus(`Searching: ${keyword}`);
   
-  // Wait for results
-  try {
-    await page.waitForSelector('.reusable-search__result-container', { timeout: 15000 });
-  } catch (e) {
-    console.log('⚠️ No results appeared or timeout.');
+  // Detect Checkpoint after navigation
+  if (page.url().includes('/checkpoint/')) {
+    console.log('🚨 Checkpoint detected on search page!');
+    await broadcastError('Search Checkpoint Triggered. Stopping.');
     return [];
   }
 
-  // Industrial Deep Scrolling (20 iterations)
-  console.log('📜 Performing Industrial Deep Scroll...');
-  for (let i = 0; i < 20; i++) {
-    await page.evaluate(() => window.scrollBy(0, 800));
-    await page.waitForTimeout(1500);
+  await broadcastStatus(`Searching: ${keyword}`);
+  await page.waitForTimeout(randomInt(5000, 8000));
+
+  // Gradual Human Scrolling
+  console.log('📜 Performing Gradual Human Scroll...');
+  for (let i = 0; i < 10; i++) {
+    await humanScroll(1);
+    await page.waitForTimeout(randomInt(3000, 6000));
     
-    // Click "See more results" if it exists
+    // Check for "See more"
     const moreBtn = await page.$('button.search-results-bottom-pagination__button');
-    if (moreBtn) await moreBtn.click();
+    if (moreBtn && await moreBtn.isVisible()) {
+      await moreBtn.click();
+      await page.waitForTimeout(randomInt(4000, 7000));
+    }
   }
 
-  // Extraction (Ported from extension/content.js logic)
+  // Extraction
   const posts = await page.evaluate(() => {
     const results: any[] = [];
     const containers = document.querySelectorAll('.reusable-search__result-container');
     
-    containers.forEach(container => {
+    containers.forEach((container, index) => {
+      if (index >= 20) return; // Cap for stability
       const urlEl = container.querySelector('a[href*="/feed/update/"]') as HTMLAnchorElement;
       if (!urlEl) return;
       
       const url = urlEl.href.split('?')[0];
       const text = (container as HTMLElement).innerText;
       
-      // Reach Parsing
-      let likes = 0;
-      let comments = 0;
-      
+      let likes = 0; let comments = 0;
       const likeMatch = text.match(/(\d[\d,]*)\s*(reactions|likes)/i);
       if (likeMatch) likes = parseInt(likeMatch[1].replace(/,/g, ''));
-      
       const commMatch = text.match(/(\d[\d,]*)\s*comments/i);
       if (commMatch) comments = parseInt(commMatch[1].replace(/,/g, ''));
       
-      results.push({
-        url,
-        likes,
-        comments,
-        author: 'Post Author',
-        preview: text.substring(0, 200)
-      });
+      results.push({ url, likes, comments, author: 'Post Author', preview: text.substring(0, 200) });
     });
-    
     return results;
   });
 
-  return posts;
+  return posts.slice(0, MAX_POSTS_PER_RUN);
+}
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+async function humanScroll(times: number) {
+  if (!page) return;
+  for (let i = 0; i < times; i++) {
+    await page.evaluate(() => window.scrollBy({ top: 400 + Math.random() * 400, behavior: 'smooth' }));
+    await page.waitForTimeout(randomInt(1500, 3000));
+  }
+}
+
+function randomInt(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
 // ============================================================================
@@ -198,70 +210,58 @@ async function scrapeKeyword(keyword: string) {
 // ============================================================================
 
 async function runSovereignWorker() {
-  console.log('🚀 Sovereign Cloud Worker initialized.');
+  console.log('🚀 Stability-Optimized Cloud Worker Starting...');
   
   while (isSystemActive) {
     try {
-      // 1. Fetch ALL users that have systemActive = true
       const allSettings = await prisma.settings.findMany({
         where: { systemActive: true },
         include: { user: { include: { keywords: { where: { active: true } } } } }
       });
 
       if (allSettings.length === 0) {
-        console.log('😴 No active users found. Sleeping...');
-        await new Promise(r => setTimeout(r, 30000));
+        await new Promise(r => setTimeout(r, 60000));
         continue;
       }
 
       for (const setting of allSettings) {
         const { user, userId } = setting;
         setUserContext(userId);
-        
         if (!user.keywords || user.keywords.length === 0) continue;
         
         await launchBrowser(setting);
         
+        let searchCount = 0;
         for (const kw of user.keywords) {
+          if (searchCount >= MAX_SEARCHES_PER_RUN) break;
+          
           const results = await scrapeKeyword(kw.keyword);
-          console.log(`✅ Extracted ${results.length} posts for ${kw.keyword}`);
+          console.log(`✅ Processed ${results.length} posts for ${kw.keyword}`);
           
           if (results.length > 0) {
-            // Send results to our own API
             const apiUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
             await fetch(`${apiUrl}/api/extension/results`, {
               method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'x-extension-token': userId
-              },
-              body: JSON.stringify({
-                keyword: kw.keyword,
-                posts: results
-              })
+              headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+              body: JSON.stringify({ keyword: kw.keyword, posts: results })
             });
           }
           
-          // Wait between keywords to look human
-          await new Promise(r => setTimeout(r, randomInt(15000, 30000)));
+          searchCount++;
+          await page!.waitForTimeout(randomInt(10000, 20000)); // Big pause between searches
         }
         
         await closeBrowser();
       }
 
-      // Cycle Delay
-      await new Promise(r => setTimeout(r, 60000));
+      await new Promise(r => setTimeout(r, 300000)); // 5 min interval for datacenter safety
       
-    } catch (error) {
-      console.error('❌ Worker Loop Error:', error);
+    } catch (error: any) {
+      console.error('❌ Stability Error:', error.message);
       await closeBrowser();
       await new Promise(r => setTimeout(r, 60000));
     }
   }
-}
-
-function randomInt(min: number, max: number) {
-  return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
 runSovereignWorker();
