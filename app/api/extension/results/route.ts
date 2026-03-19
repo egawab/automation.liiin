@@ -31,42 +31,51 @@ export async function POST(req: Request) {
       return setCorsHeaders(NextResponse.json({ error: 'Invalid payload: posts array required' }, { status: 400 }));
     }
 
-    let savedCount = 0;
-    
-    // Process and save posts that meet criteria and don't exist yet
-    for (const post of posts) {
-      const existing = await prisma.savedPost.findFirst({
-        where: { userId, postUrl: post.url }
-      });
-
-      if (!existing) {
-        await prisma.savedPost.create({
+    // 1. Log the action for dashboard metrics (First, to ensure we track the attempt)
+    try {
+        await prisma.log.create({
           data: {
             userId,
-            postUrl: post.url,
-            postAuthor: post.author || 'Unknown',
-            postPreview: post.preview || '',
-            likes: post.likes || 0,
-            comments: post.comments || 0,
-            keyword: keyword || 'auto',
-            visited: false
+            action: 'SEARCH',
+            postUrl: posts.length === 0 && debugInfo ? `ext-search:DEBUG_EMPTY_PAGE` : `ext-search:CONTENT`,
+            comment: debugInfo || (posts.length > 0 ? `KEYWORD: ${keyword} | FOUND: ${posts.length}` : `KEYWORD: ${keyword}`)
           }
         });
-        savedCount++;
-      }
+    } catch(e) { console.error("Log creation failed:", e); }
+
+    let savedCount = 0;
+    
+    // Process posts in parallel for performance
+    if (posts && posts.length > 0) {
+        await Promise.all(posts.map(async (post) => {
+          try {
+            // Use findUnique if possible, else findFirst
+            const existing = await prisma.savedPost.findFirst({
+              where: { userId, postUrl: post.url }
+            });
+    
+            if (!existing) {
+              await prisma.savedPost.create({
+                data: {
+                  userId,
+                  postUrl: post.url,
+                  postAuthor: String(post.author || 'Unknown').substring(0, 100),
+                  postPreview: String(post.preview || '').substring(0, 1000),
+                  likes: Number(post.likes || 0),
+                  comments: Number(post.comments || 0),
+                  keyword: String(keyword || 'auto').substring(0, 50),
+                  visited: false
+                }
+              });
+              savedCount++;
+            }
+          } catch (err) {
+            console.warn(`[API] Failed to save post ${post.url}:`, err);
+          }
+        }));
     }
 
-    // Log the action for dashboard metrics
-    await prisma.log.create({
-      data: {
-        userId,
-        action: 'SEARCH',
-        postUrl: posts.length === 0 && debugInfo ? `ext-search:DEBUG_EMPTY_PAGE` : `ext-search:${keyword}`,
-        comment: debugInfo || null
-      }
-    });
-
-    return setCorsHeaders(NextResponse.json({ success: true, savedCount, message: `Saved ${savedCount} new posts.` }, { status: 200 }));
+    return setCorsHeaders(NextResponse.json({ success: true, savedCount, message: `Processed ${posts.length} posts. Saved ${savedCount} new ones.` }, { status: 200 }));
 
   } catch (error: any) {
     console.error('Extension Results API Error:', error);

@@ -109,35 +109,49 @@ function startJobCycle(dashboardUrl, userId, keywords, settings) {
       try {
         console.log(`💉 [INJECT] Injecting & Triggering on tab ${activeTabId}...`);
         
+        // Signal Start to Dashboard
+        fetch(`${dashboardUrl}/api/extension/results`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+          body: JSON.stringify({ keyword, posts: [], debugInfo: `START_CYCLE: ${keyword}` })
+        }).catch(()=>{});
+
         // 1. Inject the library
         await chrome.scripting.executeScript({
           target: { tabId: activeTabId },
           files: ['content.js']
         });
 
-        // 2. Trigger the extraction function directly with parameters
-        // This is much more reliable than sendMessage
-        await chrome.scripting.executeScript({
-          target: { tabId: activeTabId },
-          func: (kw, opts, dUrl, uId) => {
-            if (typeof window.executeSearchAndExtract === 'function') {
-                window.executeSearchAndExtract(kw, opts, dUrl, uId);
-            } else {
-                console.error("Critical: executeSearchAndExtract not found in window scope!");
-            }
-          },
-          args: [keyword, settings, dashboardUrl, userId]
+    // 2. Trigger via Message (Add 2s delay to ensure listener is ready)
+    setTimeout(() => {
+        console.log("🚀 [TRIGGER] Sending EXECUTE_SEARCH command...");
+        chrome.tabs.sendMessage(activeTabId, {
+          action: 'EXECUTE_SEARCH',
+          keyword,
+          settings,
+          dashboardUrl,
+          userId
+        }).then(() => {
+          console.log("✅ [SUCCESS] Content script confirmed receipt!");
+        }).catch(err => {
+          console.warn("⚠️ [RETRY] Message failed, trying one more time...", err);
+          chrome.tabs.sendMessage(activeTabId, {
+              action: 'EXECUTE_SEARCH',
+              keyword,
+              settings,
+              dashboardUrl,
+              userId
+          }).catch(()=>{});
         });
+    }, 2000);
 
-        console.log("✅ [SUCCESS] Extraction triggered successfully.");
-
-      } catch (err) {
-        console.error("❌ [RUN-ERROR] Critical failure:", err);
-        chrome.tabs.remove(activeTabId).catch(()=>{});
-        isJobRunning = false;
-      }
-    }, 5000); 
-  });
+  } catch (err) {
+    console.error("❌ [RUN-ERROR] Critical failure:", err);
+    chrome.tabs.remove(activeTabId).catch(()=>{});
+    isJobRunning = false;
+  }
+}, 5000); 
+});
 }
 
 // Listen for completion results from content script
