@@ -10,6 +10,7 @@
         "start": "node dist/worker.js",
         "build": "next build",
         "build:worker": "npx tsc -p tsconfig.worker.json",
+        "postinstall": "prisma generate",
         "lint": "eslint .",
         "clean": "next clean",
         "worker": "tsx worker.ts",
