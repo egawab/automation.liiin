@@ -183,6 +183,17 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
 
 // ── Job Completion Handler ──
 chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message.action === 'SYNC_RESULTS') {
+    const { posts, keyword, dashboardUrl, userId, debugInfo } = message;
+    console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts to dashboard...`);
+    fetch(`${dashboardUrl}/api/extension/results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+      body: JSON.stringify({ keyword, posts, debugInfo })
+    }).catch(e => console.error("❌ [Worker] Relay failed:", e));
+    return;
+  }
+
   if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
     const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
     console.log(`🏁 [Worker] Job ${status}.`);

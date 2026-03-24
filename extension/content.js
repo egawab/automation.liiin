@@ -333,14 +333,12 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
   }
 
   async function syncToDashboard(posts, keyword, dashboardUrl, userId, debug = null) {
-    try {
-      const r = await fetch(`${dashboardUrl}/api/extension/results`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-        body: JSON.stringify({ keyword, posts, debugInfo: debug })
-      });
-      console.log(`[Ext] Sync response: ${r.status} ${r.statusText}`);
-    } catch (e) { console.error("[Ext] Sync failed:", e); }
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({
+        action: 'SYNC_RESULTS',
+        posts, keyword, dashboardUrl, userId, debugInfo: debug
+      }, () => resolve());
+    });
   }
 
 } // end guard
