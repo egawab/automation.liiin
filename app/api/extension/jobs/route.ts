@@ -44,6 +44,8 @@ export async function GET(req: Request) {
       settings: {
         minLikes: settings.minLikes || 0,
         minComments: settings.minComments || 0,
+        maxLikes: settings.maxLikes || 100000,
+        maxComments: settings.maxComments || 100000,
         maxKeywordsPerCycle: 3
       },
       keywords: keywords.map(k => ({ id: k.id, keyword: k.keyword }))
