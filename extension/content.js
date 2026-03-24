@@ -1,43 +1,63 @@
 // ═══════════════════════════════════════════════════════════
-// LinkedIn Precision Extraction Engine v4 (Reverse-Handshake)
+// LinkedIn Precision Extraction Engine v6 (Hybrid Push+Pull)
 // Injected by background.js via chrome.scripting.executeScript
 // ═══════════════════════════════════════════════════════════
 
-if (!window.__linkedInListenersAdded) {
-  window.__linkedInListenersAdded = true;
+// Guard: allow re-injection but prevent double-extraction
+if (window.__isExtracting) {
+  console.log("[Ext] ⏭️ Already extracting. Skipping re-injection.");
+} else {
+
   window.__isExtracting = false;
 
-  console.log("[Ext] 📡 Sending reverse-handshake to Worker...");
-  console.log("[Ext] Timing: Handshake initiated at " + new Date().toLocaleTimeString());
-  
-  // PING BACKGROUND SCRIPT: "I am ready, give me the job payload"
+  // ── DUAL TRIGGER SETUP ──
+
+  // TRIGGER A (Push): Background sends EXECUTE_SEARCH after injection
+  if (!window.__pushListenerAdded) {
+    window.__pushListenerAdded = true;
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      if (request.action === 'EXECUTE_SEARCH') {
+        sendResponse({ received: true });
+        console.log(`[Ext] ✅ PUSH received for: "${request.keyword}"`);
+        if (!window.__isExtracting) {
+          window.__isExtracting = true;
+          runExtraction(request.keyword, request.settings, request.dashboardUrl, request.userId);
+        }
+      }
+    });
+  }
+
+  // TRIGGER B (Pull): Content script asks background for payload
+  console.log("[Ext] 📡 Sending CONTENT_SCRIPT_READY (Pull fallback)...");
   chrome.runtime.sendMessage({ action: 'CONTENT_SCRIPT_READY' }, (response) => {
     if (chrome.runtime.lastError) {
-      console.error("[Ext] ❌ Worker unreachable:", chrome.runtime.lastError.message);
+      console.warn("[Ext] Pull fallback: Worker unreachable:", chrome.runtime.lastError.message);
       return;
     }
-    
-    if (response && response.action === 'EXECUTE_SEARCH_PAYLOAD') {
-      console.log(`[Ext] ✅ Received SEARCH_PAYLOAD at ${new Date().toLocaleTimeString()} for: "${response.keyword}"`);
-      if (window.__isExtracting) return;
-      window.__isExtracting = true;
-      runExtraction(response.keyword, response.settings, response.dashboardUrl, response.userId);
+    if (response && response.action === 'EXECUTE_SEARCH') {
+      console.log(`[Ext] ✅ PULL received for: "${response.keyword}"`);
+      if (!window.__isExtracting) {
+        window.__isExtracting = true;
+        runExtraction(response.keyword, response.settings, response.dashboardUrl, response.userId);
+      }
     } else {
-      console.log("[Ext] 💤 No payload received (Worker idle/WAIT).");
+      console.log("[Ext] Pull response:", response?.action || "no payload");
     }
   });
 
+  // ── Runner ──
   async function runExtraction(keyword, settings, dashboardUrl, userId) {
-    try { await extractPipeline(keyword, settings, dashboardUrl, userId); }
-    catch (e) { 
-      console.error("[Ext] ❌ Fatal Error:", e); 
-      chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }); 
+    try {
+      await extractPipeline(keyword, settings, dashboardUrl, userId);
+    } catch (e) {
+      console.error("[Ext] ❌ Fatal:", e);
+      chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) });
+    } finally {
+      window.__isExtracting = false;
     }
-    finally { window.__isExtracting = false; }
   }
 
-  // ─── Helpers ───
-
+  // ── Helpers ──
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
   async function wait(min, max) { await sleep(Math.floor(Math.random() * (max - min + 1)) + min); }
 
@@ -52,18 +72,32 @@ if (!window.__linkedInListenersAdded) {
     return Math.round(n);
   }
 
-  // ─── Main Pipeline ───
-
+  // ═══════════════════════════════════════════
+  // MAIN EXTRACTION PIPELINE
+  // ═══════════════════════════════════════════
   async function extractPipeline(keyword, settings, dashboardUrl, userId) {
     const minL = settings.minLikes || 0;
     const minC = settings.minComments || 0;
     const MIN_POSTS = 10;
 
     console.log(`[Ext] ═══ PIPELINE START ═══`);
-    console.log(`[Ext] Keyword: "${keyword}" | Reach: minLikes=${minL}, minComments=${minC}`);
+    console.log(`[Ext] Keyword: "${keyword}" | minLikes=${minL}, minComments=${minC}`);
+    console.log(`[Ext] URL: ${window.location.href}`);
 
-    // ── PHASE 1: Wait for hydration ──
+    // ── PHASE 1: Wait for page hydration ──
+    console.log(`[Ext] ⏳ Phase 1: Page hydration...`);
     await wait(5000, 7000);
+
+    // Click "Posts" tab if not already on content page
+    if (!window.location.href.includes('/content/')) {
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find(b => b.innerText.trim() === 'Posts' || b.innerText.includes('Posts'));
+      if (btn) {
+        console.log('[Ext]    Clicking "Posts" filter button...');
+        btn.click();
+        await wait(5000, 7000);
+      }
+    }
 
     // ── PHASE 2: Scroll to load content ──
     console.log(`[Ext] 📜 Phase 2: Scrolling 25 cycles...`);
@@ -80,112 +114,259 @@ if (!window.__linkedInListenersAdded) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     await wait(2000, 3000);
 
-    // ── PHASE 3: Discover containers ──
-    const containers = [];
-    ['.reusable-search__result-container', '.entity-result', '.search-results__list-item', '.artdeco-list__item', '.feed-shared-update-v2', 'li.artdeco-card', '[data-view-name="feed-full-update"]'].forEach(sel => {
-        document.querySelectorAll(sel).forEach(el => { if (!containers.includes(el)) containers.push(el); });
+    // ── PHASE 3: Discover post containers (4 strategies) ──
+    console.log(`[Ext] 🔍 Phase 3: Discovering containers...`);
+
+    // Strategy A: Primary CSS selectors
+    const selA = [
+      '.reusable-search__result-container',
+      '.entity-result',
+      '.search-results__list-item',
+      '.artdeco-list__item',
+      '.feed-shared-update-v2',
+      'li.artdeco-card',
+      '[data-view-name="feed-full-update"]',
+      '[data-urn*="activity:"]',
+      '[data-urn*="ugcPost:"]'
+    ];
+    let containers = [];
+    for (const sel of selA) {
+      document.querySelectorAll(sel).forEach(el => {
+        if (!containers.includes(el)) containers.push(el);
+      });
+    }
+    console.log(`[Ext]    Strategy A (CSS selectors): ${containers.length}`);
+
+    // Strategy B: Actor component parents
+    let stratBCount = 0;
+    document.querySelectorAll('.update-components-actor, .update-components-actor__container').forEach(actor => {
+      const parent = actor.closest('li, div.artdeco-card, .reusable-search__result-container, .entity-result, article');
+      if (parent && !containers.includes(parent)) { containers.push(parent); stratBCount++; }
     });
+    console.log(`[Ext]    Strategy B (Actor parents): +${stratBCount}`);
+
+    // Strategy C: Link-based discovery
+    let stratCCount = 0;
+    document.querySelectorAll('a[href*="activity"], a[href*="ugcPost"]').forEach(link => {
+      const parent = link.closest('li, .entity-result, div.artdeco-card, article, div[class*="update"]');
+      if (parent && !containers.includes(parent)) { containers.push(parent); stratCCount++; }
+    });
+    console.log(`[Ext]    Strategy C (Link parents): +${stratCCount}`);
+
+    // Strategy D: Semantic fallback
+    let stratDCount = 0;
+    document.querySelectorAll('div, li, article').forEach(el => {
+      if (containers.includes(el) || containers.length >= 150) return;
+      const t = el.innerText || '';
+      const hasEngagement = (t.includes('Like') || t.includes('إعجاب')) && (t.includes('Comment') || t.includes('تعليق'));
+      if (hasEngagement && t.length > 200 && t.length < 10000) {
+        containers.push(el);
+        stratDCount++;
+      }
+    });
+    console.log(`[Ext]    Strategy D (Semantic): +${stratDCount}`);
+    console.log(`[Ext]    TOTAL CONTAINERS: ${containers.length}`);
 
     if (containers.length === 0) {
-      console.error(`[Ext] ❌ 0 containers found.`);
-      await syncRelay([], "DEBUG_ZERO_CONTAINERS", keyword, dashboardUrl, userId, `URL:${window.location.href}|BODY_LEN:${document.body.innerText.length}`);
+      console.error(`[Ext] ❌ ZERO containers!`);
+      console.log(`[Ext]    Title: ${document.title}`);
+      console.log(`[Ext]    Body length: ${document.body.innerText.length}`);
+      await syncRelay([], keyword, dashboardUrl, userId,
+        `ZERO_CONTAINERS|TITLE:${document.title}|URL:${window.location.href}|BODY:${document.body.innerText.length}`);
       chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
       return;
     }
 
-    // ── PHASE 4: Extract data ──
+    // ── PHASE 4: Extract data (7 URL strategies) ──
+    console.log(`[Ext] 📊 Phase 4: Extracting from ${containers.length} containers...`);
     const allPosts = [];
     const seenUrls = {};
+    let noUrlCount = 0;
+    let dupCount = 0;
+
     for (let i = 0; i < containers.length && allPosts.length < 100; i++) {
       const c = containers[i];
       let url = null;
-      // Multi-strategy URL extraction
-      const linkSelectors = ['a[href*="/feed/update/"]', 'a[href*="urn:li:activity:"]', 'a[href*="urn:li:ugcPost:"]', 'a.app-aware-link[href*="activity"]', 'a[href*="/posts/"]'];
-      for (const sel of linkSelectors) {
-         const el = c.querySelector(sel);
-         if (el) { url = el.href.split('?')[0]; break; }
-      }
+
+      // Strategy 1: Direct link selectors
       if (!url) {
-         const html = c.innerHTML;
-         const match = html.match(/urn:li:activity:\d+/) || html.match(/urn:li:ugcPost:\d+/);
-         if (match) url = 'https://www.linkedin.com/feed/update/' + match[0];
+        const link = c.querySelector('a[href*="/feed/update/"], a[href*="urn:li:activity:"], a[href*="urn:li:ugcPost:"]');
+        if (link) url = link.href.split('?')[0];
       }
 
-      if (!url || seenUrls[url]) continue;
+      // Strategy 2: app-aware-link
+      if (!url) {
+        const link = c.querySelector('a.app-aware-link[href*="activity"]');
+        if (link) url = link.href.split('?')[0];
+      }
+
+      // Strategy 3: data-urn attribute
+      if (!url) {
+        const urnEl = c.closest('[data-urn]') || c.querySelector('[data-urn]');
+        const urn = urnEl?.getAttribute('data-urn');
+        if (urn && (urn.includes('activity') || urn.includes('ugcPost'))) {
+          url = 'https://www.linkedin.com/feed/update/' + urn;
+        }
+      }
+
+      // Strategy 4: Scan ALL links
+      if (!url) {
+        for (const a of c.querySelectorAll('a[href]')) {
+          const h = a.href;
+          if (h.includes('activity:') || h.includes('ugcPost:') || h.includes('/feed/update/')) {
+            url = h.split('?')[0]; break;
+          }
+        }
+      }
+
+      // Strategy 5: /posts/ style URLs
+      if (!url) {
+        const postLink = c.querySelector('a[href*="/posts/"]');
+        if (postLink) url = postLink.href.split('?')[0];
+      }
+
+      // Strategy 6: Tracking scope decode
+      if (!url) {
+        try {
+          const trackingEl = c.querySelector('[data-view-tracking-scope]') || (c.hasAttribute('data-view-tracking-scope') ? c : null);
+          if (trackingEl) {
+            const arr = JSON.parse(trackingEl.getAttribute('data-view-tracking-scope'));
+            const items = Array.isArray(arr) ? arr : [arr];
+            for (const item of items) {
+              const data = item?.breadcrumb?.content?.data;
+              if (data && Array.isArray(data)) {
+                const str = data.map(b => String.fromCharCode(b)).join('');
+                const inner = JSON.parse(str);
+                const urn = inner.updateUrn || inner?.controlledUpdateRegion?.updateUrn;
+                if (urn) { url = 'https://www.linkedin.com/feed/update/' + urn; break; }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Strategy 7: Regex HTML fallback
+      if (!url) {
+        const html = c.innerHTML;
+        let match = html.match(/urn:li:activity:\d+/);
+        if (!match) match = html.match(/urn:li:ugcPost:\d+/);
+        if (match) url = 'https://www.linkedin.com/feed/update/' + match[0];
+      }
+
+      // Skip invalid
+      if (!url) { noUrlCount++; continue; }
+      if (seenUrls[url]) { dupCount++; continue; }
       seenUrls[url] = true;
 
-      // Likes/Comments
+      // Engagement extraction
       let likes = 0, comments = 0;
-      c.querySelectorAll('[aria-label]').forEach(e => {
-         const l = e.getAttribute('aria-label').toLowerCase();
-         if (l.includes('reaction') || l.includes('like') || l.includes('إعجاب')) likes = num(l);
-         if (l.includes('comment') || l.includes('تعليق')) comments = num(l);
-      });
-      if (!likes) {
-         const el = c.querySelector('.social-details-social-counts__reactions-count');
-         if (el) likes = num(el.innerText);
-      }
-      if (!comments) {
-         const el = c.querySelector('.social-details-social-counts__comments');
-         if (el) comments = num(el.innerText);
-      }
+      try {
+        const labels = Array.from(c.querySelectorAll('[aria-label]')).map(e => e.getAttribute('aria-label').toLowerCase());
+        for (const l of labels) {
+          const n = num(l.match(/(\d[\d,]*k?m?)/)?.[0]);
+          if (!likes && (l.includes('reaction') || l.includes('like') || l.includes('إعجاب'))) likes = n;
+          if (!comments && (l.includes('comment') || l.includes('تعليق'))) comments = n;
+        }
+        if (!likes || !comments) {
+          const texts = Array.from(c.querySelectorAll('button, span.social-details-social-counts__reactions-count, span')).map(e => e.innerText.toLowerCase().trim());
+          for (const t of texts) {
+            const n = num(t.match(/(\d[\d,]*k?m?)/)?.[0]);
+            if (n > 0) {
+              if (!likes && (t.includes('like') || t.includes('إعجاب') || t.includes('reaction'))) likes = n;
+              if (!comments && (t.includes('comment') || t.includes('تعليق'))) comments = n;
+            }
+          }
+        }
+        if (!likes) {
+          const el = c.querySelector('.social-details-social-counts__reactions-count, [data-test-id="social-actions__reaction-count"]');
+          if (el) likes = num(el.innerText);
+        }
+        if (!comments) {
+          const el = c.querySelector('.social-details-social-counts__comments, [data-test-id="social-actions__comments"]');
+          if (el) comments = num(el.innerText);
+        }
+      } catch (e) {}
 
-      const authorEl = c.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title');
-      const author = authorEl ? authorEl.innerText.split('\n')[0].trim() : 'Unknown';
+      // Author
+      let author = 'Unknown';
+      const authorEl = c.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title, .update-components-actor__meta a');
+      if (authorEl) author = authorEl.innerText.split('\n')[0].trim().substring(0, 80);
+
       const preview = (c.innerText || '').replace(/[\n\r]+/g, ' ').substring(0, 400).trim();
-
       allPosts.push({ url, likes, comments, author, preview });
     }
 
+    console.log(`[Ext]    Extracted: ${allPosts.length} unique (${noUrlCount} no-URL, ${dupCount} dups skipped)`);
+
     if (allPosts.length === 0) {
-      await syncRelay([], "DEBUG_ZERO_EXTRACTED", keyword, dashboardUrl, userId, `CONTAINERS:${containers.length}`);
+      console.error("[Ext] ❌ 0 posts extracted from containers.");
+      await syncRelay([], keyword, dashboardUrl, userId,
+        `ZERO_EXTRACTED|CONTAINERS:${containers.length}|NO_URL:${noUrlCount}|DUP:${dupCount}`);
       chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
       return;
     }
 
-    // ── PHASE 5: Filtering ──
+    // ── PHASE 5: 3-Tier Reach Filter (NaN-safe, Highest Reach First) ──
+    console.log(`[Ext] 🎯 Phase 5: Filtering...`);
+
+    // Tier 1: Exact matches, sorted by HIGHEST REACH
     const tier1 = allPosts
       .filter(p => (p.likes || 0) >= minL && (p.comments || 0) >= minC)
-      .sort((a, b) => ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0)));
-
-    const tier1Urls = new Set(tier1.map(p => p.url));
-    const tier2 = allPosts
-      .filter(p => !tier1Urls.has(p.url))
       .sort((a, b) => {
-         const distA = Math.max(0, minL - (a.likes || 0)) + Math.max(0, minC - (a.comments || 0));
-         const distB = Math.max(0, minL - (b.likes || 0)) + Math.max(0, minC - (b.comments || 0));
-         return distA - distB;
+        const rA = (a.likes || 0) + (a.comments || 0);
+        const rB = (b.likes || 0) + (b.comments || 0);
+        return rB - rA;
       });
+    console.log(`[Ext]    Tier 1 (Exact): ${tier1.length} posts`);
 
-    const final = [...tier1];
+    // Tier 2: Closest to target
+    const tier1Set = new Set(tier1.map(p => p.url));
+    const tier2 = allPosts
+      .filter(p => !tier1Set.has(p.url))
+      .sort((a, b) => {
+        const dA = Math.max(0, minL - (a.likes || 0)) + Math.max(0, minC - (a.comments || 0));
+        const dB = Math.max(0, minL - (b.likes || 0)) + Math.max(0, minC - (b.comments || 0));
+        if (dA !== dB) return dA - dB;
+        return ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0));
+      });
+    console.log(`[Ext]    Tier 2 (Closest): ${tier2.length} posts`);
+
+    // Assemble: ALL Tier 1 (unlimited), pad with Tier 2 if under MIN_POSTS
+    const final = [];
+    for (const p of tier1) final.push(p);
     if (final.length < MIN_POSTS) {
-       for (const p of tier2) { if (final.length >= MIN_POSTS) break; final.push(p); }
+      for (const p of tier2) { if (final.length >= MIN_POSTS) break; final.push(p); }
     }
 
-    // ── PHASE 6: Sync Relay ──
+    console.log(`[Ext] ✅ Final: ${final.length} posts (${tier1.length} exact + ${final.length - tier1.length} padded)`);
+
+    // ── PHASE 6: Sync via Background Relay ──
     if (final.length > 0) {
-       await syncRelay(final, null, keyword, dashboardUrl, userId);
+      console.log(`[Ext] 📤 Phase 6: Relaying ${final.length} posts...`);
+      await syncRelay(final, keyword, dashboardUrl, userId);
     } else {
-       await syncRelay([], "DEBUG_FILTER_EMPTY", keyword, dashboardUrl, userId, `ALL:${allPosts.length}|minL:${minL}`);
+      console.warn("[Ext] ⚠️ 0 posts after filter.");
+      await syncRelay([], keyword, dashboardUrl, userId,
+        `FILTER_EMPTY|ALL:${allPosts.length}|T1:${tier1.length}|T2:${tier2.length}|minL:${minL}|minC:${minC}`);
     }
 
     chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
     console.log(`[Ext] ═══ PIPELINE COMPLETE ═══`);
   }
 
-  async function syncRelay(posts, debugInfo, keyword, dashboardUrl, userId) {
-    // We send to background script instead of direct fetch
+  // ── Sync Relay: sends to background worker, NOT direct fetch ──
+  async function syncRelay(posts, keyword, dashboardUrl, userId, debugInfo = null) {
     return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ 
-         action: 'SYNC_RESULTS', 
-         posts, 
-         keyword, 
-         dashboardUrl, 
-         userId, 
-         debugInfo 
-      }, () => resolve());
+      chrome.runtime.sendMessage({
+        action: 'SYNC_RESULTS',
+        posts, keyword, dashboardUrl, userId, debugInfo
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.warn("[Ext] Relay warning:", chrome.runtime.lastError.message);
+        }
+        resolve();
+      });
     });
   }
 
-} // end guard
-
+} // end extraction guard
