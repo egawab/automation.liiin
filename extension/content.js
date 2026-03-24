@@ -1,252 +1,292 @@
-if (typeof window.isLinkedInWorkerLoaded === 'undefined') {
-    window.isLinkedInWorkerLoaded = true;
-    
-    let isExtracting = false;
+// ═══════════════════════════════════════════════════════════
+// LinkedIn Precision Extraction Engine v3
+// Injected by background.js via chrome.scripting.executeScript
+// ═══════════════════════════════════════════════════════════
 
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      if (request.action === 'EXECUTE_SEARCH') {
-        sendResponse({ received: true });
-        console.log(`[Ext-Worker] Received job for keyword: ${request.keyword}`);
-        window.executeSearchAndExtract(request.keyword, request.settings, request.dashboardUrl, request.userId);
-      }
-    });
+if (typeof window.__linkedInExtractorReady === 'undefined') {
+  window.__linkedInExtractorReady = true;
+  let isExtracting = false;
 
-    window.executeSearchAndExtract = async function(keyword, settings, dashboardUrl, userId) {
-      if (isExtracting) {
-        console.log("[Ext-Worker] Already extracting, skipping...");
-        return;
-      }
-      isExtracting = true;
-      try {
-        await doExtraction(keyword, settings, dashboardUrl, userId);
-      } finally {
-        isExtracting = false;
-      }
-    };
-
-// ─────────────────────────────────────────────────────
-// UTILITY FUNCTIONS
-// ─────────────────────────────────────────────────────
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-async function humanDelay(min, max) {
-  await sleep(Math.floor(Math.random() * (max - min + 1)) + min);
-}
-
-function parseNum(t) {
-  if (!t) return 0;
-  const c = String(t).toLowerCase().replace(/,/g, '').trim();
-  const m = c.match(/(\d+(?:\.\d+)?)/);
-  if (!m) return 0;
-  let n = parseFloat(m[1]);
-  if (c.includes('k')) n *= 1000;
-  if (c.includes('m')) n *= 1000000;
-  return Math.round(n);
-}
-
-function decodeTrackingScope(el) {
-  try {
-    const raw = el.getAttribute('data-view-tracking-scope');
-    if (!raw) return null;
-    const arr = JSON.parse(raw);
-    const items = Array.isArray(arr) ? arr : [arr];
-    for (const item of items) {
-      const data = item?.breadcrumb?.content?.data;
-      if (data && Array.isArray(data)) {
-        const str = data.map(b => String.fromCharCode(b)).join('');
-        const inner = JSON.parse(str);
-        const urn = inner.updateUrn || inner?.controlledUpdateRegion?.updateUrn;
-        if (urn) return urn;
-      }
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'EXECUTE_SEARCH') {
+      sendResponse({ received: true });
+      console.log(`[Ext] ✅ Received EXECUTE_SEARCH for: "${request.keyword}"`);
+      runExtraction(request.keyword, request.settings, request.dashboardUrl, request.userId);
     }
-  } catch (e) {}
-  return null;
-}
+  });
 
-// ─────────────────────────────────────────────────────
-// MAIN EXTRACTION ENGINE
-// ─────────────────────────────────────────────────────
+  async function runExtraction(keyword, settings, dashboardUrl, userId) {
+    if (isExtracting) { console.log("[Ext] ⏭️ Already running, skip."); return; }
+    isExtracting = true;
+    try { await extractPipeline(keyword, settings, dashboardUrl, userId); }
+    catch (e) { console.error("[Ext] ❌ Fatal:", e); chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }); }
+    finally { isExtracting = false; }
+  }
 
-async function doExtraction(keyword, settings, dashboardUrl, userId) {
-  const MIN_POSTS = 10;
-  const MAX_POSTS = 15;
-  const minL = settings.minLikes || 0;
-  const minC = settings.minComments || 0;
+  // ─── Helpers ───
 
-  try {
-    console.log(`[Ext-Worker] ⏳ Page hydration (5-7s)...`);
-    await humanDelay(5000, 7000);
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  async function wait(min, max) { await sleep(Math.floor(Math.random() * (max - min + 1)) + min); }
 
-    // Click "Posts" filter if not already on it
+  function num(t) {
+    if (!t) return 0;
+    const s = String(t).toLowerCase().replace(/,/g, '').trim();
+    const m = s.match(/(\d+(?:\.\d+)?)/);
+    if (!m) return 0;
+    let n = parseFloat(m[1]);
+    if (s.includes('k')) n *= 1000;
+    if (s.includes('m')) n *= 1000000;
+    return Math.round(n);
+  }
+
+  // ─── Main Pipeline ───
+
+  async function extractPipeline(keyword, settings, dashboardUrl, userId) {
+    const minL = settings.minLikes || 0;
+    const minC = settings.minComments || 0;
+    const MIN_POSTS = 10;
+    const MAX_POSTS = 15;
+
+    console.log(`[Ext] ═══ PIPELINE START ═══`);
+    console.log(`[Ext] Keyword: "${keyword}" | Reach: minLikes=${minL}, minComments=${minC}`);
+    console.log(`[Ext] Current URL: ${window.location.href}`);
+
+    // ── PHASE 1: Wait for page + click Posts tab ──
+    console.log(`[Ext] ⏳ Phase 1: Page hydration...`);
+    await wait(5000, 7000);
+
     if (!window.location.href.includes('/content/')) {
-      const postBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Posts'));
-      if (postBtn) { postBtn.click(); await humanDelay(5000, 7000); }
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find(b => b.innerText.trim() === 'Posts' || b.innerText.includes('Posts'));
+      if (btn) {
+        console.log('[Ext]    Clicking "Posts" filter button...');
+        btn.click();
+        await wait(5000, 7000);
+      }
     }
 
-    // ── PHASE 1: SCROLL TO LOAD CONTENT ──
-    console.log(`[Ext-Worker] 🚀 Phase 1: Scrolling 25 cycles to load content...`);
+    // ── PHASE 2: Scroll to load content ──
+    console.log(`[Ext] 📜 Phase 2: Scrolling 25 cycles...`);
     for (let i = 0; i < 25; i++) {
-      window.scrollBy({ top: 900, behavior: 'smooth' });
-      await humanDelay(2000, 4000);
-      const seeMore = Array.from(document.querySelectorAll('button')).find(b =>
-        b.innerText.toLowerCase().includes('see more') || b.innerText.toLowerCase().includes('عرض المزيد')
+      window.scrollBy({ top: 800, behavior: 'smooth' });
+      await wait(2000, 3500);
+      // Click "Show more results" if it appears
+      const more = Array.from(document.querySelectorAll('button')).find(b =>
+        b.innerText.toLowerCase().includes('show more') ||
+        b.innerText.toLowerCase().includes('see more') ||
+        b.innerText.toLowerCase().includes('عرض المزيد')
       );
-      if (seeMore && seeMore.offsetParent !== null) { seeMore.click(); await humanDelay(3000, 5000); }
+      if (more && more.offsetParent !== null) { more.click(); await wait(2000, 3000); }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    await humanDelay(2000, 3000);
+    await wait(2000, 3000);
 
-    // ── PHASE 2: DISCOVER ALL POST CONTAINERS ──
-    console.log(`[Ext-Worker] 🔍 Phase 2: Discovering post containers...`);
-    const primarySelectors = '.reusable-search__result-container, .entity-result, .search-results__list-item, .artdeco-list__item, [data-view-name="feed-full-update"], .feed-shared-update-v2, li.artdeco-card';
-    let containers = Array.from(document.querySelectorAll(primarySelectors));
+    // ── PHASE 3: Discover post containers ──
+    console.log(`[Ext] 🔍 Phase 3: Discovering containers...`);
 
-    // Semantic fallback: find divs that look like posts
+    // Strategy A: Primary CSS selectors
+    const selA = [
+      '.reusable-search__result-container',
+      '.entity-result',
+      '.search-results__list-item',
+      '.artdeco-list__item',
+      '.feed-shared-update-v2',
+      'li.artdeco-card',
+      '[data-view-name="feed-full-update"]',
+      '[data-urn*="activity:"]',
+      '[data-urn*="ugcPost:"]'
+    ];
+    let containers = [];
+    for (const sel of selA) {
+      const found = document.querySelectorAll(sel);
+      found.forEach(el => { if (!containers.includes(el)) containers.push(el); });
+    }
+    console.log(`[Ext]    Strategy A (CSS selectors): ${containers.length}`);
+
+    // Strategy B: Actor component parents
+    const actors = document.querySelectorAll('.update-components-actor, .update-components-actor__container');
+    let stratBCount = 0;
+    actors.forEach(actor => {
+      const parent = actor.closest('li, div.artdeco-card, .reusable-search__result-container, .entity-result, article');
+      if (parent && !containers.includes(parent)) { containers.push(parent); stratBCount++; }
+    });
+    console.log(`[Ext]    Strategy B (Actor parents): +${stratBCount}`);
+
+    // Strategy C: Link-based discovery
+    const activityLinks = document.querySelectorAll('a[href*="activity"], a[href*="ugcPost"]');
+    let stratCCount = 0;
+    activityLinks.forEach(link => {
+      const parent = link.closest('li, .entity-result, div.artdeco-card, article, div[class*="update"]');
+      if (parent && !containers.includes(parent)) { containers.push(parent); stratCCount++; }
+    });
+    console.log(`[Ext]    Strategy C (Link parents): +${stratCCount}`);
+
+    // Strategy D: Semantic fallback
+    let stratDCount = 0;
     document.querySelectorAll('div, li, article').forEach(el => {
-      if (containers.includes(el)) return;
+      if (containers.includes(el) || containers.length >= 150) return;
       const t = el.innerText || '';
-      if ((t.includes('Like') || t.includes('إعجاب')) && (t.includes('Comment') || t.includes('تعليق')) && t.length > 300) {
+      const hasEngagement = (t.includes('Like') || t.includes('إعجاب')) && (t.includes('Comment') || t.includes('تعليق'));
+      if (hasEngagement && t.length > 200 && t.length < 10000) {
         containers.push(el);
+        stratDCount++;
       }
     });
-    console.log(`[Ext-Worker]    Found ${containers.length} raw containers.`);
+    console.log(`[Ext]    Strategy D (Semantic): +${stratDCount}`);
+    console.log(`[Ext]    TOTAL CONTAINERS: ${containers.length}`);
 
-    // ── PHASE 3: EXTRACT DATA FROM EACH CONTAINER ──
-    console.log(`[Ext-Worker] 📊 Phase 3: Extracting engagement data...`);
+    if (containers.length === 0) {
+      console.error(`[Ext] ❌ ZERO containers! DOM diagnostic:`);
+      console.log(`[Ext]    Title: ${document.title}`);
+      console.log(`[Ext]    URL: ${window.location.href}`);
+      console.log(`[Ext]    Body length: ${document.body.innerText.length}`);
+      console.log(`[Ext]    All links: ${document.links.length}`);
+      console.log(`[Ext]    Sample text: ${document.body.innerText.substring(0, 500)}`);
+      await syncToDashboard([], "DEBUG_ZERO_CONTAINERS", dashboardUrl, userId,
+        `TITLE:${document.title}|URL:${window.location.href}|BODY_LEN:${document.body.innerText.length}|LINKS:${document.links.length}|SAMPLE:${document.body.innerText.substring(0, 300)}`);
+      chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
+      return;
+    }
+
+    // ── PHASE 4: Extract data from each container ──
+    console.log(`[Ext] 📊 Phase 4: Extracting data from ${containers.length} containers...`);
     const allPosts = [];
-    const seen = {};
+    const seenUrls = {};
+    let noUrlCount = 0;
+    let dupCount = 0;
 
-    for (const container of containers) {
-      if (allPosts.length >= 100) break; // hard cap on scan buffer
+    for (let i = 0; i < containers.length && allPosts.length < 100; i++) {
+      const c = containers[i];
 
-      // URL extraction
+      // URL extraction (multi-strategy)
       let url = null;
-      const link = container.querySelector('a[href*="/feed/update/"], a[href*="/update/urn:li:activity:"], a.app-aware-link[href*="activity"]');
-      if (link) url = link.href.split('?')[0];
-      if (!url) {
-        const urn = decodeTrackingScope(container);
-        if (urn) url = 'https://www.linkedin.com/feed/update/' + urn;
+      const linkEl = c.querySelector('a[href*="/feed/update/"], a[href*="urn:li:activity:"], a.app-aware-link[href*="activity"], a[href*="urn:li:ugcPost:"]');
+      if (linkEl) {
+        url = linkEl.href.split('?')[0];
       }
-      if (!url || seen[url]) continue;
-      seen[url] = true;
+      if (!url) {
+        // Try data attributes
+        const dataUrn = c.getAttribute('data-urn') || c.querySelector('[data-urn]')?.getAttribute('data-urn');
+        if (dataUrn) url = 'https://www.linkedin.com/feed/update/' + dataUrn;
+      }
+      if (!url) {
+        // Last resort: any link with "linkedin.com" that looks like a post
+        const anyLink = c.querySelector('a[href*="linkedin.com/posts/"], a[href*="linkedin.com/feed/"]');
+        if (anyLink) url = anyLink.href.split('?')[0];
+      }
+      if (!url) {
+        // Generate a placeholder URL so the post is NOT silently dropped
+        url = `https://www.linkedin.com/feed/update/ext-discovered-${Date.now()}-${i}`;
+        noUrlCount++;
+      }
+      if (seenUrls[url]) { dupCount++; continue; }
+      seenUrls[url] = true;
 
       // Engagement extraction
       let likes = 0, comments = 0;
-      const ariaLabels = Array.from(container.querySelectorAll('[aria-label]'))
-        .map(el => el.getAttribute('aria-label').toLowerCase());
-      for (const label of ariaLabels) {
-        const num = parseNum(label.match(/(\d[\d,]*k?m?)/)?.[0]);
-        if (!likes && (label.includes('reaction') || label.includes('like') || label.includes('إعجاب'))) likes = num;
-        if (!comments && (label.includes('comment') || label.includes('تعليق'))) comments = num;
-      }
-      if (!likes || !comments) {
-        const btnTexts = Array.from(container.querySelectorAll('button, span, a')).map(el => el.innerText.toLowerCase());
-        for (const bt of btnTexts) {
-          const num = parseNum(bt.match(/(\d[\d,]*k?m?)/)?.[0]);
-          if (!likes && (bt.includes('إعجاب') || bt.includes('reaction'))) likes = num;
-          if (!comments && (bt.includes('تعليق') || bt.includes('comment'))) comments = num;
+      try {
+        const labels = Array.from(c.querySelectorAll('[aria-label]')).map(e => e.getAttribute('aria-label').toLowerCase());
+        for (const l of labels) {
+          const n = num(l.match(/(\d[\d,]*k?m?)/)?.[0]);
+          if (!likes && (l.includes('reaction') || l.includes('like') || l.includes('إعجاب'))) likes = n;
+          if (!comments && (l.includes('comment') || l.includes('تعليق'))) comments = n;
         }
-      }
+        if (!likes || !comments) {
+          const texts = Array.from(c.querySelectorAll('button, span.social-details-social-counts__reactions-count, span')).map(e => e.innerText.toLowerCase().trim());
+          for (const t of texts) {
+            const n = num(t.match(/(\d[\d,]*k?m?)/)?.[0]);
+            if (n > 0) {
+              if (!likes && (t.includes('like') || t.includes('إعجاب') || t.includes('reaction'))) likes = n;
+              if (!comments && (t.includes('comment') || t.includes('تعليق'))) comments = n;
+            }
+          }
+        }
+        // Fallback: try to find raw numbers near engagement buttons
+        if (!likes) {
+          const reactionCountEl = c.querySelector('.social-details-social-counts__reactions-count, [data-test-id="social-actions__reaction-count"]');
+          if (reactionCountEl) likes = num(reactionCountEl.innerText);
+        }
+        if (!comments) {
+          const commentCountEl = c.querySelector('.social-details-social-counts__comments, [data-test-id="social-actions__comments"]');
+          if (commentCountEl) comments = num(commentCountEl.innerText);
+        }
+      } catch (e) {}
 
-      // Author extraction
-      let author = 'LinkedIn Member';
-      const authorEl = container.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title');
-      if (authorEl) author = authorEl.innerText.split('\n')[0].trim();
+      // Author
+      let author = 'Unknown';
+      const authorEl = c.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title, .update-components-actor__meta a');
+      if (authorEl) author = authorEl.innerText.split('\n')[0].trim().substring(0, 80);
 
-      const preview = (container.innerText || '').replace(/[\n\r]/g, ' ').substring(0, 400).trim();
+      const preview = (c.innerText || '').replace(/[\n\r]+/g, ' ').substring(0, 400).trim();
 
       allPosts.push({ url, likes, comments, author, preview });
     }
 
-    console.log(`[Ext-Worker]    Extracted ${allPosts.length} unique posts with engagement data.`);
+    console.log(`[Ext]    Extracted: ${allPosts.length} unique posts (${noUrlCount} without original URL, ${dupCount} duplicates skipped)`);
 
-    // ── PHASE 4: 3-TIER PRECISION REACH FILTER ──
-    console.log(`[Ext-Worker] 🎯 Phase 4: Applying Precision Reach Filter (minLikes=${minL}, minComments=${minC})...`);
-
-    // Tier 1: EXACT MATCH — likes >= minLikes AND comments >= minComments
-    const tier1 = allPosts.filter(p => p.likes >= minL && p.comments >= minC);
-    // Sort Tier 1 by closest distance to target (prefer posts closest to your criteria, not wildly above)
-    tier1.sort((a, b) => {
-      const distA = Math.abs(a.likes - minL) + Math.abs(a.comments - minC);
-      const distB = Math.abs(b.likes - minL) + Math.abs(b.comments - minC);
-      return distA - distB;
-    });
-
-    // Tier 2: CLOSEST REACH — posts that don't fully match, sorted by distance to target
-    const tier1Urls = new Set(tier1.map(p => p.url));
-    const tier2 = allPosts.filter(p => !tier1Urls.has(p.url));
-    tier2.sort((a, b) => {
-      const distA = Math.abs(a.likes - minL) + Math.abs(a.comments - minC);
-      const distB = Math.abs(b.likes - minL) + Math.abs(b.comments - minC);
-      return distA - distB;
-    });
-
-    // Tier 3: BEST AVAILABLE — by raw engagement score
-    const tier3 = [...tier2].sort((a, b) => (b.likes + b.comments * 5) - (a.likes + a.comments * 5));
-
-    // ── PHASE 5: ASSEMBLE FINAL RESULTS (10-15 posts) ──
-    const finalResults = [];
-    // Step 1: Add all Tier 1 (exact matches) up to MAX_POSTS
-    for (const p of tier1) {
-      if (finalResults.length >= MAX_POSTS) break;
-      finalResults.push(p);
-    }
-    // Step 2: If under MIN_POSTS, fill from Tier 2 (closest reach)
-    if (finalResults.length < MIN_POSTS) {
-      for (const p of tier2) {
-        if (finalResults.length >= MAX_POSTS) break;
-        if (finalResults.some(r => r.url === p.url)) continue;
-        finalResults.push(p);
-      }
-    }
-    // Step 3: If STILL under MIN_POSTS, fill from Tier 3 (best engagement)
-    if (finalResults.length < MIN_POSTS) {
-      for (const p of tier3) {
-        if (finalResults.length >= MIN_POSTS) break;
-        if (finalResults.some(r => r.url === p.url)) continue;
-        finalResults.push(p);
-      }
+    if (allPosts.length === 0) {
+      console.error("[Ext] ❌ Extraction produced 0 posts from containers! Sending debug.");
+      await syncToDashboard([], "DEBUG_ZERO_EXTRACTED", dashboardUrl, userId,
+        `CONTAINERS:${containers.length}|NO_URL:${noUrlCount}|DUP:${dupCount}`);
+      chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
+      return;
     }
 
-    const exactCount = Math.min(tier1.length, MAX_POSTS);
-    console.log(`[Ext-Worker] ✅ Phase 5: Final Results = ${finalResults.length} posts.`);
-    console.log(`[Ext-Worker]    Tier 1 (Exact Reach): ${exactCount}`);
-    console.log(`[Ext-Worker]    Tier 2 (Closest Reach): ${finalResults.length - exactCount}`);
+    // ── PHASE 5: 3-Tier Precision Reach Filter ──
+    console.log(`[Ext] 🎯 Phase 5: Applying 3-Tier reach filter...`);
 
-    // ── PHASE 6: SUBMIT TO DASHBOARD ──
-    if (finalResults.length > 0) {
-      console.log(`[Ext-Worker] 📤 Phase 6: Syncing ${finalResults.length} posts to Dashboard...`);
-      await submitResults(finalResults, keyword, dashboardUrl, userId);
+    // Tier 1: EXACT match (likes >= minL AND comments >= minC)
+    const tier1 = allPosts
+      .filter(p => p.likes >= minL && p.comments >= minC)
+      .sort((a, b) => {
+        const dA = Math.abs(a.likes - minL) + Math.abs(a.comments - minC);
+        const dB = Math.abs(b.likes - minL) + Math.abs(b.comments - minC);
+        return dA - dB; // closest to target first
+      });
+    console.log(`[Ext]    Tier 1 (Exact Reach): ${tier1.length} posts`);
+
+    // Tier 2: CLOSEST reach (doesn't meet criteria but ranked by proximity)
+    const tier1Set = new Set(tier1.map(p => p.url));
+    const tier2 = allPosts
+      .filter(p => !tier1Set.has(p.url))
+      .sort((a, b) => {
+        const dA = Math.abs(a.likes - minL) + Math.abs(a.comments - minC);
+        const dB = Math.abs(b.likes - minL) + Math.abs(b.comments - minC);
+        return dA - dB;
+      });
+    console.log(`[Ext]    Tier 2 (Closest Reach): ${tier2.length} posts`);
+
+    // Assemble final (10-15 posts)
+    const final = [];
+    for (const p of tier1) { if (final.length >= MAX_POSTS) break; final.push(p); }
+    if (final.length < MIN_POSTS) {
+      for (const p of tier2) { if (final.length >= MAX_POSTS) break; final.push(p); }
+    }
+    console.log(`[Ext] ✅ Final output: ${final.length} posts (${Math.min(tier1.length, MAX_POSTS)} exact, ${Math.max(0, final.length - Math.min(tier1.length, MAX_POSTS))} closest)`);
+
+    // ── PHASE 6: Sync to dashboard ──
+    if (final.length > 0) {
+      console.log(`[Ext] 📤 Phase 6: Syncing ${final.length} posts...`);
+      await syncToDashboard(final, keyword, dashboardUrl, userId);
     } else {
-      console.warn("[Ext-Worker] ⚠️ ZERO results after filtering! Sending debug info.");
-      await submitResults([], "DEBUG_EMPTY", dashboardUrl, userId, `TITLE: ${document.title} | URL: ${window.location.href}`);
+      console.warn("[Ext] ⚠️ Zero posts after filtering!");
+      await syncToDashboard([], "DEBUG_FILTER_EMPTY", dashboardUrl, userId,
+        `ALL:${allPosts.length}|T1:${tier1.length}|T2:${tier2.length}|minL:${minL}|minC:${minC}`);
     }
 
     chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
-
-  } catch (error) {
-    console.error("[Ext-Worker] ❌ Fatal error:", error);
-    chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(error) });
+    console.log(`[Ext] ═══ PIPELINE COMPLETE ═══`);
   }
-}
 
-// ─────────────────────────────────────────────────────
-// DASHBOARD SYNC
-// ─────────────────────────────────────────────────────
-
-async function submitResults(posts, keyword, dashboardUrl, userId, debugInfo = null) {
-  try {
-    const res = await fetch(`${dashboardUrl}/api/extension/results`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-      body: JSON.stringify({ keyword, posts, debugInfo })
-    });
-    if (res.ok) console.log(`[Ext-Worker] ✅ Synced ${posts.length} posts successfully.`);
-    else console.error(`[Ext-Worker] ❌ Server error: ${res.status}`);
-  } catch (err) {
-    console.error("[Ext-Worker] ❌ Network sync error:", err);
+  async function syncToDashboard(posts, keyword, dashboardUrl, userId, debug = null) {
+    try {
+      const r = await fetch(`${dashboardUrl}/api/extension/results`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+        body: JSON.stringify({ keyword, posts, debugInfo: debug })
+      });
+      console.log(`[Ext] Sync response: ${r.status} ${r.statusText}`);
+    } catch (e) { console.error("[Ext] Sync failed:", e); }
   }
-}
 
-} // end isLinkedInWorkerLoaded guard
+} // end guard
