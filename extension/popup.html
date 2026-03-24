@@ -34,6 +34,20 @@
       margin-bottom: 4px;
       color: #4b5563;
     }
+    .settings-group { margin-bottom: 20px; }
+    .group-label { display: block; font-size: 11px; font-weight: 800; color: #666; text-transform: uppercase; margin-bottom: 10px; }
+    .visibility-toggle { display: flex; gap: 10px; background: #f0f0f0; padding: 5px; border-radius: 12px; }
+    .mode-option { flex: 1; cursor: pointer; position: relative; }
+    .mode-option input { position: absolute; opacity: 0; cursor: pointer; }
+    .mode-button { display: block; text-align: center; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 700; transition: all 0.2s; background: transparent; color: #666; }
+    .mode-option input:checked + .mode-button { background: #0077b5; color: white; box-shadow: 0 4px 10px rgba(0,119,181,0.3); }
+    .hint { font-size: 10px; color: #999; margin-top: 6px; font-style: italic; }
+    /* The following label rule is from the instruction, but it conflicts with the existing one.
+       Assuming it's meant to be a general label style for other labels, or a correction.
+       For now, placing it after the existing label rule to allow for cascading.
+       If it's meant to replace the original, the original properties would need to be merged.
+       Given the instruction, it's added as a new rule. */
+    label { display: block; font-weight: bold; margin: 10px 0 5px; }
     input {
       width: 100%;
       box-sizing: border-box;
@@ -90,8 +104,26 @@
     <div class="card">
       <h3>🚀 Auto-Worker Config</h3>
       
-      <label for="dashboardUrl">Dashboard URL</label>
-      <input type="text" id="dashboardUrl" placeholder="https://your-app.vercel.app">
+      <!-- Professional Settings: Visibility Mode -->
+      <div class="settings-group">
+        <label class="group-label">Extraction Visibility</label>
+        <div class="visibility-toggle">
+          <label class="mode-option">
+            <input type="radio" name="visibilityMode" value="visible">
+            <span class="mode-button">👁️ Visible</span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="visibilityMode" value="hidden" checked>
+            <span class="mode-button">👻 Hidden</span>
+          </label>
+        </div>
+        <p class="hint">"Hidden" works silently in the background.</p>
+      </div>
+
+      <div class="settings-group">
+        <label for="dashboardUrl">Dashboard URL</label>
+        <input type="text" id="dashboardUrl" placeholder="https://your-app.vercel.app">
+      </div>
       
       <label for="userId">Dashboard API Key (User ID)</label>
       <input type="text" id="userId" placeholder="67baea48-...">

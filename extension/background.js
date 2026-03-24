@@ -1,172 +1,155 @@
-// LinkedIn Auto-Search Worker - Background Service
-// Polls the server periodically for new jobs without closing
-
-chrome.runtime.onInstalled.addListener(() => {
-  console.log("LinkedIn Auto-Search Worker Installed");
-  setupPolling();
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  setupPolling();
-});
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'START_POLLING') {
-    console.log("Got start polling signal from popup");
-    setupPolling();
-    checkJobs(); // Immediate trigger
-  }
-});
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'pollJobsAlarm') {
-    checkJobs();
-  }
-});
-
-function setupPolling() {
-  chrome.alarms.get('pollJobsAlarm', (alarm) => {
-    if (!alarm) {
-      // Poll every 20 seconds (0.33 minutes) for a more immediate experience
-      chrome.alarms.create('pollJobsAlarm', { periodInMinutes: 0.33 });
-    }
-  });
-}
+// LinkedIn Auto-Search Worker - Professional Edition 🛡️
+// Handles background polling, safety cooldowns, and stealth extraction.
 
 let isJobRunning = false;
+let isResting = false; 
+let lastJobTime = 0;
 
+console.log("[Ext-Background] Professional Worker Initialized.");
+
+/**
+ * Main polling function
+ * Checks dashboard for new keyword jobs
+ */
 async function checkJobs() {
   if (isJobRunning) {
     console.log("⏳ [WORKER] Task in progress, skipping poll...");
     return;
   }
+  
+  // Safety Rest Period (5-10 mins) check
+  const now = Date.now();
+  const COOLDOWN_MS = 300000; // 5 minutes floor
+  if (isResting && (now - lastJobTime < COOLDOWN_MS)) {
+      const waitMins = Math.ceil((COOLDOWN_MS - (now - lastJobTime)) / 60000);
+      console.log(`🛌 [RESTING] Safety cooldown active. Waiting ${waitMins} more mins.`);
+      return;
+  }
+  isResting = false;
 
-  chrome.storage.sync.get(['dashboardUrl', 'userId'], async (result) => {
-    const { dashboardUrl, userId } = result;
+  const config = await chrome.storage.sync.get(['dashboardUrl', 'userId', 'visibilityMode']);
+  const { dashboardUrl, userId, visibilityMode = 'hidden' } = config;
+
+  if (!dashboardUrl || !userId) {
+    console.warn("⚠️ [CONFIG] Missing dashboardUrl or userId. Set them in the popup.");
+    return;
+  }
+
+  try {
+    console.log(`📡 [NETWORK] Polling Dashboard for active jobs...`);
+    const response = await fetch(`${dashboardUrl}/api/extension/jobs`, {
+        headers: { 'x-extension-token': userId, 'Cache-Control': 'no-cache' }
+    });
     
-    if (!dashboardUrl || !userId) {
-       console.log("❌ [CONFIG] Missing Dashboard URL or User ID. Please check the extension popup.");
-       return;
-    }
-
-    // Heartbeat to show it's alive
-    console.log("💓 [HEARTBEAT] Extension is active and listening for your commands...");
-
-    try {
-      const apiUrl = `${dashboardUrl}/api/extension/jobs`;
-      console.log(`📡 [NETWORK] Polling: ${apiUrl} ...`);
-      
-      const resp = await fetch(apiUrl, {
-        method: 'GET',
-        headers: {
-          'x-extension-token': userId,
-          'Cache-Control': 'no-cache'
-        }
-      });
-      
-      console.log(`📥 [RESPONSE] Status: ${resp.status} ${resp.statusText}`);
-      
-      if (!resp.ok) {
-        const errText = await resp.text();
-        console.error("❌ [SERVER ERROR]", errText);
+    if (response.status === 401) {
+        console.error("❌ [AUTH] Dashboard rejected API key. Check User ID.");
         return;
-      }
-      
-      const data = await resp.json();
-      console.log("📊 [DATA RECEIVED]", data);
-      
-      if (data.active && data.hasJobs && data.keywords && data.keywords.length > 0) {
-        console.log(`🚀 [JOB FOUND] Starting cycle for: ${data.keywords[0].keyword}`);
-        startJobCycle(dashboardUrl, userId, data.keywords, data.settings);
-      } else {
-         console.log(`😴 [IDLE] No jobs found. SystemActive: ${data.active}, hasJobs: ${data.hasJobs}`);
-      }
-    } catch (e) {
-      console.error("🔥 [NETWORK FAIL] Could not reach your dashboard. Check your URL and Internet connection.", e);
     }
-  });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const data = await response.json();
+    console.log(`📥 [RESPONSE] Data:`, data);
+
+    if (data.active && data.hasJobs && data.keywords?.length > 0) {
+      isJobRunning = true;
+      // Randomize keyword selection for human-like behavior if multiple exist
+      const kw = data.keywords[Math.floor(Math.random() * data.keywords.length)].keyword;
+      const settings = data.settings || {};
+      
+      console.log(`🚀 [JOB FOUND] Starting cycle for: ${kw}`);
+      await startScrapingCycle(kw, settings, dashboardUrl, userId, visibilityMode);
+    } else {
+      console.log(`😴 [IDLE] No active tasks. SystemActive=${data.active}, hasJobs=${data.hasJobs}`);
+    }
+  } catch (error) {
+    console.error("❌ [NETWORK] Polling failed:", error.message);
+  }
 }
 
-function startJobCycle(dashboardUrl, userId, keywords, settings) {
-  isJobRunning = true;
-  
-  // Pick one random active keyword to simulate human focus per cycle
-  const kwObj = keywords[Math.floor(Math.random() * keywords.length)];
-  const keyword = kwObj.keyword;
-  
-  console.log(`Starting job cycle for keyword: ${keyword}`);
-  
-  // Open a new LinkedIn Search tab
-  // We make it active: true so the browser doesn't throttle background scripts/scrolls
+/**
+ * Executes a single scraping task in a dedicated tab
+ */
+async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visibilityMode) {
   const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
   
-  chrome.tabs.create({ url: searchUrl, active: true }, async (tab) => {
-    const activeTabId = tab.id;
+  try {
+    // Visibility Mode: 'hidden' means the tab is created in background (active: false)
+    const tab = await chrome.tabs.create({ 
+        url: searchUrl, 
+        active: visibilityMode === 'visible' 
+    });
     
-    // Modern Programmatic Injection & Execution
-    // We wait 5 seconds for the page shell to load
-    setTimeout(async () => {
-      try {
-        console.log(`💉 [INJECT] Injecting & Triggering on tab ${activeTabId}...`);
-        
-        // Signal Start to Dashboard
-        fetch(`${dashboardUrl}/api/extension/results`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-          body: JSON.stringify({ keyword, posts: [], debugInfo: `START_CYCLE: ${keyword}` })
-        }).catch(()=>{});
-
-        // 1. Inject the library
-        await chrome.scripting.executeScript({
-          target: { tabId: activeTabId },
-          files: ['content.js']
-        });
-
-    // 2. Trigger via Message (Add 2s delay to ensure listener is ready)
+    console.log(`💉 [INJECT] Waiting for tab ${tab.id} to stabilize (5s)...`);
+    
     setTimeout(() => {
-        console.log("🚀 [TRIGGER] Sending EXECUTE_SEARCH command...");
-        chrome.tabs.sendMessage(activeTabId, {
-          action: 'EXECUTE_SEARCH',
-          keyword,
-          settings,
-          dashboardUrl,
-          userId
-        }).then(() => {
-          console.log("✅ [SUCCESS] Content script confirmed receipt!");
-        }).catch(err => {
-          console.warn("⚠️ [RETRY] Message failed, trying one more time...", err);
-          chrome.tabs.sendMessage(activeTabId, {
-              action: 'EXECUTE_SEARCH',
-              keyword,
-              settings,
-              dashboardUrl,
-              userId
-          }).catch(()=>{});
+        // Double Check: Has the user/LinkedIn closed the tab already?
+        chrome.tabs.get(tab.id, (t) => {
+            if (chrome.runtime.lastError || !t) {
+                console.warn("⚠️ [TAB-LOST] Job tab closed before injection started.");
+                resetWorkerState();
+                return;
+            }
+
+            console.log("🚀 [TRIGGER] Sending EXECUTE_SEARCH to content script...");
+            chrome.tabs.sendMessage(tab.id, { 
+                action: 'EXECUTE_SEARCH', 
+                keyword, settings, dashboardUrl, userId 
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                   console.error("❌ [COMM-ERROR] Content script failed to respond.", chrome.runtime.lastError.message);
+                   chrome.tabs.remove(tab.id).catch(() => {});
+                   resetWorkerState();
+                } else {
+                   console.log("✅ [SUCCESS] Content script acknowledged job start.");
+                }
+            });
         });
-    }, 2000);
+    }, 6000); // 6s buffer for slow LinkedIn hydration
 
   } catch (err) {
-    console.error("❌ [RUN-ERROR] Critical failure:", err);
-    chrome.tabs.remove(activeTabId).catch(()=>{});
-    isJobRunning = false;
+    console.error("❌ [CYCLE-ERROR] Failed to start job cycle:", err.message);
+    resetWorkerState();
   }
-}, 5000); 
-});
 }
 
-// Listen for completion results from content script
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'JOB_COMPLETED' || request.action === 'JOB_FAILED') {
+function resetWorkerState() {
+    isJobRunning = false;
+    isResting = true;
+    lastJobTime = Date.now();
+}
+
+/**
+ * Handles job completion signals from the content script
+ */
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
+    const status = message.action === 'JOB_COMPLETED' ? "COMPLETED" : "FAILED";
+    console.log(`🏁 [FINISH] Job ${status}. Reason/Error: ${message.error || 'None'}`);
     
-    if (sender.tab && sender.tab.id) {
-       console.log(`Job cycle finished (${request.action}). Closing automated tab.`);
+    if (sender.tab?.id) {
+       console.log("🧹 [CLEANUP] Removing automated tab.");
        chrome.tabs.remove(sender.tab.id).catch(() => {});
     }
     
-    // Wait an additional human delay before allowing another job
-    setTimeout(() => {
-      isJobRunning = false;
-      console.log("Worker is free for next job cycle.");
-    }, 10000);
+    resetWorkerState();
+    console.log("🛌 [COOLDOWN] Entering mandatory resting period.");
   }
+});
+
+// Periodic Poll: Every 1 min (Resting period logic determines if we actually fetch)
+chrome.alarms.create('checkJobsAlarm', { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'checkJobsAlarm') checkJobs();
+});
+
+// Handlers for Startup
+chrome.runtime.onInstalled.addListener(() => {
+  console.log("🚀 [INSTALLED] LinkedIn Automation Pro v2 ready.");
+  checkJobs();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  console.log("⚙️ [STARTUP] Restarting worker...");
+  checkJobs();
 });

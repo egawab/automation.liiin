@@ -13,12 +13,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!dashInput) console.error("[POPUP] ERROR: dashboardUrl input not found!");
 
     // Load existing settings
-    chrome.storage.sync.get(['dashboardUrl', 'userId'], (result) => {
-      if (result.dashboardUrl && dashInput) dashInput.value = result.dashboardUrl;
-      if (result.userId && userIdInput) userIdInput.value = result.userId;
+    chrome.storage.sync.get(['dashboardUrl', 'userId', 'visibilityMode'], (data) => {
+      if (data.dashboardUrl && dashInput) dashInput.value = data.dashboardUrl;
+      if (data.userId && userIdInput) userIdInput.value = data.userId;
+      if (data.visibilityMode) {
+          const radio = document.querySelector(`input[name="visibilityMode"][value="${data.visibilityMode}"]`);
+          if (radio) radio.checked = true;
+      }
       console.log("[POPUP] Settings loaded from storage.");
     });
   
+    // Save Visibility Mode on Change
+    document.querySelectorAll('input[name="visibilityMode"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            chrome.storage.sync.set({ visibilityMode: e.target.value });
+        });
+    });
+
     // Save settings
     if (saveBtn) {
       saveBtn.addEventListener('click', () => {

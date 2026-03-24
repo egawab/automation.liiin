@@ -90,33 +90,6 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
         }
     }
     
-    console.log("[Ext-Worker] Scrolling to load infinite content for MAXIMUM volume...");
-    // Industrial Extraction: 25 human-like scrolls for maximum content depth
-    for (let i = 0; i < 25; i++) {
-        // Smaller, more frequent scrolls trigger lazy-loading better than large jumps
-        window.scrollBy({ top: 800, behavior: 'smooth' });
-        await humanDelay(2000, 4000); 
-        
-        // If "See more results" button appears (common in some views)
-        const seeMore = Array.from(document.querySelectorAll('button')).find(b => 
-            b.innerText.toLowerCase().includes('see more') || 
-            b.innerText.toLowerCase().includes('عرض المزيد') ||
-            b.innerText.toLowerCase().includes('show more')
-        );
-        if (seeMore && seeMore.offsetParent !== null) {
-            seeMore.click();
-            await humanDelay(3000, 5000);
-        }
-    }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    await humanDelay(1500, 2500);
-
-    const TARGET_POSTS_MIN = 20; 
-    const MAX_POSTS_BUFFER = 100; // Scan more to find the best ones
-    const allCandidatePosts = [];
-    const seen = {};
-    let rawCount = 0;
-
     // NEW: Dashboard & Login check
     const isLoginPage = document.title.toLowerCase().includes('log in') || document.title.toLowerCase().includes('login') || !!document.querySelector('form.login__form');
     const hasMain = !!document.querySelector('.scaffold-layout__main, #main, .core-rail');
@@ -128,8 +101,6 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
         return;
     }
 
-    let containers = [];
-    
     // Deep Scan Function: Search in a document/iframe
     function scanDoc(doc) {
         if (!doc) return;
@@ -153,8 +124,33 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
         return found;
     }
 
-    // 1. Scan Main Document
-    containers = scanDoc(document);
+    console.info("🚀 [Ext-Worker] STARTING PROFESSIONAL EXTRACTION...");
+    
+    // Optimized: 12 scrolls is enough for high-quality reach filtering
+    for (let i = 0; i < 12; i++) {
+        console.info(`🔄 [Ext-Worker] Scrolling cycle ${i+1}/12...`);
+        window.scrollBy({ top: 900, behavior: 'smooth' });
+        await humanDelay(3500, 5500); // More time for hydration
+        
+        const seeMore = Array.from(document.querySelectorAll('button')).find(b => 
+            b.innerText.toLowerCase().includes('see more') || 
+            b.innerText.toLowerCase().includes('عرض المزيد')
+        );
+        if (seeMore && seeMore.offsetParent !== null) {
+            seeMore.click();
+            await humanDelay(3000, 5000);
+        }
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    await humanDelay(1500, 2500);
+
+    const TARGET_POSTS_MIN = 12; 
+    const MAX_POSTS_BUFFER = 60; 
+    const allCandidatePosts = [];
+    const seen = {};
+
+    let containers = scanDoc(document);
+    console.info(`🎯 [Ext-Worker] Initial scan found ${containers.length} containers.`);
 
     // Strategy D: Semantic Discovery (The Ultimate Hunter)
     const allDivs = document.querySelectorAll('div, li, article');
@@ -184,21 +180,19 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
           }
        } catch (e) {}
     });
-
-    console.log(`[Ext-Worker] Total found containers (Semantic Audit): ${containers.length}`);
     
-    if (containers.length === 0) {
-      console.warn("[Ext-Worker] NO CONTAINERS FOUND! Sending forensic report...");
-      const bodyText = document.body.innerText.substring(0, 1000).replace(/\n/g, ' ');
-      const debugStr = `TITLE: ${document.title} | MAIN: ${hasMain} | LINKS: ${document.links.length} | TEXT: ${bodyText} | HTML: ${document.documentElement.innerHTML.substring(0, 1000)}`;
-      await submitResultsToDashboard([], "DEBUG_EMPTY_PAGE", dashboardUrl, userId, debugStr);
-    }
+    // Semantic Discovery fallback
+    const semanticContainers = Array.from(document.querySelectorAll('div, li, article')).filter(el => {
+        const text = el.innerText || '';
+        return (text.includes('Like') || text.includes('إعجاب')) && el.innerText.length > 300;
+    });
+    
+    containers = [...new Set([...containers, ...semanticContainers])];
 
     containers.forEach((container) => {
       if (allCandidatePosts.length >= MAX_POSTS_BUFFER) return;
       
       let url = null;
-      // Multi-Layer URL Discovery
       const urlSelectors = ['a[href*="/feed/update/"]', 'a[href*="/update/urn:li:activity:"]', 'a.app-aware-link[href*="activity"]'];
       for (const sel of urlSelectors) {
           const link = container.querySelector(sel);
@@ -216,7 +210,6 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
       let like = 0, comm = 0;
       let text = (container.innerText || '').replace(/[\n\r]/g, ' ');
       
-      // NEW: Enhanced Engagement Extraction (Selectors + Labels)
       try {
         const socialLabels = Array.from(container.querySelectorAll('[aria-label]'))
             .map(el => el.getAttribute('aria-label').toLowerCase());
@@ -239,7 +232,7 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
       } catch (e) {}
 
       let author = 'LinkedIn User';
-      const authorEl = container.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title, .update-components-actor__container [aria-hidden="true"]');
+      const authorEl = container.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title');
       if (authorEl) author = authorEl.innerText.split('\n')[0].trim();
 
       allCandidatePosts.push({ 
@@ -248,7 +241,6 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
       });
     });
 
-    // QUALITY FILTERING (Strict vs Fuzzy)
     const minL = settings.minLikes || 0;
     const minC = settings.minComments || 0;
 
@@ -257,15 +249,15 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
     
     const relevantBackups = allCandidatePosts
         .filter(p => !perfectMatches.includes(p))
-        .filter(p => p.likes > (minL * 0.5) || p.comments > (minC * 0.5)) 
+        .filter(p => p.likes > (minL * 0.4) || p.comments > (minC * 0.4)) 
         .sort((a,b) => b.score - a.score);
 
-    const finalResults = [...perfectMatches, ...relevantBackups].slice(0, 30);
+    const finalResults = [...perfectMatches, ...relevantBackups].slice(0, 25);
 
-    console.log(`[Ext-Worker] DONE: PerfectMatches=${perfectMatches.length}. OutputSize=${finalResults.length}`);
-
+    console.info(`🏁 [Ext-Worker] EXTRACTION DONE. Found ${perfectMatches.length} high-reach matches. Total bundle: ${finalResults.length}`);
 
     if (finalResults.length > 0) {
+      console.info("📤 [Ext-Worker] Syncing results to Dashboard...");
       await submitResultsToDashboard(finalResults, keyword, dashboardUrl, userId);
     }
 
