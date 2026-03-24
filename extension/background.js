@@ -1,10 +1,11 @@
 // ═══════════════════════════════════════════════════════════
-// LinkedIn Safety Worker v4 — Permanent Set-and-Forget
+// LinkedIn Safety Worker v5 — Unified Message Bus
 // ═══════════════════════════════════════════════════════════
 
-console.log("[Worker] ═══ Safety Worker v4 Initialized ═══");
+console.log("[Worker] ═══ Safety Worker v5 Initialized ═══");
 
-let isJobRunning = false; // Ephemeral flag to prevent duplicate runs in 1 session
+let isJobRunning = false;
+let currentJobPayload = null; // Stores payload for the reverse-handshake
 
 // ── State Management ──
 async function getState() {
@@ -25,13 +26,12 @@ async function saveState(updates) {
 
 // ── Helpers ──
 function randomCooldown() {
-  // 10-15 minutes, randomized each time
   return 600000 + Math.floor(Math.random() * 300000);
 }
 
-// Kept synchronous-looking to match original, but handles async storage internally
 function resetWorkerState() {
   isJobRunning = false;
+  currentJobPayload = null;
   
   getState().then(state => {
     const nextCooldown = randomCooldown();
@@ -47,6 +47,7 @@ function resetWorkerState() {
 
 function resetWorkerStateSilent() {
   isJobRunning = false;
+  currentJobPayload = null;
   getState().then(state => {
     saveState({
       activeTabId: null,
@@ -61,7 +62,6 @@ async function checkJobs() {
     console.log("⏳ [Worker] Job in progress, skipping poll.");
     return;
   }
-  // LOCK SYNCHRONOUSLY to prevent overlapping cycle fires during `await`
   isJobRunning = true;
 
   try {
@@ -69,251 +69,183 @@ async function checkJobs() {
     const now = Date.now();
     const elapsed = now - state.lastJobTime;
 
-    // ── Smart Recovery: If 2 hours passed since last job, reset cycles ──
-    if (state.lastJobTime > 0 && elapsed > 7200000) { // 2 hours
-      console.log("🔄 [Worker] Over 2 hours since last job. Resetting session safety counters.");
+    // Smart Recovery
+    if (state.lastJobTime > 0 && elapsed > 7200000) {
       await saveState({ consecutiveCycles: 0, isPaused: false });
       state = await getState();
     }
 
-    // Gate 2: Cooldown timer
+    // Cooldown
     if (state.lastJobTime > 0 && elapsed < state.cooldownMs) {
       const remaining = Math.ceil((state.cooldownMs - elapsed) / 60000);
-      console.log(`🛌 [Worker] Cooldown active. ${remaining} min remaining.`);
       sendHeartbeat("Sleeping", `${remaining}m cooldown`);
       isJobRunning = false;
       return;
     }
 
-    // Gate 3: Auto-pause check
+    // Pause
     if (state.isPaused) {
-      // Trickle mode: after pause, allow 1 cycle per 10 min
-      const trickleMs = 600000; // 10 min
+      const trickleMs = 600000;
       if (elapsed < trickleMs) {
-        console.log(`⏸️ [Worker] PAUSED. Trickle mode: ${Math.ceil((trickleMs - elapsed) / 60000)} min left.`);
-        sendHeartbeat("Paused", "Safety limit reached - Trickle running");
+        sendHeartbeat("Paused", "Safety limit - Trickle Running");
         isJobRunning = false;
         return;
       }
-      console.log("⏸️ [Worker] Trickle mode: allowing 1 cycle.");
     }
 
-    // Gate 4: Single tab — ensure no stale tab
+    // Single Tab
     if (state.activeTabId !== null) {
-      try {
-        await chrome.tabs.remove(state.activeTabId);
-        console.log(`🧹 [Worker] Cleaned stale tab ${state.activeTabId}.`);
-      } catch (e) {}
+      try { await chrome.tabs.remove(state.activeTabId); } catch (e) {}
       await saveState({ activeTabId: null });
     }
 
-    // ── Fetch jobs from dashboard ──
     const config = await chrome.storage.sync.get(['dashboardUrl', 'userId', 'visibilityMode']);
     const { dashboardUrl, userId, visibilityMode = 'hidden' } = config;
     if (!dashboardUrl || !userId) {
-      console.warn("⚠️ [Worker] Missing dashboardUrl or userId.");
       isJobRunning = false;
       return;
     }
 
-    const response = await fetch(`${dashboardUrl}/api/extension/jobs`, {
-        headers: { 'x-extension-token': userId, 'Cache-Control': 'no-cache' }
+    const response = await fetch(`${dashboardUrl.replace(/\/$/, '')}/api/extension/jobs`, {
+      headers: { 'x-extension-token': userId, 'Cache-Control': 'no-cache' }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
-
-    // ── Dashboard Start/Stop detection (reset mechanism) ──
     const isActive = data.active === true;
     if (state.wasDashboardActive === false && isActive) {
-        console.log("🔄 [Worker] Dashboard re-activated! Resetting cycle counter and pause.");
-        await saveState({ consecutiveCycles: 0, isPaused: false });
-        state = await getState();
+      await saveState({ consecutiveCycles: 0, isPaused: false });
+      state = await getState();
     }
     await saveState({ wasDashboardActive: isActive });
 
     if (!isActive || !data.hasJobs || !data.keywords?.length) {
-        console.log(`😴 [Worker] Idle. active=${isActive}, hasJobs=${data.hasJobs}`);
-        sendHeartbeat("Idle", isActive ? "No jobs available" : "System Paused");
-        isJobRunning = false;
-        return;
+      sendHeartbeat("Idle", isActive ? "No jobs available" : "System Paused");
+      isJobRunning = false;
+      return;
     }
 
-    // ── Auto-pause trigger (3 consecutive cycles) ──
     if (state.consecutiveCycles >= 3 && !state.isPaused) {
-        const nextCooldown = randomCooldown();
-        await saveState({
-          isPaused: true,
-          lastJobTime: now,
-          cooldownMs: nextCooldown
-        });
-        console.log(`⏸️ [Worker] AUTO-PAUSED after 3 consecutive cycles.`);
-        sendHeartbeat("Paused", "Auto-paused after 3 cycles");
-        isJobRunning = false;
-        return;
+      const nextCooldown = randomCooldown();
+      await saveState({ isPaused: true, lastJobTime: now, cooldownMs: nextCooldown });
+      sendHeartbeat("Paused", "Auto-paused after 3 cycles");
+      isJobRunning = false;
+      return;
     }
 
-    // ── Start cycle ──
     const kw = data.keywords[Math.floor(Math.random() * data.keywords.length)].keyword;
     const settings = data.settings || {};
+    
+    // Preparation for Handshake
+    currentJobPayload = {
+      action: 'EXECUTE_SEARCH_PAYLOAD',
+      keyword: kw,
+      settings,
+      dashboardUrl: dashboardUrl.replace(/\/$/, ''),
+      userId
+    };
+
     console.log(`🚀 [Worker] Starting cycle #${state.consecutiveCycles + 1} for: "${kw}"`);
     sendHeartbeat("Running", `Extracting: ${kw}`);
-      
-    // Exact pipeline logic combined with robust polling
-    startScrapingCycle(kw, settings, dashboardUrl, userId, visibilityMode);
+    
+    startScrapingCycle(currentJobPayload, visibilityMode);
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
     sendHeartbeat("Error", "Check connection/keys");
-    isJobRunning = false; // release lock on error
+    isJobRunning = false;
   }
 }
 
-function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-}
-
-// ── Scraping Cycle (Reverse-Handshake for 100% Reliability) ──
-async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visibilityMode) {
-  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+async function startScrapingCycle(payload, visibilityMode) {
+  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(payload.keyword)}&origin=GLOBAL_SEARCH_HEADER`;
 
   try {
-    const tab = await chrome.tabs.create({
-      url: searchUrl,
-      active: visibilityMode === 'visible'
-    });
-    
-    // Save to storage async
-    saveState({ activeTabId: tab.id }).catch(console.error);
-    console.log(`💉 [Worker] Tab ${tab.id} created. Waiting for DOM...`);
+    const tab = await chrome.tabs.create({ url: searchUrl, active: visibilityMode === 'visible' });
+    saveState({ activeTabId: tab.id }).catch(() => {});
 
-    // Give the page at least 3 seconds to initially populate the DOM
-    await sleep(3000);
-
-    // Setup a listener for the reverse-handshake from content.js
-    let connected = false;
-    const handshakeListener = (message, sender, sendResponse) => {
-      if (message.action === 'CONTENT_SCRIPT_READY' && sender.tab?.id === tab.id) {
-        console.log("✅ [Worker] Reverse-handshake successful! Sending payload.");
-        connected = true;
-        // Reply instantly with the job payload!
-        sendResponse({ 
-          action: 'EXECUTE_SEARCH_PAYLOAD', 
-          keyword, 
-          settings, 
-          dashboardUrl, 
-          userId 
-        });
-        return false; // synchronous response
-      }
-    };
-    
-    chrome.runtime.onMessage.addListener(handshakeListener);
-
-    // Try injecting up to 3 times (in case of page redirects)
+    // Try injecting until connected or retries hit
     let injectRetries = 3;
-    while (injectRetries > 0 && !connected) {
+    while (injectRetries > 0 && currentJobPayload) {
       try {
-        const t = await chrome.tabs.get(tab.id);
-        if (!t) break;
-        
-        console.log(`🔄 [Worker] Injecting content.js... (${injectRetries} attempts left)`);
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['content.js']
-        });
-      } catch (e) {
-        console.warn(`[Worker] Inject warning: ${e.message}`);
-      }
-      
-      // Wait for it to ping back
-      for(let w=0; w<50; w++) { // wait 5 seconds max per injection
-         if (connected) break;
-         await sleep(100);
-      }
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      } catch (e) {}
+      await new Promise(r => setTimeout(r, 4000));
       injectRetries--;
     }
 
-    // Cleanup listener
-    chrome.runtime.onMessage.removeListener(handshakeListener);
-
-    if (!connected) {
-       console.error("❌ [Worker] Comm error: Content script never sent READY handshake. Tab might be dead or blocked.");
+    if (currentJobPayload) {
+       console.error("❌ [Worker] Comm error: Handshake never completed.");
        chrome.tabs.remove(tab.id).catch(() => {});
        resetWorkerStateSilent();
     }
-
   } catch (err) {
-    console.error("❌ [Worker] Cycle failed:", err.message);
     resetWorkerStateSilent();
   }
 }
 
-// ── Job Completion Handler ──
-chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
-    const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
-    console.log(`🏁 [Worker] Job ${status}.`);
+// ── Global Message Router ──
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const tabId = sender.tab?.id;
 
-    // Close the job tab
-    if (sender.tab?.id) {
-      chrome.tabs.remove(sender.tab.id).catch(() => {});
+  // 1. Handshake Request
+  if (message.action === 'CONTENT_SCRIPT_READY') {
+    if (currentJobPayload && tabId) {
+      console.log(`✅ [Worker] Handshake from tab ${tabId}. Returning payload.`);
+      sendResponse(currentJobPayload);
+      currentJobPayload = null; // Payload consumed
+    } else {
+      sendResponse({ action: 'WAIT' });
     }
-
-    resetWorkerState();
-    
-    // Log next action
-    getState().then(state => {
-      if (state.consecutiveCycles >= 3) {
-        console.log(`⏸️ [Worker] Will auto-pause on next poll (3/3 cycles).`);
-      } else {
-        console.log(`🛌 [Worker] Cooldown: ~${Math.round(state.cooldownMs / 60000)} min before next cycle.`);
-      }
-    });
-    
-    sendHeartbeat("Resting", `Job completed. Resting.`);
+    return false;
   }
+
+  // 2. Results Sync (Relayed via background to ensure completion)
+  if (message.action === 'SYNC_RESULTS') {
+    const { posts, keyword, dashboardUrl, userId, debugInfo } = message;
+    console.log(`📤 [Worker] Relaying ${posts?.length || 0} results to Dashboard...`);
+    
+    fetch(`${dashboardUrl}/api/extension/results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+      body: JSON.stringify({ keyword, posts, debugInfo })
+    }).catch(e => console.error("[Worker] Relay failed:", e));
+
+    return false;
+  }
+
+  // 3. Status Reporting
+  if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
+    console.log(`🏁 [Worker] Job ${message.action}.`);
+    if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+    resetWorkerState();
+    return false;
+  }
+
+  return false;
 });
 
-// ── Heartbeat Function ──
 async function sendHeartbeat(status, message) {
   const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
   const { dashboardUrl, userId } = config;
   if (!dashboardUrl || !userId) return;
-
   try {
     const state = await getState();
-    await fetch(`${dashboardUrl}/api/extension/heartbeat`, {
+    await fetch(`${dashboardUrl.replace(/\/$/, '')}/api/extension/heartbeat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-      body: JSON.stringify({ 
-        status, 
-        message, 
-        cycles: state.consecutiveCycles,
-        isPaused: state.isPaused
-      })
+      body: JSON.stringify({ status, message, cycles: state.consecutiveCycles, isPaused: state.isPaused })
     });
-  } catch (e) {
-    // Silent fail on heartbeat
-  }
+  } catch (e) {}
 }
 
-// ── Alarm: Poll every 1 min  ──
 chrome.alarms.create('checkJobsAlarm', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'checkJobsAlarm') {
     checkJobs();
-    // Independent heartbeat ping every 3 mins even if resting heavily
     sendHeartbeat("Online", "Worker active");
   }
 });
 
-// ── Startup ──
-chrome.runtime.onInstalled.addListener(() => {
-  console.log("🚀 [Worker] LinkedIn Safety Worker v4 installed.");
-  checkJobs();
-});
-chrome.runtime.onStartup.addListener(() => {
-  console.log("⚙️ [Worker] Restarting / Browser opened...");
-  checkJobs();
-});
+chrome.runtime.onInstalled.addListener(checkJobs);
+chrome.runtime.onStartup.addListener(checkJobs);
