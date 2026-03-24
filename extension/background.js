@@ -80,32 +80,49 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
         active: visibilityMode === 'visible' 
     });
     
-    console.log(`💉 [INJECT] Waiting for tab ${tab.id} to stabilize (5s)...`);
+    console.log(`💉 [INJECT] Waiting for tab ${tab.id} to stabilize (4s)...`);
     
-    setTimeout(() => {
+    setTimeout(async () => {
         // Double Check: Has the user/LinkedIn closed the tab already?
-        chrome.tabs.get(tab.id, (t) => {
+        chrome.tabs.get(tab.id, async (t) => {
             if (chrome.runtime.lastError || !t) {
                 console.warn("⚠️ [TAB-LOST] Job tab closed before injection started.");
                 resetWorkerState();
                 return;
             }
 
-            console.log("🚀 [TRIGGER] Sending EXECUTE_SEARCH to content script...");
-            chrome.tabs.sendMessage(tab.id, { 
-                action: 'EXECUTE_SEARCH', 
-                keyword, settings, dashboardUrl, userId 
-            }, (response) => {
-                if (chrome.runtime.lastError) {
-                   console.error("❌ [COMM-ERROR] Content script failed to respond.", chrome.runtime.lastError.message);
-                   chrome.tabs.remove(tab.id).catch(() => {});
-                   resetWorkerState();
-                } else {
-                   console.log("✅ [SUCCESS] Content script acknowledged job start.");
-                }
-            });
+            try {
+                // NEW: FORCE Injection to ensure content.js is 100% active before messaging
+                console.log("🛠️ [FORCE] Injecting Content Script manually...");
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['content.js']
+                });
+
+                // Small delay to allow script to boot
+                setTimeout(() => {
+                    console.log("🚀 [TRIGGER] Sending EXECUTE_SEARCH to content script...");
+                    chrome.tabs.sendMessage(tab.id, { 
+                        action: 'EXECUTE_SEARCH', 
+                        keyword, settings, dashboardUrl, userId 
+                    }, (response) => {
+                        if (chrome.runtime.lastError) {
+                           console.error("❌ [COMM-ERROR] Content script failed to respond.", chrome.runtime.lastError.message);
+                           chrome.tabs.remove(tab.id).catch(() => {});
+                           resetWorkerState();
+                        } else {
+                           console.log("✅ [SUCCESS] Content script acknowledged job start.");
+                        }
+                    });
+                }, 1000);
+
+            } catch (injectErr) {
+                console.error("❌ [INJECT-FAIL] Could not force inject script:", injectErr.message);
+                chrome.tabs.remove(tab.id).catch(() => {});
+                resetWorkerState();
+            }
         });
-    }, 6000); // 6s buffer for slow LinkedIn hydration
+    }, 4000); 
 
   } catch (err) {
     console.error("❌ [CYCLE-ERROR] Failed to start job cycle:", err.message);
