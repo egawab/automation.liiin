@@ -181,7 +181,7 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
   try {
     const tab = await chrome.tabs.create({
       url: searchUrl,
-      active: visibilityMode === 'visible'
+      active: true  // MUST be active — Chrome throttles background tabs, killing scrollBy
     });
     activeTabId = tab.id;
 
@@ -235,6 +235,7 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
       console.error("❌ [Worker] Comm error:", e.message);
       chrome.tabs.remove(tab.id).catch(() => {});
       resetWorkerState();
+      return;  // CRITICAL: prevent falling through to line 239
     }
     // Content script will send JOB_COMPLETED when done → resetWorkerState() is called there
 
