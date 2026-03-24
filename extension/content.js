@@ -5,15 +5,11 @@ if (typeof window.isLinkedInWorkerLoaded === 'undefined') {
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.action === 'EXECUTE_SEARCH') {
-        // Essential: Respond immediately to keep the port open
         sendResponse({ received: true });
-        
         console.log(`[Ext-Worker] Received job for keyword: ${request.keyword}`);
         window.executeSearchAndExtract(request.keyword, request.settings, request.dashboardUrl, request.userId);
       }
     });
-
-    // ... rest of functions ...
 
     window.executeSearchAndExtract = async function(keyword, settings, dashboardUrl, userId) {
       if (isExtracting) {
@@ -62,13 +58,6 @@ function decodeTrackingScope(el) {
         const urn = inner.updateUrn || (inner.controlledUpdateRegion && inner.controlledUpdateRegion.updateUrn);
         if (urn) return urn;
       }
-      const value = item?.value;
-      if (value && Array.isArray(value)) {
-        const str2 = value.map(b => String.fromCharCode(b)).join('');
-        const inner2 = JSON.parse(str2);
-        const urn2 = inner2.updateUrn || (inner2.controlledUpdateRegion && inner2.controlledUpdateRegion.updateUrn);
-        if (urn2) return urn2;
-      }
     }
   } catch (e) { }
   return null;
@@ -77,62 +66,23 @@ function decodeTrackingScope(el) {
 async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, userId) {
   try {
     console.log("[Ext-Worker] Waiting for contents to load...");
-    await humanDelay(3000, 5000);
+    await humanDelay(5000, 7000);
 
-    // AUTO-TAB CORRECTION: Ensure we are on the "Posts" (Content) tab
+    // Ensure we are on the "Posts" filter
     if (!window.location.href.includes('/content/')) {
-        console.log("[Ext-Worker] Not on 'Posts' tab. Attempting to click 'Posts' filter...");
-        const postButtons = Array.from(document.querySelectorAll('button')).filter(b => b.innerText.includes('Posts'));
-        if (postButtons.length > 0) {
-            postButtons[0].click();
-            console.log("[Ext-Worker] Clicked 'Posts' button. Waiting for reload...");
-            await humanDelay(4000, 6000);
-        } else {
-            console.warn("[Ext-Worker] Could not find 'Posts' button. Proceeding with current view.");
+        const postBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Posts'));
+        if (postBtn) {
+            postBtn.click();
+            await humanDelay(5000, 7000);
         }
     }
-    
-    // NEW: Dashboard & Login check
-    const isLoginPage = document.title.toLowerCase().includes('log in') || document.title.toLowerCase().includes('login') || !!document.querySelector('form.login__form');
-    const hasMain = !!document.querySelector('.scaffold-layout__main, #main, .core-rail');
-    console.log(`[Ext-Worker] Page Status: Title="${document.title}", Links=${document.links.length}, hasMain=${hasMain}, isLogin=${isLoginPage}`);
-    
-    if (isLoginPage) {
-        console.error("[Ext-Worker] CRITICAL: You are NOT logged in to LinkedIn. Extraction aborted.");
-        sendJobFailed("LinkedIn Login required.");
-        return;
-    }
 
-    // Deep Scan Function: Search in a document/iframe
-    function scanDoc(doc) {
-        if (!doc) return;
-        const primarySelectors = '.reusable-search__result-container, .entity-result, .search-results__list-item, .artdeco-list__item, [data-view-name="feed-full-update"], .feed-shared-update-v2, li.artdeco-card, [data-urn*="activity:"], [data-urn*="ugcPost:"]';
-        const found = Array.from(doc.querySelectorAll(primarySelectors));
-        
-        // Strategy B: Component detection
-        const actors = doc.querySelectorAll('.update-components-actor, .entity-result__actor-container, .update-components-actor__container');
-        actors.forEach(actor => {
-           let parent = actor.closest('li, div.artdeco-card, .reusable-search__result-container, .entity-result');
-           if (parent && !found.includes(parent)) found.push(parent);
-        });
-
-        // Strategy C: Link-First discovery
-        const links = doc.querySelectorAll('a[href*="activity"], a[href*="ugcPost"]');
-        links.forEach(link => {
-           let parent = link.closest('li, .entity-result, div.artdeco-card');
-           if (parent && !found.includes(parent)) found.push(parent);
-        });
-        
-        return found;
-    }
-
-    console.info("🚀 [Ext-Worker] STARTING PROFESSIONAL EXTRACTION...");
+    console.info("🚀 [Ext-Worker] STARTING HIGH-VOLUME EXTRACTION...");
     
-    // Optimized: 12 scrolls is enough for high-quality reach filtering
-    for (let i = 0; i < 12; i++) {
-        console.info(`🔄 [Ext-Worker] Scrolling cycle ${i+1}/12...`);
+    // Industrial Scrolling: 25 cycles for maximum content
+    for (let i = 0; i < 25; i++) {
         window.scrollBy({ top: 900, behavior: 'smooth' });
-        await humanDelay(3500, 5500); // More time for hydration
+        await humanDelay(2000, 4000);
         
         const seeMore = Array.from(document.querySelectorAll('button')).find(b => 
             b.innerText.toLowerCase().includes('see more') || 
@@ -144,50 +94,34 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
         }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    await humanDelay(1500, 2500);
+    await humanDelay(2000, 3000);
 
-    const TARGET_POSTS_MIN = 12; 
-    const MAX_POSTS_BUFFER = 100; // Increased back to 100 for better data pool
     const allCandidatePosts = [];
     const seen = {};
+    const MAX_BUFFER = 100;
 
-    let containers = scanDoc(document);
-    console.info(`🎯 [Ext-Worker] Initial scan found ${containers.length} containers.`);
-
-    // If NO containers found, send a diagnostic report so we know why!
-    if (containers.length === 0) {
-      console.warn("⚠️ [Ext-Worker] NO CONTAINERS FOUND! Sending forensic report...");
-      const bodyText = document.body.innerText.substring(0, 1000).replace(/\n/g, ' ');
-      const debugStr = `TITLE: ${document.title} | URL: ${window.location.href} | TEXT: ${bodyText}`;
-      await submitResultsToDashboard([], "DEBUG_EMPTY_PAGE", dashboardUrl, userId, debugStr);
-    }
-
-    // Strategy D: Semantic Discovery (The Ultimate Hunter)
-    const allDivs = document.querySelectorAll('div, li, article');
-    allDivs.forEach(el => {
-        if (allCandidatePosts.length >= MAX_POSTS_BUFFER) return;
+    // Discovery Strategy: Selectors + Semantic
+    const primarySelectors = '.reusable-search__result-container, .entity-result, .search-results__list-item, .artdeco-list__item, [data-view-name="feed-full-update"], .feed-shared-update-v2, li.artdeco-card';
+    let containers = Array.from(document.querySelectorAll(primarySelectors));
+    
+    // Semantic scan to ensure we miss nothing
+    document.querySelectorAll('div, li, article').forEach(el => {
         if (containers.includes(el)) return;
-        
         const text = el.innerText || '';
-        // Every search result post contains markers
-        const hasFeedLabel = text.includes('Feed post') || text.includes('منشور') || text.includes('الموجز');
-        const hasSocialBars = (text.includes('Like') || text.includes('إعجاب')) && (text.includes('Comment') || text.includes('تعليق'));
-        
-        if (hasFeedLabel || hasSocialBars) {
-             if (!containers.includes(el)) containers.push(el);
+        if ((text.includes('Like') || text.includes('إعجاب')) && (text.includes('Comment') || text.includes('تعليق')) && text.length > 300) {
+            containers.push(el);
         }
     });
 
+    console.log(`🎯 [Ext-Worker] Scan found ${containers.length} potential posts.`);
+
     containers.forEach((container) => {
-      if (allCandidatePosts.length >= MAX_POSTS_BUFFER) return;
+      if (allCandidatePosts.length >= MAX_BUFFER) return;
       
       let url = null;
-      const urlSelectors = ['a[href*="/feed/update/"]', 'a[href*="/update/urn:li:activity:"]', 'a.app-aware-link[href*="activity"]'];
-      for (const sel of urlSelectors) {
-          const link = container.querySelector(sel);
-          if (link) { url = link.href.split('?')[0]; break; }
-      }
-      
+      const link = container.querySelector('a[href*="/feed/update/"], a[href*="/update/urn:li:activity:"], a.app-aware-link[href*="activity"]');
+      if (link) url = link.href.split('?')[0];
+
       if (!url) {
         let urn = decodeTrackingScope(container);
         if (urn) url = 'https://www.linkedin.com/feed/update/' + urn;
@@ -199,28 +133,27 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
       let like = 0, comm = 0;
       let text = (container.innerText || '').replace(/[\n\r]/g, ' ');
       
-      try {
-        const socialLabels = Array.from(container.querySelectorAll('[aria-label]'))
-            .map(el => el.getAttribute('aria-label').toLowerCase());
-            
-        for (const label of socialLabels) {
-            const num = parseNum(label.match(/(\d[\d,]*k?m?)/)?.[0]);
-            if (!like && (label.includes('reaction') || label.includes('like') || label.includes('إعجاب'))) like = num;
-            if (!comm && (label.includes('comment') || label.includes('تعليق'))) comm = num;
-        }
+      // Engagement extraction
+      const socialLabels = Array.from(container.querySelectorAll('[aria-label]'))
+          .map(el => el.getAttribute('aria-label').toLowerCase());
+          
+      for (const label of socialLabels) {
+          const num = parseNum(label.match(/(\d[\d,]*k?m?)/)?.[0]);
+          if (!like && (label.includes('reaction') || label.includes('like') || label.includes('إعجاب'))) like = num;
+          if (!comm && (label.includes('comment') || label.includes('تعليق'))) comm = num;
+      }
 
-        if (!like || !comm) {
-            const engageText = Array.from(container.querySelectorAll('button, span, a'))
-                .map(el => el.innerText.toLowerCase());
-            for (const bText of engageText) {
-                const num = parseNum(bText.match(/(\d[\d,]*k?m?)/)?.[0]);
-                if (!like && (bText.includes('إعجاب') || bText.includes('reaction'))) like = num;
-                if (!comm && (bText.includes('تعليق') || bText.includes('comment'))) comm = num;
-            }
-        }
-      } catch (e) {}
+      if (!like || !comm) {
+          const engageText = Array.from(container.querySelectorAll('button, span, a'))
+              .map(el => el.innerText.toLowerCase());
+          for (const bText of engageText) {
+              const num = parseNum(bText.match(/(\d[\d,]*k?m?)/)?.[0]);
+              if (!like && (bText.includes('إعجاب') || bText.includes('reaction'))) like = num;
+              if (!comm && (bText.includes('تعليق') || bText.includes('comment'))) comm = num;
+          }
+      }
 
-      let author = 'LinkedIn User';
+      let author = 'LinkedIn Member';
       const authorEl = container.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title');
       if (authorEl) author = authorEl.innerText.split('\n')[0].trim();
 
@@ -230,63 +163,37 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
       });
     });
 
-    const minL = settings.minLikes || 0;
-    const minC = settings.minComments || 0;
+    // FINAL GREEDY FILTER: Send everything found, let dashboard handle display
+    const finalResults = allCandidatePosts.sort((a,b) => b.score - a.score).slice(0, 30);
 
-    // GREEDY FILTERING: Prioritize perfect matches, then best available
-    const perfectMatches = allCandidatePosts.filter(p => p.likes >= minL && p.comments >= minC)
-        .sort((a,b) => b.score - a.score);
-    
-    // Fallback: If no perfect matches, take anything that has at least 10% of target
-    const relevantBackups = allCandidatePosts
-        .filter(p => !perfectMatches.includes(p))
-        .filter(p => p.likes >= (minL * 0.1) || p.comments >= (minC * 0.1)) 
-        .sort((a,b) => b.score - a.score);
-
-    // Ultimate fallback: Just take the top 10 if we have NOTHING
-    const fallbackResults = (perfectMatches.length + relevantBackups.length === 0) 
-        ? allCandidatePosts.sort((a,b) => b.score - a.score).slice(0, 10)
-        : [];
-
-    const finalResults = [...perfectMatches, ...relevantBackups, ...fallbackResults].slice(0, 25);
-
-    console.info(`🏁 [Ext-Worker] EXTRACTION DONE. Found ${perfectMatches.length} high-reach matches. Total bundle: ${finalResults.length}`);
+    console.info(`🏁 [Ext-Worker] EXTRACTION DONE. Found ${finalResults.length} posts.`);
 
     if (finalResults.length > 0) {
-      console.info("📤 [Ext-Worker] Syncing results to Dashboard...");
       await submitResultsToDashboard(finalResults, keyword, dashboardUrl, userId);
+    } else {
+      console.warn("⚠️ [Ext-Worker] ZERO RESULTS! Sending debug report.");
+      await submitResultsToDashboard([], "DEBUG_EMPTY_PAGE", dashboardUrl, userId, `TITLE: ${document.title} | URL: ${window.location.href}`);
     }
 
     sendJobCompleted();
 
   } catch (error) {
-    console.error("[Ext-Worker] Fatal error during extraction:", error);
+    console.error("[Ext-Worker] Fatal error:", error);
     chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(error) });
   }
 }
 
 async function submitResultsToDashboard(posts, keyword, dashboardUrl, userId, debugInfo = null) {
   try {
-    const response = await fetch(`${dashboardUrl}/api/extension/results`, {
+    await fetch(`${dashboardUrl}/api/extension/results`, {
       method: 'POST',
-      headers: {
-         'Content-Type': 'application/json',
-         'x-extension-token': userId
-      },
+      headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
       body: JSON.stringify({ keyword, posts, debugInfo })
     });
-    
-    if (response.ok) {
-       console.log("[Ext-Worker] Successfully synced posts to Dashboard.");
-    } else {
-       console.error("[Ext-Worker] Server rejected posts:", response.status);
-    }
-  } catch (err) {
-    console.error("[Ext-Worker] Network error while submitting posts:", err);
-  }
+  } catch (err) { console.error("[Ext-Worker] Sync Error:", err); }
 }
 
 function sendJobCompleted() {
   chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
 }
-} // End of isLinkedInWorkerLoaded check
+}
