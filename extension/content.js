@@ -8,6 +8,7 @@ if (!window.__linkedInListenersAdded) {
   window.__isExtracting = false;
 
   console.log("[Ext] 📡 Sending reverse-handshake to Worker...");
+  console.log("[Ext] Timing: Handshake initiated at " + new Date().toLocaleTimeString());
   
   // PING BACKGROUND SCRIPT: "I am ready, give me the job payload"
   chrome.runtime.sendMessage({ action: 'CONTENT_SCRIPT_READY' }, (response) => {
@@ -17,7 +18,7 @@ if (!window.__linkedInListenersAdded) {
     }
     
     if (response && response.action === 'EXECUTE_SEARCH_PAYLOAD') {
-      console.log(`[Ext] ✅ Received SEARCH_PAYLOAD for: "${response.keyword}"`);
+      console.log(`[Ext] ✅ Received SEARCH_PAYLOAD at ${new Date().toLocaleTimeString()} for: "${response.keyword}"`);
       if (window.__isExtracting) return;
       window.__isExtracting = true;
       runExtraction(response.keyword, response.settings, response.dashboardUrl, response.userId);

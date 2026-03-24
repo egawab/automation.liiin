@@ -5,7 +5,7 @@
 console.log("[Worker] ═══ Safety Worker v5 Initialized ═══");
 
 let isJobRunning = false;
-let currentJobPayload = null; // Stores payload for the reverse-handshake
+const activeJobs = new Map(); // tabId -> payload
 
 // ── State Management ──
 async function getState() {
@@ -26,13 +26,11 @@ async function saveState(updates) {
 
 // ── Helpers ──
 function randomCooldown() {
-  return 600000 + Math.floor(Math.random() * 300000);
+  return 600000 + Math.floor(Math.random() * 300000); // 10-15 min
 }
 
 function resetWorkerState() {
   isJobRunning = false;
-  currentJobPayload = null;
-  
   getState().then(state => {
     const nextCooldown = randomCooldown();
     saveState({
@@ -47,7 +45,6 @@ function resetWorkerState() {
 
 function resetWorkerStateSilent() {
   isJobRunning = false;
-  currentJobPayload = null;
   getState().then(state => {
     saveState({
       activeTabId: null,
@@ -69,13 +66,13 @@ async function checkJobs() {
     const now = Date.now();
     const elapsed = now - state.lastJobTime;
 
-    // Smart Recovery
+    // Reset if 2 hours passed
     if (state.lastJobTime > 0 && elapsed > 7200000) {
       await saveState({ consecutiveCycles: 0, isPaused: false });
       state = await getState();
     }
 
-    // Cooldown
+    // Cooldown check
     if (state.lastJobTime > 0 && elapsed < state.cooldownMs) {
       const remaining = Math.ceil((state.cooldownMs - elapsed) / 60000);
       sendHeartbeat("Sleeping", `${remaining}m cooldown`);
@@ -83,17 +80,14 @@ async function checkJobs() {
       return;
     }
 
-    // Pause
-    if (state.isPaused) {
-      const trickleMs = 600000;
-      if (elapsed < trickleMs) {
-        sendHeartbeat("Paused", "Safety limit - Trickle Running");
-        isJobRunning = false;
-        return;
-      }
+    // Pause check
+    if (state.isPaused && elapsed < 600000) {
+      sendHeartbeat("Paused", "Safety limit active");
+      isJobRunning = false;
+      return;
     }
 
-    // Single Tab
+    // Cleanup orphan tabs
     if (state.activeTabId !== null) {
       try { await chrome.tabs.remove(state.activeTabId); } catch (e) {}
       await saveState({ activeTabId: null });
@@ -113,6 +107,8 @@ async function checkJobs() {
 
     const data = await response.json();
     const isActive = data.active === true;
+    
+    // Auto-resume if status changed
     if (state.wasDashboardActive === false && isActive) {
       await saveState({ consecutiveCycles: 0, isPaused: false });
       state = await getState();
@@ -125,6 +121,7 @@ async function checkJobs() {
       return;
     }
 
+    // Forced Safety Pause
     if (state.consecutiveCycles >= 3 && !state.isPaused) {
       const nextCooldown = randomCooldown();
       await saveState({ isPaused: true, lastJobTime: now, cooldownMs: nextCooldown });
@@ -133,22 +130,22 @@ async function checkJobs() {
       return;
     }
 
-    const kw = data.keywords[Math.floor(Math.random() * data.keywords.length)].keyword;
+    const target = data.keywords[Math.floor(Math.random() * data.keywords.length)].keyword;
     const settings = data.settings || {};
     
-    // Preparation for Handshake
-    currentJobPayload = {
+    const payload = {
       action: 'EXECUTE_SEARCH_PAYLOAD',
-      keyword: kw,
+      keyword: target,
       settings,
       dashboardUrl: dashboardUrl.replace(/\/$/, ''),
       userId
     };
 
-    console.log(`🚀 [Worker] Starting cycle #${state.consecutiveCycles + 1} for: "${kw}"`);
-    sendHeartbeat("Running", `Extracting: ${kw}`);
+    console.log(`🚀 [Worker] Starting cycle #${state.consecutiveCycles + 1} for: "${target}"`);
+    sendHeartbeat("Running", `Extracting: ${target}`);
     
-    startScrapingCycle(currentJobPayload, visibilityMode);
+    // START scraping (async)
+    startScrapingCycle(payload, visibilityMode);
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
@@ -162,24 +159,38 @@ async function startScrapingCycle(payload, visibilityMode) {
 
   try {
     const tab = await chrome.tabs.create({ url: searchUrl, active: visibilityMode === 'visible' });
-    saveState({ activeTabId: tab.id }).catch(() => {});
+    const tabId = tab.id;
+    await saveState({ activeTabId: tabId });
 
-    // Try injecting until connected or retries hit
-    let injectRetries = 3;
-    while (injectRetries > 0 && currentJobPayload) {
-      try {
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-      } catch (e) {}
-      await new Promise(r => setTimeout(r, 4000));
-      injectRetries--;
+    // Store payload for the handshake
+    activeJobs.set(tabId, payload);
+    console.log(`💉 [Worker] Tab ${tabId} created. Waiting up to 60s for content script...`);
+
+    // Extended polling for handshake (60 seconds)
+    // We re-inject every 10 seconds in case LinkedIn reloads the DOM
+    let totalWait = 0;
+    while (totalWait < 60000 && activeJobs.has(tabId)) {
+      if (totalWait % 10000 === 0) {
+        try {
+          await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+          console.log(`[Worker] Injecting content.js into ${tabId}...`);
+        } catch (e) {
+          console.warn(`[Worker] Injection failed for tab ${tabId}: ${e.message}`);
+        }
+      }
+      await new Promise(r => setTimeout(r, 2000));
+      totalWait += 2000;
     }
 
-    if (currentJobPayload) {
-       console.error("❌ [Worker] Comm error: Handshake never completed.");
-       chrome.tabs.remove(tab.id).catch(() => {});
+    // Verify if it ever connected
+    if (activeJobs.has(tabId)) {
+       console.error(`❌ [Worker] Handshake TIMEOUT for tab ${tabId}. Closing.`);
+       activeJobs.delete(tabId);
+       chrome.tabs.remove(tabId).catch(() => {});
        resetWorkerStateSilent();
     }
   } catch (err) {
+    console.error(`❌ [Worker] Cycle startup error: ${err.message}`);
     resetWorkerStateSilent();
   }
 }
@@ -188,36 +199,39 @@ async function startScrapingCycle(payload, visibilityMode) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id;
 
-  // 1. Handshake Request
+  // Handshake
   if (message.action === 'CONTENT_SCRIPT_READY') {
-    if (currentJobPayload && tabId) {
-      console.log(`✅ [Worker] Handshake from tab ${tabId}. Returning payload.`);
-      sendResponse(currentJobPayload);
-      currentJobPayload = null; // Payload consumed
+    if (tabId && activeJobs.has(tabId)) {
+      const payload = activeJobs.get(tabId);
+      console.log(`✅ [Worker] Handshake SUCCESS for tab ${tabId}. Payload sent.`);
+      activeJobs.delete(tabId); // Consume payload
+      sendResponse(payload);
     } else {
       sendResponse({ action: 'WAIT' });
     }
     return false;
   }
 
-  // 2. Results Sync (Relayed via background to ensure completion)
+  // Result Relay
   if (message.action === 'SYNC_RESULTS') {
     const { posts, keyword, dashboardUrl, userId, debugInfo } = message;
-    console.log(`📤 [Worker] Relaying ${posts?.length || 0} results to Dashboard...`);
+    console.log(`📤 [Worker] Syncing ${posts?.length || 0} posts from tab ${tabId}...`);
     
     fetch(`${dashboardUrl}/api/extension/results`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
       body: JSON.stringify({ keyword, posts, debugInfo })
-    }).catch(e => console.error("[Worker] Relay failed:", e));
-
+    }).catch(e => console.error("[Worker] Sync failed:", e));
     return false;
   }
 
-  // 3. Status Reporting
+  // Completion
   if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
-    console.log(`🏁 [Worker] Job ${message.action}.`);
-    if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+    console.log(`🏁 [Worker] Tab ${tabId} reporting ${message.action}.`);
+    if (tabId) {
+      activeJobs.delete(tabId);
+      chrome.tabs.remove(tabId).catch(() => {});
+    }
     resetWorkerState();
     return false;
   }
@@ -226,10 +240,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function sendHeartbeat(status, message) {
-  const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
-  const { dashboardUrl, userId } = config;
-  if (!dashboardUrl || !userId) return;
   try {
+    const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
+    const { dashboardUrl, userId } = config;
+    if (!dashboardUrl || !userId) return;
     const state = await getState();
     await fetch(`${dashboardUrl.replace(/\/$/, '')}/api/extension/heartbeat`, {
       method: 'POST',
@@ -247,5 +261,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-chrome.runtime.onInstalled.addListener(checkJobs);
+chrome.runtime.onInstalled.addListener(() => {
+  saveState({ lastJobTime: 0, consecutiveCycles: 0, isPaused: false });
+  checkJobs();
+});
 chrome.runtime.onStartup.addListener(checkJobs);
