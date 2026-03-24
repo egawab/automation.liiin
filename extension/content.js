@@ -158,27 +158,71 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     for (let i = 0; i < containers.length && allPosts.length < 100; i++) {
       const c = containers[i];
 
-      // URL extraction (multi-strategy)
+      // ── URL extraction: 6 strategies, NO fake URLs ──
       let url = null;
-      const linkEl = c.querySelector('a[href*="/feed/update/"], a[href*="urn:li:activity:"], a.app-aware-link[href*="activity"], a[href*="urn:li:ugcPost:"]');
-      if (linkEl) {
-        url = linkEl.href.split('?')[0];
-      }
+
+      // Strategy 1: Direct link selectors (most common)
       if (!url) {
-        // Try data attributes
-        const dataUrn = c.getAttribute('data-urn') || c.querySelector('[data-urn]')?.getAttribute('data-urn');
-        if (dataUrn) url = 'https://www.linkedin.com/feed/update/' + dataUrn;
+        const link = c.querySelector('a[href*="/feed/update/"], a[href*="urn:li:activity:"], a[href*="urn:li:ugcPost:"]');
+        if (link) url = link.href.split('?')[0];
       }
+
+      // Strategy 2: app-aware-link with activity reference
       if (!url) {
-        // Last resort: any link with "linkedin.com" that looks like a post
-        const anyLink = c.querySelector('a[href*="linkedin.com/posts/"], a[href*="linkedin.com/feed/"]');
-        if (anyLink) url = anyLink.href.split('?')[0];
+        const link = c.querySelector('a.app-aware-link[href*="activity"]');
+        if (link) url = link.href.split('?')[0];
       }
+
+      // Strategy 3: data-urn attribute on container or child
       if (!url) {
-        // Generate a placeholder URL so the post is NOT silently dropped
-        url = `https://www.linkedin.com/feed/update/ext-discovered-${Date.now()}-${i}`;
-        noUrlCount++;
+        const urnEl = c.closest('[data-urn]') || c.querySelector('[data-urn]');
+        const urn = urnEl?.getAttribute('data-urn');
+        if (urn && (urn.includes('activity') || urn.includes('ugcPost'))) {
+          url = 'https://www.linkedin.com/feed/update/' + urn;
+        }
       }
+
+      // Strategy 4: Scan ALL links for any containing activity/ugcPost URN
+      if (!url) {
+        const allLinks = c.querySelectorAll('a[href]');
+        for (const a of allLinks) {
+          const h = a.href;
+          if (h.includes('activity:') || h.includes('ugcPost:') || h.includes('/feed/update/')) {
+            url = h.split('?')[0];
+            break;
+          }
+        }
+      }
+
+      // Strategy 5: LinkedIn /posts/ style URLs
+      if (!url) {
+        const postLink = c.querySelector('a[href*="/posts/"]');
+        if (postLink) url = postLink.href.split('?')[0];
+      }
+
+      // Strategy 6: Decode tracking scope data for embedded URN
+      if (!url) {
+        try {
+          const trackingEl = c.querySelector('[data-view-tracking-scope]') || (c.hasAttribute('data-view-tracking-scope') ? c : null);
+          if (trackingEl) {
+            const raw = trackingEl.getAttribute('data-view-tracking-scope');
+            const arr = JSON.parse(raw);
+            const items = Array.isArray(arr) ? arr : [arr];
+            for (const item of items) {
+              const data = item?.breadcrumb?.content?.data;
+              if (data && Array.isArray(data)) {
+                const str = data.map(b => String.fromCharCode(b)).join('');
+                const inner = JSON.parse(str);
+                const urn = inner.updateUrn || inner?.controlledUpdateRegion?.updateUrn;
+                if (urn) { url = 'https://www.linkedin.com/feed/update/' + urn; break; }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // ── SKIP posts without a real LinkedIn URL ──
+      if (!url) { noUrlCount++; continue; }
       if (seenUrls[url]) { dupCount++; continue; }
       seenUrls[url] = true;
 
