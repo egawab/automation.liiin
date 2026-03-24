@@ -29,19 +29,30 @@ function randomCooldown() {
   return 600000 + Math.floor(Math.random() * 300000);
 }
 
-async function resetWorkerState() {
-  const state = await getState();
-  const nextCooldown = randomCooldown();
-  
-  await saveState({
-    activeTabId: null,
-    lastJobTime: Date.now(),
-    cooldownMs: nextCooldown,
-    consecutiveCycles: state.consecutiveCycles + 1
-  });
-  
+// Kept synchronous-looking to match original, but handles async storage internally
+function resetWorkerState() {
   isJobRunning = false;
-  console.log(`[Worker] Cycle #${state.consecutiveCycles + 1} done. Next cooldown: ${Math.round(nextCooldown / 60000)} min.`);
+  
+  getState().then(state => {
+    const nextCooldown = randomCooldown();
+    saveState({
+      activeTabId: null,
+      lastJobTime: Date.now(),
+      cooldownMs: nextCooldown,
+      consecutiveCycles: state.consecutiveCycles + 1
+    });
+    console.log(`[Worker] Cycle #${state.consecutiveCycles + 1} done. Next cooldown: ${Math.round(nextCooldown / 60000)} min.`);
+  }).catch(console.error);
+}
+
+function resetWorkerStateSilent() {
+  isJobRunning = false;
+  getState().then(state => {
+    saveState({
+      activeTabId: null,
+      lastJobTime: Date.now()
+    });
+  }).catch(console.error);
 }
 
 // ── Main Poll ──
@@ -66,7 +77,6 @@ async function checkJobs() {
   if (state.lastJobTime > 0 && elapsed < state.cooldownMs) {
     const remaining = Math.ceil((state.cooldownMs - elapsed) / 60000);
     console.log(`🛌 [Worker] Cooldown active. ${remaining} min remaining.`);
-    // Still send generic heartbeat while resting
     sendHeartbeat("Sleeping", `${remaining}m cooldown`);
     return;
   }
@@ -143,7 +153,8 @@ async function checkJobs() {
     console.log(`🚀 [Worker] Starting cycle #${state.consecutiveCycles + 1} for: "${kw}"`);
     sendHeartbeat("Running", `Extracting: ${kw}`);
     
-    await startScrapingCycle(kw, settings, dashboardUrl, userId, visibilityMode);
+    // Exact pipeline call from 9b91100
+    startScrapingCycle(kw, settings, dashboardUrl, userId, visibilityMode);
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
@@ -151,7 +162,7 @@ async function checkJobs() {
   }
 }
 
-// ── Scraping Cycle ──
+// ── Scraping Cycle (EXACT match to commit 9b91100 core pipeline) ──
 async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visibilityMode) {
   const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
 
@@ -160,7 +171,9 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
       url: searchUrl,
       active: visibilityMode === 'visible'
     });
-    await saveState({ activeTabId: tab.id });
+    
+    // Save to storage async but don't block the exact timing of the pipeline
+    saveState({ activeTabId: tab.id }).catch(console.error);
 
     console.log(`💉 [Worker] Tab ${tab.id} created. Waiting 4s for load...`);
 
@@ -168,7 +181,7 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
       chrome.tabs.get(tab.id, async (t) => {
         if (chrome.runtime.lastError || !t) {
           console.warn("⚠️ [Worker] Tab lost before injection.");
-          await resetWorkerState();
+          resetWorkerStateSilent();
           return;
         }
 
@@ -181,13 +194,15 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
 
           setTimeout(() => {
             console.log("🚀 [Worker] Sending EXECUTE_SEARCH...");
+            
+            // EXACT matching signature for callback - NO async modifier here!
             chrome.tabs.sendMessage(tab.id, {
               action: 'EXECUTE_SEARCH', keyword, settings, dashboardUrl, userId
-            }, async (response) => {
+            }, (response) => {
               if (chrome.runtime.lastError) {
                 console.error("❌ [Worker] Comm error:", chrome.runtime.lastError.message);
                 chrome.tabs.remove(tab.id).catch(() => {});
-                await resetWorkerState();
+                resetWorkerStateSilent();
               } else {
                 console.log("✅ [Worker] Content script acknowledged.");
               }
@@ -197,19 +212,19 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
         } catch (e) {
           console.error("❌ [Worker] Inject failed:", e.message);
           chrome.tabs.remove(tab.id).catch(() => {});
-          await resetWorkerState();
+          resetWorkerStateSilent();
         }
       });
     }, 4000);
 
   } catch (err) {
     console.error("❌ [Worker] Cycle failed:", err.message);
-    await resetWorkerState();
+    resetWorkerStateSilent();
   }
 }
 
 // ── Job Completion Handler ──
-chrome.runtime.onMessage.addListener(async (message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender) => {
   if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
     const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
     console.log(`🏁 [Worker] Job ${status}.`);
@@ -219,15 +234,16 @@ chrome.runtime.onMessage.addListener(async (message, sender) => {
       chrome.tabs.remove(sender.tab.id).catch(() => {});
     }
 
-    await resetWorkerState();
+    resetWorkerState();
     
     // Log next action
-    const state = await getState();
-    if (state.consecutiveCycles >= 3) {
-      console.log(`⏸️ [Worker] Will auto-pause on next poll (3/3 cycles).`);
-    } else {
-      console.log(`🛌 [Worker] Cooldown: ~${Math.round(state.cooldownMs / 60000)} min before next cycle.`);
-    }
+    getState().then(state => {
+      if (state.consecutiveCycles >= 3) {
+        console.log(`⏸️ [Worker] Will auto-pause on next poll (3/3 cycles).`);
+      } else {
+        console.log(`🛌 [Worker] Cooldown: ~${Math.round(state.cooldownMs / 60000)} min before next cycle.`);
+      }
+    });
     
     sendHeartbeat("Resting", `Job completed. Resting.`);
   }
