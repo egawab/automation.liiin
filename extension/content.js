@@ -290,32 +290,40 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     console.log(`[Ext] 🎯 Phase 5: Applying 3-Tier reach filter...`);
 
     // Tier 1: EXACT match (likes >= minL AND comments >= minC)
-    // SORT BY: Highest reach first (Top Performers)
     const tier1 = allPosts
       .filter(p => p.likes >= minL && p.comments >= minC)
-      .sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
-    
+      .sort((a, b) => {
+        // HIGHEST reach first
+        const reachA = (a.likes || 0) + (a.comments || 0);
+        const reachB = (b.likes || 0) + (b.comments || 0);
+        return reachB - reachA;
+      });
     console.log(`[Ext]    Tier 1 (Exact Reach): ${tier1.length} posts`);
 
-    // Tier 2: CLOSEST reach (doesn't meet exact criteria but ranked by proximity to target)
-    const tier1Set = new Set(tier1.map(p => p.url));
+    // Tier 2: CLOSEST reach (doesn't meet criteria but ranked by proximity)
+    const tier1Set = new Set(tier1.map(p => p.url || ""));
     const tier2 = allPosts
       .filter(p => !tier1Set.has(p.url))
       .sort((a, b) => {
-        // Calculate distance from target reach
-        const distA = Math.max(0, minL - a.likes) + Math.max(0, minC - a.comments);
-        const distB = Math.max(0, minL - b.likes) + Math.max(0, minC - b.comments);
-        if (distA !== distB) return distA - distB; // Closer is better
-        // Tie-breaker: higher overall reach
-        return (b.likes + b.comments) - (a.likes + a.comments);
+        const dA = Math.max(0, minL - (a.likes || 0)) + Math.max(0, minC - (a.comments || 0));
+        const dB = Math.max(0, minL - (b.likes || 0)) + Math.max(0, minC - (b.comments || 0));
+        if (dA !== dB) return dA - dB;
+        // Tie breaker highest reach
+        const reachA = (a.likes || 0) + (a.comments || 0);
+        const reachB = (b.likes || 0) + (b.comments || 0);
+        return reachB - reachA;
       });
-      
     console.log(`[Ext]    Tier 2 (Closest Reach): ${tier2.length} posts`);
 
     // Assemble final output
-    const final = [...tier1]; // No maximum limit for Exact matches!
+    const final = [];
     
-    // If we have fewer than 10 exact matches, pad with the closest tier2 matches
+    // UNLIMITED Exact Matches: push everything in Tier 1
+    for (const p of tier1) { 
+        final.push(p); 
+    }
+    
+    // FALLBACK: Only if we are under MIN_POSTS, pad with Tier 2 up to at least MIN_POSTS
     if (final.length < MIN_POSTS) {
       for (const p of tier2) { 
         if (final.length >= MIN_POSTS) break; 

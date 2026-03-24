@@ -1,0 +1,59 @@
+diff --git a/extension/content.js b/extension/content.js
+index 9b655dd..4bf285d 100644
+--- a/extension/content.js
++++ b/extension/content.js
+@@ -290,33 +290,40 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
+     console.log(`[Ext] 🎯 Phase 5: Applying 3-Tier reach filter...`);
+ 
+     // Tier 1: EXACT match (likes >= minL AND comments >= minC)
++    // SORT BY: Highest reach first (Top Performers)
+     const tier1 = allPosts
+       .filter(p => p.likes >= minL && p.comments >= minC)
+-      .sort((a, b) => {
+-        const dA = Math.abs(a.likes - minL) + Math.abs(a.comments - minC);
+-        const dB = Math.abs(b.likes - minL) + Math.abs(b.comments - minC);
+-        return dA - dB; // closest to target first
+-      });
++      .sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
++    
+     console.log(`[Ext]    Tier 1 (Exact Reach): ${tier1.length} posts`);
+ 
+-    // Tier 2: CLOSEST reach (doesn't meet criteria but ranked by proximity)
++    // Tier 2: CLOSEST reach (doesn't meet exact criteria but ranked by proximity to target)
+     const tier1Set = new Set(tier1.map(p => p.url));
+     const tier2 = allPosts
+       .filter(p => !tier1Set.has(p.url))
+       .sort((a, b) => {
+-        const dA = Math.abs(a.likes - minL) + Math.abs(a.comments - minC);
+-        const dB = Math.abs(b.likes - minL) + Math.abs(b.comments - minC);
+-        return dA - dB;
++        // Calculate distance from target reach
++        const distA = Math.max(0, minL - a.likes) + Math.max(0, minC - a.comments);
++        const distB = Math.max(0, minL - b.likes) + Math.max(0, minC - b.comments);
++        if (distA !== distB) return distA - distB; // Closer is better
++        // Tie-breaker: higher overall reach
++        return (b.likes + b.comments) - (a.likes + a.comments);
+       });
++      
+     console.log(`[Ext]    Tier 2 (Closest Reach): ${tier2.length} posts`);
+ 
+-    // Assemble final (10-15 posts)
+-    const final = [];
+-    for (const p of tier1) { if (final.length >= MAX_POSTS) break; final.push(p); }
++    // Assemble final output
++    const final = [...tier1]; // No maximum limit for Exact matches!
++    
++    // If we have fewer than 10 exact matches, pad with the closest tier2 matches
+     if (final.length < MIN_POSTS) {
+-      for (const p of tier2) { if (final.length >= MAX_POSTS) break; final.push(p); }
++      for (const p of tier2) { 
++        if (final.length >= MIN_POSTS) break; 
++        final.push(p); 
++      }
+     }
+-    console.log(`[Ext] ✅ Final output: ${final.length} posts (${Math.min(tier1.length, MAX_POSTS)} exact, ${Math.max(0, final.length - Math.min(tier1.length, MAX_POSTS))} closest)`);
++    
++    console.log(`[Ext] ✅ Final output: ${final.length} posts (${tier1.length} exact, ${final.length - tier1.length} closest)`);
+ 
+     // ── PHASE 6: Sync to dashboard ──
+     if (final.length > 0) {
