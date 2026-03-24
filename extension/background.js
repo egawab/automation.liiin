@@ -42,8 +42,22 @@ function resetWorkerState() {
   console.log(`[Worker] Cycle done. Next cooldown: ${Math.round(cooldownMs / 60000)} min.`);
 }
 
-// ── Main Poll ──
+// ── Main Poll (with mutex lock) ──
+let checkJobsLock = false;
+
 async function checkJobs() {
+  // Mutex: prevent overlapping calls from alarm + startup + onInstalled
+  if (checkJobsLock) return;
+  checkJobsLock = true;
+
+  try {
+    await _checkJobsInner();
+  } finally {
+    checkJobsLock = false;
+  }
+}
+
+async function _checkJobsInner() {
   // Gate 1: Already running
   if (isJobRunning) {
     console.log("⏳ [Worker] Job in progress, skipping poll.");
@@ -265,12 +279,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'checkJobsAlarm') checkJobs();
 });
 
-// ── Startup ──
+// ── Startup (debounced to avoid collision with first alarm) ──
 chrome.runtime.onInstalled.addListener(() => {
   console.log("🚀 [Worker] LinkedIn Safety Worker v3 installed.");
-  checkJobs();
+  setTimeout(() => checkJobs(), 5000);
 });
 chrome.runtime.onStartup.addListener(() => {
   console.log("⚙️ [Worker] Restarting...");
-  checkJobs();
+  setTimeout(() => checkJobs(), 5000);
 });
