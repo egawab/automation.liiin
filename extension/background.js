@@ -142,7 +142,25 @@ async function checkJobs() {
   }
 }
 
-// ── Scraping Cycle (unchanged logic, added single-tab tracking) ──
+// ── Helpers ──
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function waitForTabLoad(tabId, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; chrome.tabs.onUpdated.removeListener(listener); resolve(); }
+    }, timeoutMs);
+    const listener = (id, info) => {
+      if (id === tabId && info.status === 'complete') {
+        if (!settled) { settled = true; clearTimeout(timer); chrome.tabs.onUpdated.removeListener(listener); resolve(); }
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+// ── Scraping Cycle (fully await-based, no setTimeout chain) ──
 async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visibilityMode) {
   const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
 
@@ -151,47 +169,60 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
       url: searchUrl,
       active: visibilityMode === 'visible'
     });
-    activeTabId = tab.id; // Track for single-tab enforcement
+    activeTabId = tab.id;
 
-    console.log(`💉 [Worker] Tab ${tab.id} created. Waiting 4s for load...`);
+    console.log(`💉 [Worker] Tab ${tab.id} created. Waiting for page load...`);
 
-    setTimeout(async () => {
-      chrome.tabs.get(tab.id, async (t) => {
-        if (chrome.runtime.lastError || !t) {
-          console.warn("⚠️ [Worker] Tab lost before injection.");
-          resetWorkerState();
-          return;
-        }
+    // Wait for page to fully load (up to 15s)
+    await waitForTabLoad(tab.id, 15000);
 
-        try {
-          console.log("🛠️ [Worker] Force-injecting content.js...");
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ['content.js']
-          });
+    // Extra buffer for LinkedIn JS hydration
+    await sleep(3000);
 
-          setTimeout(() => {
-            console.log("🚀 [Worker] Sending EXECUTE_SEARCH...");
-            chrome.tabs.sendMessage(tab.id, {
-              action: 'EXECUTE_SEARCH', keyword, settings, dashboardUrl, userId
-            }, (response) => {
-              if (chrome.runtime.lastError) {
-                console.error("❌ [Worker] Comm error:", chrome.runtime.lastError.message);
-                chrome.tabs.remove(tab.id).catch(() => {});
-                resetWorkerState();
-              } else {
-                console.log("✅ [Worker] Content script acknowledged.");
-              }
-            });
-          }, 1000);
+    // Verify tab still exists
+    try {
+      await chrome.tabs.get(tab.id);
+    } catch (e) {
+      console.warn("⚠️ [Worker] Tab lost before injection.");
+      resetWorkerState();
+      return;
+    }
 
-        } catch (e) {
-          console.error("❌ [Worker] Inject failed:", e.message);
-          chrome.tabs.remove(tab.id).catch(() => {});
-          resetWorkerState();
-        }
+    // Inject content script
+    console.log("🛠️ [Worker] Force-injecting content.js...");
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content.js']
       });
-    }, 4000);
+    } catch (e) {
+      console.error("❌ [Worker] Inject failed:", e.message);
+      chrome.tabs.remove(tab.id).catch(() => {});
+      resetWorkerState();
+      return;
+    }
+
+    // Wait for script to register its listener
+    await sleep(1500);
+
+    // Send EXECUTE_SEARCH
+    console.log("🚀 [Worker] Sending EXECUTE_SEARCH...");
+    try {
+      const response = await new Promise((resolve, reject) => {
+        chrome.tabs.sendMessage(tab.id, {
+          action: 'EXECUTE_SEARCH', keyword, settings, dashboardUrl, userId
+        }, (res) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(res);
+        });
+      });
+      console.log("✅ [Worker] Content script acknowledged.");
+    } catch (e) {
+      console.error("❌ [Worker] Comm error:", e.message);
+      chrome.tabs.remove(tab.id).catch(() => {});
+      resetWorkerState();
+    }
+    // Content script will send JOB_COMPLETED when done → resetWorkerState() is called there
 
   } catch (err) {
     console.error("❌ [Worker] Cycle failed:", err.message);
