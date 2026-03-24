@@ -6,11 +6,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveBtn = document.getElementById('saveBtn');
     const syncBtn = document.getElementById('syncBtn'); // Manual ID check
     const statusDiv = document.getElementById('status');
+    const openTabBtn = document.getElementById('openTabBtn');
 
     // Diagnostic Check
     if (!saveBtn) console.error("[POPUP] ERROR: saveBtn not found in HTML!");
     if (!syncBtn) console.error("[POPUP] ERROR: syncBtn not found in HTML!");
     if (!dashInput) console.error("[POPUP] ERROR: dashboardUrl input not found!");
+    
+    // Setup Open in Full Tab
+    if (openTabBtn) {
+        if (window.innerWidth > 400) {
+            openTabBtn.style.display = 'none'; // Already full tab
+        } else {
+            openTabBtn.addEventListener('click', () => {
+                chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+            });
+        }
+    }
 
     // Load existing settings
     chrome.storage.sync.get(['dashboardUrl', 'userId', 'visibilityMode'], (data) => {

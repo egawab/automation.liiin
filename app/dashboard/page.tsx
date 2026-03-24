@@ -265,16 +265,40 @@ export default function Dashboard() {
                       <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md">
                         <Shield className="w-6 h-6 text-white" />
                       </div>
-                      <Badge variant="success" size="sm" className="bg-white/20 text-white border-white/30 backdrop-blur-md">
-                        Extension Active
-                      </Badge>
+                      
+                      {/* Dynamic Heartbeat Indicator */}
+                      {(() => {
+                        const isOnline = settings.lastHeartbeat && 
+                          (new Date().getTime() - new Date(settings.lastHeartbeat).getTime()) < 10 * 60 * 1000;
+                        const statusColor = isOnline ? 'bg-success-500' : 'bg-error-500';
+                        const statusText = isOnline ? 'Online' : 'Offline';
+                        
+                        let seenText = 'Never connected';
+                        if (settings.lastHeartbeat) {
+                          const mins = Math.floor((new Date().getTime() - new Date(settings.lastHeartbeat).getTime()) / 60000);
+                          if (mins < 1) seenText = 'Just now';
+                          else if (mins < 60) seenText = `${mins}m ago`;
+                          else if (mins < 1440) seenText = `${Math.floor(mins/60)}h ago`;
+                          else seenText = `${Math.floor(mins/1440)}d ago`;
+                        }
+
+                        return (
+                          <div className="flex flex-col items-end">
+                            <Badge variant={isOnline ? "success" : "error"} size="sm" className="bg-white/20 text-white border-white/30 backdrop-blur-md mb-1">
+                              <span className={`w-2 h-2 rounded-full inline-block mr-1.5 ${statusColor} ${isOnline ? 'animate-pulse' : ''}`}></span>
+                              {statusText}
+                            </Badge>
+                            <span className="text-[10px] text-white/70 font-medium">Last seen: {seenText}</span>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="flex flex-col flex-1 justify-between">
                       <div className="mb-6">
                         <h3 className="text-lg font-extrabold mb-1 truncate">Browser Active</h3>
                         <p className="text-[11px] text-primary-100 font-medium leading-tight">
-                          Integrated with Chrome for maximum safety.
+                          {settings.extensionStatus || "Integrated with Chrome for maximum safety."}
                         </p>
                       </div>
 

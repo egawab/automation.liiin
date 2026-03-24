@@ -54,6 +54,10 @@ model Settings {
   proxyUser             String?
   proxyPass             String?
   
+  // Extension Telemetry
+  lastHeartbeat         DateTime?
+  extensionStatus       String?
+  
   userId                String  @unique
   user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
