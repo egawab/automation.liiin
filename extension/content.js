@@ -147,49 +147,36 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
     await humanDelay(1500, 2500);
 
     const TARGET_POSTS_MIN = 12; 
-    const MAX_POSTS_BUFFER = 60; 
+    const MAX_POSTS_BUFFER = 100; // Increased back to 100 for better data pool
     const allCandidatePosts = [];
     const seen = {};
 
     let containers = scanDoc(document);
     console.info(`🎯 [Ext-Worker] Initial scan found ${containers.length} containers.`);
 
+    // If NO containers found, send a diagnostic report so we know why!
+    if (containers.length === 0) {
+      console.warn("⚠️ [Ext-Worker] NO CONTAINERS FOUND! Sending forensic report...");
+      const bodyText = document.body.innerText.substring(0, 1000).replace(/\n/g, ' ');
+      const debugStr = `TITLE: ${document.title} | URL: ${window.location.href} | TEXT: ${bodyText}`;
+      await submitResultsToDashboard([], "DEBUG_EMPTY_PAGE", dashboardUrl, userId, debugStr);
+    }
+
     // Strategy D: Semantic Discovery (The Ultimate Hunter)
     const allDivs = document.querySelectorAll('div, li, article');
     allDivs.forEach(el => {
-        if (containers.length >= MAX_POSTS_BUFFER) return;
+        if (allCandidatePosts.length >= MAX_POSTS_BUFFER) return;
         if (containers.includes(el)) return;
         
         const text = el.innerText || '';
-        // Every search result post contains "Feed post" (EN) or "منشور" (AR) or actor degree
+        // Every search result post contains markers
         const hasFeedLabel = text.includes('Feed post') || text.includes('منشور') || text.includes('الموجز');
-        const hasActorDegree = text.match(/•\s+(1st|2nd|3rd\+|١|٢|٣)/); // Arabic digits support
         const hasSocialBars = (text.includes('Like') || text.includes('إعجاب')) && (text.includes('Comment') || text.includes('تعليق'));
         
-        if ((hasFeedLabel && hasActorDegree) || (hasActorDegree && hasSocialBars)) {
-             containers.push(el);
+        if (hasFeedLabel || hasSocialBars) {
+             if (!containers.includes(el)) containers.push(el);
         }
     });
-
-    // 2. Scan All Accessible IFrames
-    const iframes = document.querySelectorAll('iframe');
-    iframes.forEach(ifr => {
-       try {
-          const ifrDoc = ifr.contentDocument || ifr.contentWindow.document;
-          const ifrFound = scanDoc(ifrDoc);
-          if (ifrFound && ifrFound.length > 0) {
-             containers = containers.concat(ifrFound);
-          }
-       } catch (e) {}
-    });
-    
-    // Semantic Discovery fallback
-    const semanticContainers = Array.from(document.querySelectorAll('div, li, article')).filter(el => {
-        const text = el.innerText || '';
-        return (text.includes('Like') || text.includes('إعجاب')) && el.innerText.length > 300;
-    });
-    
-    containers = [...new Set([...containers, ...semanticContainers])];
 
     containers.forEach((container) => {
       if (allCandidatePosts.length >= MAX_POSTS_BUFFER) return;
@@ -246,15 +233,22 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
     const minL = settings.minLikes || 0;
     const minC = settings.minComments || 0;
 
+    // GREEDY FILTERING: Prioritize perfect matches, then best available
     const perfectMatches = allCandidatePosts.filter(p => p.likes >= minL && p.comments >= minC)
         .sort((a,b) => b.score - a.score);
     
+    // Fallback: If no perfect matches, take anything that has at least 10% of target
     const relevantBackups = allCandidatePosts
         .filter(p => !perfectMatches.includes(p))
-        .filter(p => p.likes > (minL * 0.4) || p.comments > (minC * 0.4)) 
+        .filter(p => p.likes >= (minL * 0.1) || p.comments >= (minC * 0.1)) 
         .sort((a,b) => b.score - a.score);
 
-    const finalResults = [...perfectMatches, ...relevantBackups].slice(0, 25);
+    // Ultimate fallback: Just take the top 10 if we have NOTHING
+    const fallbackResults = (perfectMatches.length + relevantBackups.length === 0) 
+        ? allCandidatePosts.sort((a,b) => b.score - a.score).slice(0, 10)
+        : [];
+
+    const finalResults = [...perfectMatches, ...relevantBackups, ...fallbackResults].slice(0, 25);
 
     console.info(`🏁 [Ext-Worker] EXTRACTION DONE. Found ${perfectMatches.length} high-reach matches. Total bundle: ${finalResults.length}`);
 
