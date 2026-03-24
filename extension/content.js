@@ -91,23 +91,28 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
     }
     
     console.log("[Ext-Worker] Scrolling to load infinite content for MAXIMUM volume...");
-    // Industrial Extraction: 20 human-like scrolls for maximum content depth
-    for (let i = 0; i < 20; i++) {
-        window.scrollBy({ top: window.innerHeight * 1.5, behavior: 'smooth' });
-        await humanDelay(1500, 3000);
-        // If "No more results" or "See more" appears, try to handle it
-        const seeMore = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('See more') || b.innerText.includes('عرض المزيد'));
-        if (seeMore) {
+    // Industrial Extraction: 25 human-like scrolls for maximum content depth
+    for (let i = 0; i < 25; i++) {
+        // Smaller, more frequent scrolls trigger lazy-loading better than large jumps
+        window.scrollBy({ top: 800, behavior: 'smooth' });
+        await humanDelay(2000, 4000); 
+        
+        // If "See more results" button appears (common in some views)
+        const seeMore = Array.from(document.querySelectorAll('button')).find(b => 
+            b.innerText.toLowerCase().includes('see more') || 
+            b.innerText.toLowerCase().includes('عرض المزيد') ||
+            b.innerText.toLowerCase().includes('show more')
+        );
+        if (seeMore && seeMore.offsetParent !== null) {
             seeMore.click();
-            await humanDelay(2000, 3000);
+            await humanDelay(3000, 5000);
         }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    await humanDelay(1000, 2000);
+    await humanDelay(1500, 2500);
 
-    const TARGET_POSTS_MIN = 15; // User specifically asked for 10-20
-    const MAX_POSTS_BUFFER = 50; 
-    const results = [];
+    const TARGET_POSTS_MIN = 20; 
+    const MAX_POSTS_BUFFER = 100; // Scan more to find the best ones
     const allCandidatePosts = [];
     const seen = {};
     let rawCount = 0;
@@ -189,107 +194,76 @@ async function executeSearchAndExtractInner(keyword, settings, dashboardUrl, use
       await submitResultsToDashboard([], "DEBUG_EMPTY_PAGE", dashboardUrl, userId, debugStr);
     }
 
-    // ... (Navigation already handled above) ...
-
-    containers.forEach((container, idx) => {
+    containers.forEach((container) => {
       if (allCandidatePosts.length >= MAX_POSTS_BUFFER) return;
       
       let url = null;
-      
-      // Try tracking scope (High reliability)
-      let scopeEls = [container].concat(Array.from(container.querySelectorAll('[data-view-tracking-scope]')));
-      for (let i = 0; i < scopeEls.length; i++) {
-        let urn = decodeTrackingScope(scopeEls[i]);
-        if (urn && (urn.indexOf('urn:li:activity:') !== -1 || urn.indexOf('urn:li:ugcPost:') !== -1 || urn.indexOf('urn:li:share:') !== -1)) {
-          url = 'https://www.linkedin.com/feed/update/' + urn;
-          break;
-        }
+      // Multi-Layer URL Discovery
+      const urlSelectors = ['a[href*="/feed/update/"]', 'a[href*="/update/urn:li:activity:"]', 'a.app-aware-link[href*="activity"]'];
+      for (const sel of urlSelectors) {
+          const link = container.querySelector(sel);
+          if (link) { url = link.href.split('?')[0]; break; }
       }
       
       if (!url) {
-        let link = container.querySelector('a[href*="/feed/update/"], a[href*="/update/urn:li:activity:"]');
-        if (link) url = link.href.split('?')[0];
+        let urn = decodeTrackingScope(container);
+        if (urn) url = 'https://www.linkedin.com/feed/update/' + urn;
       }
       
       if (!url || seen[url]) return;
       seen[url] = true;
-      rawCount++;
 
       let like = 0, comm = 0;
       let text = (container.innerText || '').replace(/[\n\r]/g, ' ');
       
-      // Advanced Reach Extraction (Multilingual)
+      // NEW: Enhanced Engagement Extraction (Selectors + Labels)
       try {
-        let allLabels = Array.from(container.querySelectorAll('[aria-label]'));
-        for (let l = 0; l < allLabels.length; l++) {
-          let label = (allLabels[l].getAttribute('aria-label') || '').toLowerCase();
-          // Reactions / Likes
-          if (!like && (label.indexOf('reaction') !== -1 || label.indexOf('like') !== -1 || label.indexOf('إعجاب') !== -1)) {
-            let ml = label.match(/(\d[\d,]*)/);
-            if (ml) like = parseNum(ml[1]);
-          }
-          // Comments
-          if (!comm && (label.indexOf('comment') !== -1 || label.indexOf('تعليق') !== -1)) {
-            let mc = label.match(/(\d[\d,]*)/);
-            if (mc) comm = parseNum(mc[1]);
-          }
+        const socialLabels = Array.from(container.querySelectorAll('[aria-label]'))
+            .map(el => el.getAttribute('aria-label').toLowerCase());
+            
+        for (const label of socialLabels) {
+            const num = parseNum(label.match(/(\d[\d,]*k?m?)/)?.[0]);
+            if (!like && (label.includes('reaction') || label.includes('like') || label.includes('إعجاب'))) like = num;
+            if (!comm && (label.includes('comment') || label.includes('تعليق'))) comm = num;
         }
-        
-        // Fallback to regex if labels failed
-        if (!like) {
-           let mLike = text.match(/(\d[\d,]*)\s*(reactions?|likes?|إعجاب|تفاعل)/i);
-           if (mLike) like = parseNum(mLike[1]);
-        }
-        if (!comm) {
-           let mComm = text.match(/(\d[\d,]*)\s*(comments?|تعليق)/i);
-           if (mComm) comm = parseNum(mComm[1]);
+
+        if (!like || !comm) {
+            const engageText = Array.from(container.querySelectorAll('button, span, a'))
+                .map(el => el.innerText.toLowerCase());
+            for (const bText of engageText) {
+                const num = parseNum(bText.match(/(\d[\d,]*k?m?)/)?.[0]);
+                if (!like && (bText.includes('إعجاب') || bText.includes('reaction'))) like = num;
+                if (!comm && (bText.includes('تعليق') || bText.includes('comment'))) comm = num;
+            }
         }
       } catch (e) {}
 
-      // Author extraction
       let author = 'LinkedIn User';
-      try {
-          let actorEl = container.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title span, .update-components-actor__container [aria-hidden="true"]');
-          if (actorEl) author = actorEl.innerText.split('\n')[0].trim();
-      } catch(e) {}
+      const authorEl = container.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title, .update-components-actor__container [aria-hidden="true"]');
+      if (authorEl) author = authorEl.innerText.split('\n')[0].trim();
 
-      const postData = { 
-        url, 
-        likes: like, 
-        comments: comm, 
-        author, 
-        preview: text.substring(0, 300).trim(), 
-        // Quality Score: Prioritize engagement but allow "close" matches
-        score: (like * 1) + (comm * 5) // Comments are rarer/more valuable
-      };
-
-      allCandidatePosts.push(postData);
+      allCandidatePosts.push({ 
+        url, likes: like, comments: comm, author, preview: text.substring(0, 400).trim(),
+        score: (like * 1) + (comm * 5)
+      });
     });
 
-    // INDUSTRIAL SORTING & FILTERING
+    // QUALITY FILTERING (Strict vs Fuzzy)
     const minL = settings.minLikes || 0;
     const minC = settings.minComments || 0;
 
-    // 1. First, take posts that EXACTLY match criteria
-    let perfectMatches = allCandidatePosts.filter(p => p.likes >= minL && p.comments >= minC);
+    const perfectMatches = allCandidatePosts.filter(p => p.likes >= minL && p.comments >= minC)
+        .sort((a,b) => b.score - a.score);
     
-    // 2. If we don't have enough, fill with the next "highest engagement" posts (Fuzzy matches)
-    let finalResults = [];
-    if (perfectMatches.length >= TARGET_POSTS_MIN) {
-        console.log(`[Ext-Worker] Found ${perfectMatches.length} perfect matches. Returning top performance.`);
-        perfectMatches.sort((a,b) => b.score - a.score);
-        finalResults = perfectMatches.slice(0, 30);
-    } else {
-        console.log(`[Ext-Worker] Only found ${perfectMatches.length} perfect matches. Supplementing with closest high-reach posts.`);
-        // Combine them, but prioritize perfect matches by putting them first
-        const remainingBuffer = allCandidatePosts
-            .filter(p => !perfectMatches.includes(p))
-            .sort((a,b) => b.score - a.score);
-        
-        finalResults = perfectMatches.concat(remainingBuffer).slice(0, 25);
-    }
+    const relevantBackups = allCandidatePosts
+        .filter(p => !perfectMatches.includes(p))
+        .filter(p => p.likes > (minL * 0.5) || p.comments > (minC * 0.5)) 
+        .sort((a,b) => b.score - a.score);
 
-    console.log(`[Ext-Worker] Done. Final Extraction Volume: ${finalResults.length} posts (Raw candidates: ${allCandidatePosts.length})`);
+    const finalResults = [...perfectMatches, ...relevantBackups].slice(0, 30);
+
+    console.log(`[Ext-Worker] DONE: PerfectMatches=${perfectMatches.length}. OutputSize=${finalResults.length}`);
+
 
     if (finalResults.length > 0) {
       await submitResultsToDashboard(finalResults, keyword, dashboardUrl, userId);
