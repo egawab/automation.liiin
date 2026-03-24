@@ -285,38 +285,19 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
       return;
     }
 
-    // ── PHASE 5: 3-Tier Precision Reach Filter ──
-    console.log(`[Ext] 🎯 Phase 5: Applying 3-Tier reach filter...`);
+    // ── PHASE 5: Strict Reach Filter ──
+    console.log(`[Ext] 🎯 Phase 5: Applying strict reach filter...`);
 
-    // Tier 1: EXACT match — sorted by HIGHEST REACH (NaN-safe)
-    const tier1 = allPosts
+    // EXACT match — sorted by HIGHEST REACH (NaN-safe)
+    const final = allPosts
       .filter(p => (p.likes || 0) >= minL && (p.comments || 0) >= minC)
       .sort((a, b) => {
         const rA = (a.likes || 0) + (a.comments || 0);
         const rB = (b.likes || 0) + (b.comments || 0);
         return rB - rA; // highest reach first
       });
-    console.log(`[Ext]    Tier 1 (Exact Reach): ${tier1.length} posts`);
 
-    // Tier 2: CLOSEST reach (doesn't meet criteria, ranked by proximity)
-    const tier1Set = new Set(tier1.map(p => p.url));
-    const tier2 = allPosts
-      .filter(p => !tier1Set.has(p.url))
-      .sort((a, b) => {
-        const dA = Math.max(0, minL - (a.likes || 0)) + Math.max(0, minC - (a.comments || 0));
-        const dB = Math.max(0, minL - (b.likes || 0)) + Math.max(0, minC - (b.comments || 0));
-        if (dA !== dB) return dA - dB;
-        return ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0));
-      });
-    console.log(`[Ext]    Tier 2 (Closest Reach): ${tier2.length} posts`);
-
-    // Assemble final — ALL Tier 1 (no cap), pad with Tier 2 if under MIN_POSTS
-    const final = [];
-    for (const p of tier1) { final.push(p); }
-    if (final.length < MIN_POSTS) {
-      for (const p of tier2) { if (final.length >= MIN_POSTS) break; final.push(p); }
-    }
-    console.log(`[Ext] ✅ Final output: ${final.length} posts (${tier1.length} exact, ${final.length - tier1.length} closest)`);
+    console.log(`[Ext] ✅ Final output: ${final.length} posts matching criteria (minLikes>=${minL}, minComments>=${minC})`);
 
     // ── PHASE 6: Sync to dashboard ──
     if (final.length > 0) {
