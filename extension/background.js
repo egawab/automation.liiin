@@ -173,7 +173,7 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
-// ── Scraping Cycle (Robust messaging loop to fix "Receiving end does not exist") ──
+// ── Scraping Cycle (Reverse-Handshake for 100% Reliability) ──
 async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visibilityMode) {
   const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
 
@@ -185,55 +185,60 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
     
     // Save to storage async
     saveState({ activeTabId: tab.id }).catch(console.error);
-    console.log(`💉 [Worker] Tab ${tab.id} created. Beginning robust injection checking...`);
+    console.log(`💉 [Worker] Tab ${tab.id} created. Waiting for DOM...`);
 
     // Give the page at least 3 seconds to initially populate the DOM
     await sleep(3000);
 
+    // Setup a listener for the reverse-handshake from content.js
     let connected = false;
-    let retries = 5;
+    const handshakeListener = (message, sender, sendResponse) => {
+      if (message.action === 'CONTENT_SCRIPT_READY' && sender.tab?.id === tab.id) {
+        console.log("✅ [Worker] Reverse-handshake successful! Sending payload.");
+        connected = true;
+        // Reply instantly with the job payload!
+        sendResponse({ 
+          action: 'EXECUTE_SEARCH_PAYLOAD', 
+          keyword, 
+          settings, 
+          dashboardUrl, 
+          userId 
+        });
+        return false; // synchronous response
+      }
+    };
+    
+    chrome.runtime.onMessage.addListener(handshakeListener);
 
-    while (retries > 0 && !connected) {
-      if (retries < 5) console.log(`🔄 [Worker] Retrying injection... (${retries} retries left)`);
-      
+    // Try injecting up to 3 times (in case of page redirects)
+    let injectRetries = 3;
+    while (injectRetries > 0 && !connected) {
       try {
         const t = await chrome.tabs.get(tab.id);
         if (!t) break;
         
+        console.log(`🔄 [Worker] Injecting content.js... (${injectRetries} attempts left)`);
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           files: ['content.js']
         });
-
-        // Wait a short moment for script to evaluate and addListener
-        await sleep(1000);
-        
-        // Wrap sendMessage in a promise to try-catch it cleanly
-        const response = await new Promise((resolve, reject) => {
-           chrome.tabs.sendMessage(tab.id, {
-              action: 'EXECUTE_SEARCH', keyword, settings, dashboardUrl, userId
-           }, (res) => {
-              if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-              else resolve(res);
-           });
-        });
-
-        if (response && response.received) {
-           console.log("✅ [Worker] Content script acknowledged and connected.");
-           connected = true;
-           break;
-        }
-
       } catch (e) {
-         console.warn(`[Worker] Inject warning: ${e.message}`);
+        console.warn(`[Worker] Inject warning: ${e.message}`);
       }
       
-      retries--;
-      if (!connected) await sleep(3000); // 3-second penalty before retry
+      // Wait for it to ping back
+      for(let w=0; w<50; w++) { // wait 5 seconds max per injection
+         if (connected) break;
+         await sleep(100);
+      }
+      injectRetries--;
     }
 
+    // Cleanup listener
+    chrome.runtime.onMessage.removeListener(handshakeListener);
+
     if (!connected) {
-       console.error("❌ [Worker] Comm error: Failed to establish strict connection after 5 retries.");
+       console.error("❌ [Worker] Comm error: Content script never sent READY handshake. Tab might be dead or blocked.");
        chrome.tabs.remove(tab.id).catch(() => {});
        resetWorkerStateSilent();
     }

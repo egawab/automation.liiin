@@ -1,26 +1,41 @@
 // ═══════════════════════════════════════════════════════════
-// LinkedIn Precision Extraction Engine v3
+// LinkedIn Precision Extraction Engine v4 (Reverse-Handshake)
 // Injected by background.js via chrome.scripting.executeScript
 // ═══════════════════════════════════════════════════════════
 
-if (typeof window.__linkedInExtractorReady === 'undefined') {
-  window.__linkedInExtractorReady = true;
-  let isExtracting = false;
+if (!window.__linkedInListenersAdded) {
+  window.__linkedInListenersAdded = true;
+  window.__isExtracting = false;
 
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'EXECUTE_SEARCH') {
-      sendResponse({ received: true });
-      console.log(`[Ext] ✅ Received EXECUTE_SEARCH for: "${request.keyword}"`);
-      runExtraction(request.keyword, request.settings, request.dashboardUrl, request.userId);
+  console.log("[Ext] 📡 Sending reverse-handshake to Worker...");
+  
+  // PING BACKGROUND SCRIPT: "I am ready, give me the job payload"
+  chrome.runtime.sendMessage({ action: 'CONTENT_SCRIPT_READY' }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error("[Ext] ❌ Worker unreachable:", chrome.runtime.lastError.message);
+      return;
+    }
+    
+    if (response && response.action === 'EXECUTE_SEARCH_PAYLOAD') {
+      console.log(`[Ext] ✅ Received SEARCH_PAYLOAD for: "${response.keyword}"`);
+      
+      if (window.__isExtracting) {
+        console.log("[Ext] ⏭️ Already running, skip."); 
+        return;
+      }
+      window.__isExtracting = true;
+      
+      runExtraction(response.keyword, response.settings, response.dashboardUrl, response.userId);
     }
   });
 
   async function runExtraction(keyword, settings, dashboardUrl, userId) {
-    if (isExtracting) { console.log("[Ext] ⏭️ Already running, skip."); return; }
-    isExtracting = true;
     try { await extractPipeline(keyword, settings, dashboardUrl, userId); }
-    catch (e) { console.error("[Ext] ❌ Fatal:", e); chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }); }
-    finally { isExtracting = false; }
+    catch (e) { 
+      console.error("[Ext] ❌ Fatal:", e); 
+      chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }); 
+    }
+    finally { window.__isExtracting = false; }
   }
 
   // ─── Helpers ───
