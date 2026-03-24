@@ -61,58 +61,63 @@ async function checkJobs() {
     console.log("⏳ [Worker] Job in progress, skipping poll.");
     return;
   }
-
-  let state = await getState();
-  const now = Date.now();
-  const elapsed = now - state.lastJobTime;
-
-  // ── Smart Recovery: If 2 hours passed since last job, reset cycles ──
-  if (state.lastJobTime > 0 && elapsed > 7200000) { // 2 hours
-    console.log("🔄 [Worker] Over 2 hours since last job. Resetting session safety counters.");
-    await saveState({ consecutiveCycles: 0, isPaused: false });
-    state = await getState();
-  }
-
-  // Gate 2: Cooldown timer
-  if (state.lastJobTime > 0 && elapsed < state.cooldownMs) {
-    const remaining = Math.ceil((state.cooldownMs - elapsed) / 60000);
-    console.log(`🛌 [Worker] Cooldown active. ${remaining} min remaining.`);
-    sendHeartbeat("Sleeping", `${remaining}m cooldown`);
-    return;
-  }
-
-  // Gate 3: Auto-pause check
-  if (state.isPaused) {
-    // Trickle mode: after pause, allow 1 cycle per 10 min
-    const trickleMs = 600000; // 10 min
-    if (elapsed < trickleMs) {
-      console.log(`⏸️ [Worker] PAUSED. Trickle mode: ${Math.ceil((trickleMs - elapsed) / 60000)} min left.`);
-      sendHeartbeat("Paused", "Safety limit reached - Trickle running");
-      return;
-    }
-    console.log("⏸️ [Worker] Trickle mode: allowing 1 cycle.");
-  }
-
-  // Gate 4: Single tab — ensure no stale tab
-  if (state.activeTabId !== null) {
-    try {
-      await chrome.tabs.remove(state.activeTabId);
-      console.log(`🧹 [Worker] Cleaned stale tab ${state.activeTabId}.`);
-    } catch (e) {}
-    await saveState({ activeTabId: null });
-  }
-
-  // ── Fetch jobs from dashboard ──
-  const config = await chrome.storage.sync.get(['dashboardUrl', 'userId', 'visibilityMode']);
-  const { dashboardUrl, userId, visibilityMode = 'hidden' } = config;
-  if (!dashboardUrl || !userId) {
-    console.warn("⚠️ [Worker] Missing dashboardUrl or userId.");
-    return;
-  }
+  // LOCK SYNCHRONOUSLY to prevent overlapping cycle fires during `await`
+  isJobRunning = true;
 
   try {
+    let state = await getState();
+    const now = Date.now();
+    const elapsed = now - state.lastJobTime;
+
+    // ── Smart Recovery: If 2 hours passed since last job, reset cycles ──
+    if (state.lastJobTime > 0 && elapsed > 7200000) { // 2 hours
+      console.log("🔄 [Worker] Over 2 hours since last job. Resetting session safety counters.");
+      await saveState({ consecutiveCycles: 0, isPaused: false });
+      state = await getState();
+    }
+
+    // Gate 2: Cooldown timer
+    if (state.lastJobTime > 0 && elapsed < state.cooldownMs) {
+      const remaining = Math.ceil((state.cooldownMs - elapsed) / 60000);
+      console.log(`🛌 [Worker] Cooldown active. ${remaining} min remaining.`);
+      sendHeartbeat("Sleeping", `${remaining}m cooldown`);
+      isJobRunning = false;
+      return;
+    }
+
+    // Gate 3: Auto-pause check
+    if (state.isPaused) {
+      // Trickle mode: after pause, allow 1 cycle per 10 min
+      const trickleMs = 600000; // 10 min
+      if (elapsed < trickleMs) {
+        console.log(`⏸️ [Worker] PAUSED. Trickle mode: ${Math.ceil((trickleMs - elapsed) / 60000)} min left.`);
+        sendHeartbeat("Paused", "Safety limit reached - Trickle running");
+        isJobRunning = false;
+        return;
+      }
+      console.log("⏸️ [Worker] Trickle mode: allowing 1 cycle.");
+    }
+
+    // Gate 4: Single tab — ensure no stale tab
+    if (state.activeTabId !== null) {
+      try {
+        await chrome.tabs.remove(state.activeTabId);
+        console.log(`🧹 [Worker] Cleaned stale tab ${state.activeTabId}.`);
+      } catch (e) {}
+      await saveState({ activeTabId: null });
+    }
+
+    // ── Fetch jobs from dashboard ──
+    const config = await chrome.storage.sync.get(['dashboardUrl', 'userId', 'visibilityMode']);
+    const { dashboardUrl, userId, visibilityMode = 'hidden' } = config;
+    if (!dashboardUrl || !userId) {
+      console.warn("⚠️ [Worker] Missing dashboardUrl or userId.");
+      isJobRunning = false;
+      return;
+    }
+
     const response = await fetch(`${dashboardUrl}/api/extension/jobs`, {
-      headers: { 'x-extension-token': userId, 'Cache-Control': 'no-cache' }
+        headers: { 'x-extension-token': userId, 'Cache-Control': 'no-cache' }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -121,48 +126,54 @@ async function checkJobs() {
     // ── Dashboard Start/Stop detection (reset mechanism) ──
     const isActive = data.active === true;
     if (state.wasDashboardActive === false && isActive) {
-      console.log("🔄 [Worker] Dashboard re-activated! Resetting cycle counter and pause.");
-      await saveState({ consecutiveCycles: 0, isPaused: false });
-      state = await getState();
+        console.log("🔄 [Worker] Dashboard re-activated! Resetting cycle counter and pause.");
+        await saveState({ consecutiveCycles: 0, isPaused: false });
+        state = await getState();
     }
     await saveState({ wasDashboardActive: isActive });
 
     if (!isActive || !data.hasJobs || !data.keywords?.length) {
-      console.log(`😴 [Worker] Idle. active=${isActive}, hasJobs=${data.hasJobs}`);
-      sendHeartbeat("Idle", isActive ? "No jobs available" : "System Paused");
-      return;
+        console.log(`😴 [Worker] Idle. active=${isActive}, hasJobs=${data.hasJobs}`);
+        sendHeartbeat("Idle", isActive ? "No jobs available" : "System Paused");
+        isJobRunning = false;
+        return;
     }
 
     // ── Auto-pause trigger (3 consecutive cycles) ──
     if (state.consecutiveCycles >= 3 && !state.isPaused) {
-      const nextCooldown = randomCooldown();
-      await saveState({
-        isPaused: true,
-        lastJobTime: now,
-        cooldownMs: nextCooldown
-      });
-      console.log(`⏸️ [Worker] AUTO-PAUSED after 3 consecutive cycles.`);
-      sendHeartbeat("Paused", "Auto-paused after 3 cycles");
-      return;
+        const nextCooldown = randomCooldown();
+        await saveState({
+          isPaused: true,
+          lastJobTime: now,
+          cooldownMs: nextCooldown
+        });
+        console.log(`⏸️ [Worker] AUTO-PAUSED after 3 consecutive cycles.`);
+        sendHeartbeat("Paused", "Auto-paused after 3 cycles");
+        isJobRunning = false;
+        return;
     }
 
     // ── Start cycle ──
-    isJobRunning = true;
     const kw = data.keywords[Math.floor(Math.random() * data.keywords.length)].keyword;
     const settings = data.settings || {};
     console.log(`🚀 [Worker] Starting cycle #${state.consecutiveCycles + 1} for: "${kw}"`);
     sendHeartbeat("Running", `Extracting: ${kw}`);
-    
-    // Exact pipeline call from 9b91100
+      
+    // Exact pipeline logic combined with robust polling
     startScrapingCycle(kw, settings, dashboardUrl, userId, visibilityMode);
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
     sendHeartbeat("Error", "Check connection/keys");
+    isJobRunning = false; // release lock on error
   }
 }
 
-// ── Scraping Cycle (EXACT match to commit 9b91100 core pipeline) ──
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+// ── Scraping Cycle (Robust messaging loop to fix "Receiving end does not exist") ──
 async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visibilityMode) {
   const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
 
@@ -172,50 +183,60 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId, visib
       active: visibilityMode === 'visible'
     });
     
-    // Save to storage async but don't block the exact timing of the pipeline
+    // Save to storage async
     saveState({ activeTabId: tab.id }).catch(console.error);
+    console.log(`💉 [Worker] Tab ${tab.id} created. Beginning robust injection checking...`);
 
-    console.log(`💉 [Worker] Tab ${tab.id} created. Waiting 4s for load...`);
+    // Give the page at least 3 seconds to initially populate the DOM
+    await sleep(3000);
 
-    setTimeout(async () => {
-      chrome.tabs.get(tab.id, async (t) => {
-        if (chrome.runtime.lastError || !t) {
-          console.warn("⚠️ [Worker] Tab lost before injection.");
-          resetWorkerStateSilent();
-          return;
-        }
+    let connected = false;
+    let retries = 5;
 
-        try {
-          console.log("🛠️ [Worker] Force-injecting content.js...");
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ['content.js']
-          });
+    while (retries > 0 && !connected) {
+      if (retries < 5) console.log(`🔄 [Worker] Retrying injection... (${retries} retries left)`);
+      
+      try {
+        const t = await chrome.tabs.get(tab.id);
+        if (!t) break;
+        
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content.js']
+        });
 
-          setTimeout(() => {
-            console.log("🚀 [Worker] Sending EXECUTE_SEARCH...");
-            
-            // EXACT matching signature for callback - NO async modifier here!
-            chrome.tabs.sendMessage(tab.id, {
+        // Wait a short moment for script to evaluate and addListener
+        await sleep(1000);
+        
+        // Wrap sendMessage in a promise to try-catch it cleanly
+        const response = await new Promise((resolve, reject) => {
+           chrome.tabs.sendMessage(tab.id, {
               action: 'EXECUTE_SEARCH', keyword, settings, dashboardUrl, userId
-            }, (response) => {
-              if (chrome.runtime.lastError) {
-                console.error("❌ [Worker] Comm error:", chrome.runtime.lastError.message);
-                chrome.tabs.remove(tab.id).catch(() => {});
-                resetWorkerStateSilent();
-              } else {
-                console.log("✅ [Worker] Content script acknowledged.");
-              }
-            });
-          }, 1000);
+           }, (res) => {
+              if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+              else resolve(res);
+           });
+        });
 
-        } catch (e) {
-          console.error("❌ [Worker] Inject failed:", e.message);
-          chrome.tabs.remove(tab.id).catch(() => {});
-          resetWorkerStateSilent();
+        if (response && response.received) {
+           console.log("✅ [Worker] Content script acknowledged and connected.");
+           connected = true;
+           break;
         }
-      });
-    }, 4000);
+
+      } catch (e) {
+         console.warn(`[Worker] Inject warning: ${e.message}`);
+      }
+      
+      retries--;
+      if (!connected) await sleep(3000); // 3-second penalty before retry
+    }
+
+    if (!connected) {
+       console.error("❌ [Worker] Comm error: Failed to establish strict connection after 5 retries.");
+       chrome.tabs.remove(tab.id).catch(() => {});
+       resetWorkerStateSilent();
+    }
 
   } catch (err) {
     console.error("❌ [Worker] Cycle failed:", err.message);
