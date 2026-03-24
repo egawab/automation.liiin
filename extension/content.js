@@ -5,7 +5,9 @@ if (typeof window.isLinkedInWorkerLoaded === 'undefined') {
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.action === 'EXECUTE_SEARCH') {
-        // The new window.executeSearchAndExtract will handle the isExtracting check
+        // Essential: Respond immediately to keep the port open
+        sendResponse({ received: true });
+        
         console.log(`[Ext-Worker] Received job for keyword: ${request.keyword}`);
         window.executeSearchAndExtract(request.keyword, request.settings, request.dashboardUrl, request.userId);
       }
