@@ -221,6 +221,16 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
         } catch (e) {}
       }
 
+      // Strategy 7: Bulletproof HTML Regex Fallback
+      if (!url) {
+        const html = c.innerHTML;
+        let match = html.match(/urn:li:activity:\d+/);
+        if (!match) match = html.match(/urn:li:ugcPost:\d+/);
+        if (match) {
+          url = 'https://www.linkedin.com/feed/update/' + match[0];
+        }
+      }
+
       // ── SKIP posts without a real LinkedIn URL ──
       if (!url) { noUrlCount++; continue; }
       if (seenUrls[url]) { dupCount++; continue; }
