@@ -14,9 +14,10 @@ let isJobRunning = false;
 let activeTabId = null;           // Single-tab enforcement
 let lastJobTime = 0;
 let cooldownMs = 0;               // Randomized each cycle
-let consecutiveCycles = 0;        // Auto-pause counter
-let isPaused = false;             // True after 3 cycles → needs dashboard restart
+let isPaused = false;             // True after all keywords finish 3 cycles
 let wasDashboardActive = null;    // Track systemActive transitions for manual reset
+let keywordCycles = {};           // Track cycles per keyword { 'keyword': count }
+let currentKeyword = null;        // Track currently running keyword
 
 console.log("[Worker] ═══ Safety Worker v3 Initialized ═══");
 
@@ -31,8 +32,14 @@ function resetWorkerState() {
   activeTabId = null;
   lastJobTime = Date.now();
   cooldownMs = randomCooldown();
-  consecutiveCycles++;
-  console.log(`[Worker] Cycle #${consecutiveCycles} done. Next cooldown: ${Math.round(cooldownMs / 60000)} min.`);
+  
+  if (currentKeyword) {
+    keywordCycles[currentKeyword] = (keywordCycles[currentKeyword] || 0) + 1;
+    console.log(`[Worker] Keyword "${currentKeyword}" done: ${keywordCycles[currentKeyword]}/3 cycles.`);
+    currentKeyword = null;
+  }
+  
+  console.log(`[Worker] Cycle done. Next cooldown: ${Math.round(cooldownMs / 60000)} min.`);
 }
 
 // ── Main Poll ──
@@ -56,7 +63,7 @@ async function checkJobs() {
     // Trickle mode: after pause, allow 1 cycle per 10 min
     const trickleMs = 600000; // 10 min
     if (elapsed < trickleMs) {
-      console.log(`⏸️ [Worker] PAUSED after ${consecutiveCycles} cycles. Trickle mode: ${Math.ceil((trickleMs - elapsed) / 60000)} min left.`);
+      console.log(`⏸️ [Worker] PAUSED (All keywords hit limit). Trickle mode: ${Math.ceil((trickleMs - elapsed) / 60000)} min left.`);
       return;
     }
     console.log("⏸️ [Worker] Trickle mode: allowing 1 cycle.");
@@ -90,9 +97,9 @@ async function checkJobs() {
     // ── Dashboard Start/Stop detection (reset mechanism) ──
     const isActive = data.active === true;
     if (wasDashboardActive === false && isActive) {
-      // User toggled Start on the Dashboard → RESET pause
-      console.log("🔄 [Worker] Dashboard re-activated! Resetting cycle counter and pause.");
-      consecutiveCycles = 0;
+      // User toggled Start on the Dashboard → RESET keyword cycles and pause
+      console.log("🔄 [Worker] Dashboard re-activated! Resetting keyword cycles and pause.");
+      keywordCycles = {};
       isPaused = false;
     }
     wasDashboardActive = isActive;
@@ -102,21 +109,32 @@ async function checkJobs() {
       return;
     }
 
-    // ── Auto-pause trigger (3 consecutive cycles) ──
-    if (consecutiveCycles >= 3 && !isPaused) {
-      isPaused = true;
-      lastJobTime = Date.now();
-      cooldownMs = randomCooldown();
-      console.log(`⏸️ [Worker] AUTO-PAUSED after ${consecutiveCycles} consecutive cycles.`);
-      console.log(`⏸️ [Worker] Toggle Dashboard OFF then ON to resume, or wait for trickle mode.`);
+    // ── Filter available keywords ──
+    const availableKeywords = data.keywords.filter(k => (keywordCycles[k.keyword] || 0) < 3);
+
+    // ── Auto-pause trigger (All keywords reached 3 cycles) ──
+    if (availableKeywords.length === 0) {
+      if (!isPaused) {
+        isPaused = true;
+        lastJobTime = Date.now();
+        cooldownMs = randomCooldown();
+        console.log(`⏸️ [Worker] AUTO-PAUSED: All available keywords have reached their max 3 cycles.`);
+        console.log(`⏸️ [Worker] Toggle Dashboard OFF then ON to reset cycles.`);
+      }
       return;
     }
 
+    // Unpause if new keywords were added
+    isPaused = false;
+
     // ── Start cycle ──
     isJobRunning = true;
-    const kw = data.keywords[Math.floor(Math.random() * data.keywords.length)].keyword;
+    const kwObj = availableKeywords[Math.floor(Math.random() * availableKeywords.length)];
+    const kw = kwObj.keyword;
+    currentKeyword = kw;
     const settings = data.settings || {};
-    console.log(`🚀 [Worker] Starting cycle #${consecutiveCycles + 1} for: "${kw}"`);
+    const cycleNum = (keywordCycles[kw] || 0) + 1;
+    console.log(`🚀 [Worker] Starting cycle #${cycleNum}/3 for: "${kw}"`);
     await startScrapingCycle(kw, settings, dashboardUrl, userId, visibilityMode);
 
   } catch (error) {
@@ -206,11 +224,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     resetWorkerState();
 
     // Log next action
-    if (consecutiveCycles >= 3) {
-      console.log(`⏸️ [Worker] Will auto-pause on next poll (${consecutiveCycles}/3 cycles).`);
-    } else {
-      console.log(`🛌 [Worker] Cooldown: ~${Math.round(cooldownMs / 60000)} min before next cycle.`);
-    }
+    console.log(`🛌 [Worker] Cooldown: ~${Math.round(cooldownMs / 60000)} min before next cycle.`);
   }
 });
 
