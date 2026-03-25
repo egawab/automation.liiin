@@ -21,7 +21,9 @@ async function loadState() {
     isPaused: false,
     keywordCycles: {},
     currentKeyword: null,
-    wasDashboardActive: null
+    wasDashboardActive: null,
+    dailyCommentsMade: 0,
+    lastCommentDate: null
   });
 }
 
@@ -126,9 +128,21 @@ async function _checkJobsInner() {
 
     // Dashboard Start/Stop detection
     const isActive = data.active === true;
-    if (state.wasDashboardActive === false && isActive) {
-      console.log("🔄 [Worker] Dashboard re-activated! Resetting keyword cycles.");
-      await saveState({ keywordCycles: {}, isPaused: false, wasDashboardActive: isActive });
+    if (state.wasDashboardActive === false && isActive) { // Clean slate on dashboard restart
+      console.log("🔄 [Worker] Dashboard turned active. Resetting cycles and daily limits.");
+      await saveState({
+        keywordCycles: {},
+        isPaused: false,
+        wasDashboardActive: true,
+        lastJobTime: 0,
+        dailyCommentsMade: 0
+      });
+      // Update local state object to reflect changes for current run
+      state.keywordCycles = {};
+      state.isPaused = false;
+      state.wasDashboardActive = true;
+      state.lastJobTime = 0;
+      state.dailyCommentsMade = 0;
     } else {
       await saveState({ wasDashboardActive: isActive });
     }
@@ -145,8 +159,8 @@ async function _checkJobsInner() {
     // Auto-pause if all keywords hit limit
     if (availableKeywords.length === 0) {
       if (!state.isPaused) {
-        await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: randomCooldown() });
-        console.log("⏸️ [Worker] AUTO-PAUSED: All keywords completed 3 cycles.");
+        await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: randomCooldown(), dailyCommentsMade: 0 });
+        console.log("⏸️ [Worker] AUTO-PAUSED: All keywords completed 3 cycles. Resetting limits.");
         console.log("⏸️ [Worker] Toggle Dashboard OFF → ON to reset.");
       }
       return;
@@ -160,14 +174,30 @@ async function _checkJobsInner() {
     // ── Start cycle ──
     const kwObj = availableKeywords[Math.floor(Math.random() * availableKeywords.length)];
     const kw = kwObj.keyword;
+    // ── Daily Safety Limit Check ──
+    const today = new Date().toDateString();
+    if (state.lastCommentDate !== today) {
+      state.dailyCommentsMade = 0;
+      await saveState({ dailyCommentsMade: 0, lastCommentDate: today });
+      console.log("📅 [Worker] New day started. Reset daily comment quota.");
+    }
+    
     const settings = data.settings || {};
+    const allComments = data.comments || [];
+    const keywordComments = allComments.filter(c => !c.keywordId || c.keywordId === kwObj.id);
+    
+    if (state.dailyCommentsMade >= 15 && !settings.searchOnlyMode) {
+      console.warn("🛡️ [Worker] Daily comment limit (15) reached! Forcing Search-Only mode for the rest of today.");
+      settings.searchOnlyMode = true;
+    }
+
     const cycleNum = (kc[kw] || 0) + 1;
 
     // Mark as running BEFORE creating tab
     await saveState({ isJobRunning: true, currentKeyword: kw, lastJobTime: Date.now() });
 
     console.log(`🚀 [Worker] Starting cycle #${cycleNum}/3 for: "${kw}"`);
-    await startScrapingCycle(kw, settings, dashboardUrl, userId);
+    await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId);
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
@@ -175,7 +205,7 @@ async function _checkJobsInner() {
 }
 
 // ── Scraping Cycle (fully await-based, single tab) ──
-async function startScrapingCycle(keyword, settings, dashboardUrl, userId) {
+async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId) {
   const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
 
   try {
@@ -215,7 +245,7 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId) {
     try {
       await new Promise((resolve, reject) => {
         chrome.tabs.sendMessage(tab.id, {
-          action: 'EXECUTE_SEARCH', keyword, settings, dashboardUrl, userId
+          action: 'EXECUTE_SEARCH', keyword, settings, comments, dashboardUrl, userId
         }, (res) => {
           if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
           else resolve(res);
@@ -275,6 +305,24 @@ async function finishCycle(tabId, incrementKeyword = true) {
 
 // ── Message Router ──
 chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message.action === 'COMMENT_POSTED') {
+    loadState().then(s => {
+      const newCount = (s.dailyCommentsMade || 0) + 1;
+      saveState({ dailyCommentsMade: newCount });
+      console.log(`💬 [Worker] Comment posted successfully. Daily quota: ${newCount}/15`);
+      
+      // Notify the user directly
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon-48.png', // Assuming there's a default icon
+        title: 'Nexora AI Commenting',
+        message: `Successfully posted comment #${newCount}/15 for today!`,
+        priority: 2
+      });
+    });
+    return;
+  }
+
   if (message.action === 'SYNC_RESULTS') {
     const { posts, keyword, dashboardUrl, userId, debugInfo } = message;
     console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts...`);

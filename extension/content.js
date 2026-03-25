@@ -11,14 +11,14 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     if (request.action === 'EXECUTE_SEARCH') {
       sendResponse({ received: true });
       console.log(`[Ext] ✅ Received EXECUTE_SEARCH for: "${request.keyword}"`);
-      runExtraction(request.keyword, request.settings, request.dashboardUrl, request.userId);
+      runExtraction(request.keyword, request.settings, request.comments, request.dashboardUrl, request.userId);
     }
   });
 
-  async function runExtraction(keyword, settings, dashboardUrl, userId) {
+  async function runExtraction(keyword, settings, comments, dashboardUrl, userId) {
     if (isExtracting) { console.log("[Ext] ⏭️ Already running, skip."); return; }
     isExtracting = true;
-    try { await extractPipeline(keyword, settings, dashboardUrl, userId); }
+    try { await extractPipeline(keyword, settings, comments, dashboardUrl, userId); }
     catch (e) { console.error("[Ext] ❌ Fatal:", e); chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }); }
     finally { isExtracting = false; }
   }
@@ -41,7 +41,7 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
 
   // ─── Main Pipeline ───
 
-  async function extractPipeline(keyword, settings, dashboardUrl, userId) {
+  async function extractPipeline(keyword, settings, comments, dashboardUrl, userId) {
     const minL = settings.minLikes || 0;
     const minC = settings.minComments || 0;
     const MIN_POSTS = 10;
@@ -272,7 +272,7 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
 
       const preview = (c.innerText || '').replace(/[\n\r]+/g, ' ').substring(0, 400).trim();
 
-      allPosts.push({ url, likes, comments, author, preview });
+      allPosts.push({ url, likes, commentsCount: comments, author, preview, element: c });
     }
 
     console.log(`[Ext]    Extracted: ${allPosts.length} unique posts (${noUrlCount} without original URL, ${dupCount} duplicates skipped)`);
@@ -290,10 +290,10 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
 
     // Tier 1: EXACT match — sorted by HIGHEST REACH (NaN-safe)
     const tier1 = allPosts
-      .filter(p => (p.likes || 0) >= minL && (p.comments || 0) >= minC)
+      .filter(p => (p.likes || 0) >= minL && (p.commentsCount || 0) >= minC)
       .sort((a, b) => {
-        const rA = (a.likes || 0) + (a.comments || 0);
-        const rB = (b.likes || 0) + (b.comments || 0);
+        const rA = (a.likes || 0) + (a.commentsCount || 0);
+        const rB = (b.likes || 0) + (b.commentsCount || 0);
         return rB - rA; // highest reach first
       });
     console.log(`[Ext]    Tier 1 (Exact Reach): ${tier1.length} posts`);
@@ -303,10 +303,10 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     const tier2 = allPosts
       .filter(p => !tier1Set.has(p.url))
       // Strictly avoid 0-engagement trash in the fallback
-      .filter(p => (p.likes || 0) > 0 || (p.comments || 0) > 0)
+      .filter(p => (p.likes || 0) > 0 || (p.commentsCount || 0) > 0)
       .sort((a, b) => {
-        const rA = (a.likes || 0) + (a.comments || 0);
-        const rB = (b.likes || 0) + (b.comments || 0);
+        const rA = (a.likes || 0) + (a.commentsCount || 0);
+        const rB = (b.likes || 0) + (b.commentsCount || 0);
         return rB - rA; 
       });
     console.log(`[Ext]    Tier 2 (Best Available Fallback): ${tier2.length} posts`);
@@ -318,6 +318,83 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
       for (const p of tier2) { if (final.length >= MIN_POSTS) break; final.push(p); }
     }
     console.log(`[Ext] ✅ Final output: ${final.length} posts (${tier1.length} exact, ${final.length - tier1.length} best available)`);
+
+    // ── PHASE 5b: Autonomous Safe Commenting (Hybrid Relayer) ──
+    if (!settings.searchOnlyMode && comments && comments.length > 0 && final.length > 0) {
+      console.log(`[Ext] 🤖 Phase 5b: Safe Auto-Commenting enabled. Waiting 3s...`);
+      await wait(3000, 5000);
+      
+      // Limit to max 2 comments per cycle to maintain human pacing
+      const targetPosts = tier1.slice(0, 2); 
+      
+      for (const p of targetPosts) {
+        if (!p.element) continue;
+        const commentObj = comments[Math.floor(Math.random() * comments.length)];
+        const textToType = commentObj.text;
+        
+        try {
+          console.log(`[Ext] 🎯 Engaging with post by ${p.author}...`);
+          p.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          await wait(2000, 4000); // Read the post
+          
+          // 1. Click Comment Button
+          const commentBtn = p.element.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
+          if (!commentBtn) { console.log("[Ext] ⏭️ No comment button found, skipping."); continue; }
+          commentBtn.click();
+          await wait(1500, 2500); // Wait for editor to expand
+          
+          // 2. Find Editor Box
+          const editor = p.element.querySelector('div.ql-editor, div[role="textbox"]');
+          if (!editor) { console.log("[Ext] ⏭️ No text editor found, skipping."); continue; }
+          
+          editor.focus();
+          await wait(500, 1000);
+          
+          // Clear it
+          editor.innerHTML = '<p></p>';
+          const pTag = editor.querySelector('p') || editor;
+          
+          // 3. Human Typewriter Emulation (Jitter) natively mimicking human inputs
+          for (let i = 0; i < textToType.length; i++) {
+            pTag.focus();
+            document.execCommand('insertText', false, textToType[i]);
+            await wait(30, 120);
+          }
+          await wait(2000, 4000); // Review the typed comment
+          
+          // Force React state update just in case
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(500, 1000);
+
+          // 4. Click Submit
+          let submitBtn = p.element.querySelector('button.comments-comment-box__submit-button, .comments-comment-box button.artdeco-button--primary');
+          if (!submitBtn) {
+            submitBtn = Array.from(p.element.querySelectorAll('button')).find(b => 
+              b.innerText && (b.innerText.toLowerCase().includes('post') || b.innerText.includes('نشر') || b.innerText.includes('تعليق')) && 
+              b.className.includes('primary')
+            );
+          }
+          
+          if (submitBtn) {
+            if (submitBtn.disabled) {
+              console.warn(`[Ext] ⚠️ Submit button is disabled. Attempting force click anyway.`);
+              submitBtn.removeAttribute('disabled');
+            }
+            submitBtn.click();
+            console.log(`[Ext] ✅ Comment Posted: "${textToType.substring(0, 30)}..."`);
+            chrome.runtime.sendMessage({ action: 'COMMENT_POSTED', url: p.url });
+          } else {
+            console.warn(`[Ext] ⚠️ Submit button completely missing from DOM!`);
+          }
+          
+          await wait(4000, 7000); // Rest before next action
+        } catch (e) {
+          console.error(`[Ext] ❌ Error Auto-Commenting:`, e);
+        }
+      }
+    } else {
+      console.log(`[Ext] 🛡️ Search-Only Mode Active OR No Comments found. Skipping engagement.`);
+    }
 
     // ── PHASE 6: Sync to dashboard ──
     if (final.length > 0) {
