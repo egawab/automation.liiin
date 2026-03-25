@@ -840,68 +840,6 @@ export default function Dashboard() {
       case 'settings':
         return (
           <div className="max-w-4xl mx-auto">
-            {/* Cloud Scraper Proxy Configuration */}
-            <Card className="mb-8 border-2 border-primary-100 overflow-hidden shadow-2xl ring-4 ring-primary-50">
-              <div className="p-6 md:p-8 border-b border-primary-50 bg-gradient-to-r from-gray-900 to-gray-800 text-white">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-2xl bg-primary-500 text-white flex items-center justify-center shadow-lg">
-                    <Shield className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-black">Cloud Proxy Settings</h3>
-                    <p className="text-sm text-primary-100/70 font-medium">Configure your industrial-scale network identity</p>
-                  </div>
-                </div>
-              </div>
-              <div className="p-8 bg-white space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest">Proxy Host/IP</label>
-                    <input 
-                      type="text" 
-                      name="proxyHost"
-                      defaultValue={settings.proxyHost || ''} 
-                      placeholder="e.g. 1.23.45.67"
-                      className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold focus:border-primary-500 outline-none transition-all"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest">Proxy Port</label>
-                    <input 
-                      type="number" 
-                      name="proxyPort"
-                      defaultValue={settings.proxyPort || ''} 
-                      placeholder="e.g. 8080"
-                      className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold focus:border-primary-500 outline-none transition-all"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest">Proxy Username</label>
-                    <input 
-                      type="text" 
-                      name="proxyUser"
-                      defaultValue={settings.proxyUser || ''} 
-                      className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold focus:border-primary-500 outline-none transition-all"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest">Proxy Password</label>
-                    <input 
-                      type="password" 
-                      name="proxyPass"
-                      defaultValue={settings.proxyPass || ''} 
-                      className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold focus:border-primary-500 outline-none transition-all"
-                    />
-                  </div>
-                </div>
-                <div className="pt-4 p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
-                   <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                   <p className="text-xs text-amber-800 font-medium leading-relaxed">
-                     <strong>Security Note:</strong> Your proxy credentials are used strictly by the Cloud Worker to route LinkedIn traffic. Ensure your proxy supports <strong>HTTP/HTTPS</strong>.
-                   </p>
-                </div>
-              </div>
-            </Card>
 
             <Card>
               <div className="p-6 md:p-8 border-b border-gray-100">
