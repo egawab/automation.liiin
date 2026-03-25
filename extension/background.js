@@ -222,7 +222,17 @@ async function startScrapingCycle(keyword, settings, dashboardUrl, userId) {
         });
       });
       console.log("✅ [Worker] Content script acknowledged.");
-      // Content script will send JOB_COMPLETED when done
+
+      // 3-minute watchdog: force-kill tab if content script hangs
+      const watchdogTabId = tab.id;
+      setTimeout(async () => {
+        const s = await loadState();
+        if (s.isJobRunning && s.activeTabId === watchdogTabId) {
+          console.warn("⏱️ [Worker] WATCHDOG: 3-min timeout. Force-killing tab.");
+          chrome.tabs.remove(watchdogTabId).catch(() => {});
+          await finishCycle(null, false);
+        }
+      }, 180000); // 3 minutes
     } catch (e) {
       console.error("❌ [Worker] Comm error:", e.message);
       chrome.tabs.remove(tab.id).catch(() => {});
