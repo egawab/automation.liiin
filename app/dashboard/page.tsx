@@ -47,7 +47,6 @@ export default function Dashboard() {
 
   // Wizard State
   const [showWizard, setShowWizard] = useState(false);
-  const [wizardHasTriggered, setWizardHasTriggered] = useState(false);
 
   const fetchData = async () => {
     // Fetch Settings
@@ -82,10 +81,15 @@ export default function Dashboard() {
     }
 
     // Trigger Wizard for brand new accounts (0 keywords and never connected extension)
-    if (!wizardHasTriggered && settingsData && kwRes.ok) {
-      if (!settingsData.lastHeartbeat && currentKeywords.length === 0) {
+    if (settingsData && kwRes.ok) {
+      // Use localStorage to permanently suppress the wizard once shown/dismissed
+      const hasSeenWizard = typeof window !== 'undefined' ? localStorage.getItem('nexora_wizard_seen') === 'true' : false;
+      
+      if (!hasSeenWizard && !settingsData.lastHeartbeat && currentKeywords.length === 0) {
         setShowWizard(true);
-        setWizardHasTriggered(true);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('nexora_wizard_seen', 'true');
+        }
       }
     }
 
