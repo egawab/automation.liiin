@@ -337,54 +337,114 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
           p.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           await wait(2000, 4000); // Read the post
           
-          // 1. Click Comment Button
-          const commentBtn = p.element.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
+          // 1. Click Comment Button (broad selectors)
+          let commentBtn = p.element.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
+          if (!commentBtn) {
+            commentBtn = Array.from(p.element.querySelectorAll('button')).find(b => {
+              const label = (b.getAttribute('aria-label') || '').toLowerCase();
+              const text = (b.innerText || '').toLowerCase();
+              return label.includes('comment') || text.includes('comment') || label.includes('تعليق') || text.includes('تعليق');
+            });
+          }
           if (!commentBtn) { console.log("[Ext] ⏭️ No comment button found, skipping."); continue; }
           commentBtn.click();
-          await wait(1500, 2500); // Wait for editor to expand
+          console.log("[Ext]    Comment button clicked. Waiting for editor...");
+          await wait(2000, 3500); // Wait for editor to expand
           
-          // 2. Find Editor Box
-          const editor = p.element.querySelector('div.ql-editor, div[role="textbox"]');
-          if (!editor) { console.log("[Ext] ⏭️ No text editor found, skipping."); continue; }
-          
-          editor.focus();
-          await wait(500, 1000);
-          
-          // Clear it
-          editor.innerHTML = '<p></p>';
-          const pTag = editor.querySelector('p') || editor;
-          
-          // 3. Human Typewriter Emulation (Jitter) natively mimicking human inputs
-          for (let i = 0; i < textToType.length; i++) {
-            pTag.focus();
-            document.execCommand('insertText', false, textToType[i]);
-            await wait(30, 120);
+          // 2. Find Editor Box (search post element first, then broader DOM)
+          let editor = p.element.querySelector('div.ql-editor, div[role="textbox"], div[contenteditable="true"]');
+          if (!editor) {
+            // LinkedIn sometimes renders comment forms outside the post card
+            const allEditors = document.querySelectorAll('div.ql-editor, div[role="textbox"], div[contenteditable="true"].comments-comment-texteditor__content');
+            for (const e of allEditors) {
+              if (e.offsetParent !== null && e.innerHTML.trim().length < 50) { editor = e; break; }
+            }
           }
-          await wait(2000, 4000); // Review the typed comment
+          if (!editor) { console.log("[Ext] ⏭️ No text editor found, skipping."); continue; }
+          console.log("[Ext]    Editor found. Starting human typing...");
           
-          // Force React state update just in case
-          editor.dispatchEvent(new Event('input', { bubbles: true }));
-          await wait(500, 1000);
-
-          // 4. Click Submit
-          let submitBtn = p.element.querySelector('button.comments-comment-box__submit-button, .comments-comment-box button.artdeco-button--primary');
+          // 3. Human Typewriter (char-by-char via execCommand on EDITOR focus)
+          editor.focus();
+          await wait(300, 600);
+          // Select all existing content and delete it
+          document.execCommand('selectAll', false, null);
+          document.execCommand('delete', false, null);
+          await wait(300, 600);
+          
+          // Type each character with random human-like jitter
+          for (let i = 0; i < textToType.length; i++) {
+            editor.focus(); // Re-focus each time to prevent React detach issues
+            document.execCommand('insertText', false, textToType[i]);
+            // Random jitter: 40-150ms per keystroke (human range)
+            await wait(40, 150);
+          }
+          console.log(`[Ext]    Typed ${textToType.length} chars. Reviewing...`);
+          await wait(2000, 4000); // Pause to "review" the comment
+          
+          // 4. Find & Click Submit Button (5-layer detection)
+          let submitBtn = null;
+          
+          // Layer 1: LinkedIn's known class on the post element
+          submitBtn = p.element.querySelector('button.comments-comment-box__submit-button');
+          
+          // Layer 2: Traverse UP from editor to find enclosing form/container
           if (!submitBtn) {
-            submitBtn = Array.from(p.element.querySelectorAll('button')).find(b => 
-              b.innerText && (b.innerText.toLowerCase().includes('post') || b.innerText.includes('نشر') || b.innerText.includes('تعليق')) && 
-              b.className.includes('primary')
-            );
+            let parent = editor.parentElement;
+            for (let depth = 0; depth < 10 && parent && !submitBtn; depth++) {
+              submitBtn = parent.querySelector('button.comments-comment-box__submit-button');
+              if (!submitBtn) submitBtn = parent.querySelector('button[type="submit"]');
+              // Look for blue "Comment" button specifically
+              if (!submitBtn) {
+                submitBtn = Array.from(parent.querySelectorAll('button')).find(b => {
+                  const txt = (b.innerText || '').trim().toLowerCase();
+                  return (txt === 'comment' || txt === 'post' || txt === 'نشر' || txt === 'تعليق') && b.offsetParent !== null;
+                });
+              }
+              parent = parent.parentElement;
+            }
+          }
+          
+          // Layer 3: Find any submit button using document-wide search
+          if (!submitBtn) {
+            const allBtns = document.querySelectorAll('button.comments-comment-box__submit-button');
+            for (const btn of allBtns) {
+              if (btn.offsetParent !== null) { submitBtn = btn; break; }
+            }
+          }
+          
+          // Layer 4: Any visible blue button labeled "Comment" on the entire page
+          if (!submitBtn) {
+            const allBtns = Array.from(document.querySelectorAll('button'));
+            submitBtn = allBtns.find(b => {
+              if (b.offsetParent === null) return false;
+              const txt = (b.innerText || '').trim().toLowerCase();
+              const label = (b.getAttribute('aria-label') || '').toLowerCase();
+              const isBlue = b.className.includes('primary') || getComputedStyle(b).backgroundColor.includes('0, 119, 181') || getComputedStyle(b).backgroundColor.includes('10, 102, 194');
+              return (txt === 'comment' && isBlue) || txt === 'post' || txt === 'نشر' ||
+                      label.includes('post comment') || label.includes('submit comment');
+            });
+          }
+          
+          // Layer 5: Nuclear option — simulate Enter key on editor
+          if (!submitBtn) {
+            console.warn("[Ext] ⚠️ No submit button found via any selector. Trying Ctrl+Enter...");
+            editor.focus();
+            editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', ctrlKey: true, bubbles: true }));
+            await wait(1000, 2000);
+            console.log(`[Ext] ✅ Comment submitted via Ctrl+Enter: "${textToType.substring(0, 30)}..."`);
+            chrome.runtime.sendMessage({ action: 'COMMENT_POSTED', url: p.url });
           }
           
           if (submitBtn) {
             if (submitBtn.disabled) {
-              console.warn(`[Ext] ⚠️ Submit button is disabled. Attempting force click anyway.`);
+              console.warn(`[Ext] ⚠️ Submit button is disabled. Force-enabling...`);
               submitBtn.removeAttribute('disabled');
+              submitBtn.classList.remove('artdeco-button--disabled');
+              await wait(200, 500);
             }
             submitBtn.click();
             console.log(`[Ext] ✅ Comment Posted: "${textToType.substring(0, 30)}..."`);
             chrome.runtime.sendMessage({ action: 'COMMENT_POSTED', url: p.url });
-          } else {
-            console.warn(`[Ext] ⚠️ Submit button completely missing from DOM!`);
           }
           
           await wait(4000, 7000); // Rest before next action
