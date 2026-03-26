@@ -52,9 +52,15 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-2">
-          <Activity className="w-5 h-5 text-primary-500" />
-          <CardTitle>Live Activity Feed</CardTitle>
+        <div className="flex justify-between items-center mb-1">
+          <div className="flex items-center gap-2">
+            <Activity className="w-5 h-5 text-primary-500" />
+            <CardTitle>Live Activity Feed</CardTitle>
+          </div>
+          <Badge variant="error" size="sm" className="bg-red-50 text-red-600 border-red-200 uppercase tracking-widest text-[10px] font-black px-2 py-0.5 shadow-sm shadow-red-500/10">
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse mr-1.5 inline-block"></span>
+            Live
+          </Badge>
         </div>
         <CardDescription>
           Real-time updates from your LinkedIn automation agent

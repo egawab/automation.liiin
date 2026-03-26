@@ -15,6 +15,7 @@ import Header from '@/components/dashboard/Header';
 import StatCard from '@/components/dashboard/StatCard';
 import ActivityFeed from '@/components/dashboard/ActivityFeed';
 import Chart from '@/components/dashboard/Chart';
+import DailySummaryCard from '@/components/dashboard/DailySummaryCard';
 import { SavedPostsPanel } from '@/components/dashboard/SavedPostsPanel';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
@@ -86,23 +87,38 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // Listen for extension bridge messages
+    const handleBridgeMessage = (event: MessageEvent) => {
+      if (event.source !== window || !event.data || event.data.source !== 'NEXORA_EXTENSION') return;
+      
+      if (event.data.action === 'EXTENSION_READY') {
+        console.log('🔗 Extension Bridge connected');
+      } else if (event.data.action === 'ENGINE_STARTED_ACK') {
+        console.log('🚀 Extension acknowledged START command');
+        // Force an immediate fetch to sync UI
+        fetchData();
+      }
+    };
+    
+    window.addEventListener('message', handleBridgeMessage);
+
     // Small delay on first load to ensure cookie is set
     const initialTimeout = setTimeout(fetchData, 100);
     
     // Then poll every 5 seconds
     const interval = setInterval(fetchData, 5000);
     
-    // ❌ REMOVED AUTO-START: Worker should only start when user clicks "Start" button
-    // The worker must NEVER auto-start - it should only run based on explicit user action
-    
     return () => {
       clearTimeout(initialTimeout);
       clearInterval(interval);
+      window.removeEventListener('message', handleBridgeMessage);
     };
   }, [activeTab]);
 
   const toggleSystem = async () => {
     const newState = !systemActive;
+    
+    // Optimistic UI update
     setSystemActive(newState);
     
     // ✅ Update settings to toggle systemActive flag for the Extension
@@ -113,6 +129,11 @@ export default function Dashboard() {
     });
 
     console.log(`🤖 Extension Pilot: ${newState ? 'ACTIVE' : 'PAUSED'}`);
+    
+    // 🚀 Send direct push to the extension (via injected dashboard-bridge.js)
+    if (newState) {
+      window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'START_ENGINE' }, '*');
+    }
   };
 
   const addKeyword = async () => {
@@ -226,37 +247,11 @@ export default function Dashboard() {
 
         return (
           <div className="space-y-6">
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <StatCard
-                title="Comments Today"
-                value={stats.commentsToday}
-                maxValue={settings.maxCommentsPerDay || 50}
-                icon={<MessageSquareText className="w-5 h-5" />}
-                iconColor="primary"
-                showProgress
-                trend="+12%"
-                trendUp
-                delay={0}
-              />
-
-              <StatCard
-                title="Posts Scanned"
-                value={stats.postsScanned}
-                icon={<Search className="w-5 h-5" />}
-                iconColor="secondary"
-                delay={0.1}
-              />
-
-              <StatCard
-                title="Profile Views"
-                value={stats.profileViews || 0}
-                icon={<Users className="w-5 h-5" />}
-                iconColor="accent"
-                trend="+8%"
-                trendUp
-                delay={0.2}
-              />
+            {/* Top Stats & Browser Status */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+              <div className="lg:col-span-2">
+                <DailySummaryCard stats={stats} settings={settings} />
+              </div>
 
               <div className="lg:col-span-1">
                 <Card className="h-full bg-gradient-to-br from-primary-600 to-primary-700 border-none shadow-xl shadow-primary-500/20">

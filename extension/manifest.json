@@ -17,6 +17,16 @@
     "http://localhost:3000/*",
     "http://localhost:*/*"
   ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.vercel.app/*",
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*"
+      ],
+      "js": ["dashboard-bridge.js"]
+    }
+  ],
   "action": {
     "default_popup": "popup.html"
   },
