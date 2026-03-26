@@ -1,19 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn Auto-Search Worker",
-  "version": "1.1",
-  "description": "Background worker for extracting LinkedIn posts securely from your browser.",
+  "name": "Nexora – LinkedIn AI Assistant",
+  "version": "2.0",
+  "description": "AI-powered LinkedIn engagement assistant. Auto-search, auto-comment with human-mimicry safety.",
   "permissions": [
     "storage",
     "alarms",
     "tabs",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "notifications"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://*.vercel.app/*",
-    "http://localhost:3000/*"
+    "http://localhost:3000/*",
+    "http://localhost:*/*"
   ],
   "action": {
     "default_popup": "popup.html"

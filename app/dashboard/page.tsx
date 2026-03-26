@@ -1036,6 +1036,82 @@ export default function Dashboard() {
             </Card>
           </div>
         );
+
+      case 'extension-connect':
+        return (
+          <div className="space-y-6">
+            <Card>
+              <div className="p-8">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
+                    <Bot className="w-6 h-6 text-primary-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-extrabold text-gray-900">Connect Extension</h3>
+                    <p className="text-xs text-gray-500 font-medium">Link your Chrome extension in one click</p>
+                  </div>
+                </div>
+
+                {/* Step 1: Install */}
+                <div className="bg-gray-50 border-2 border-gray-100 rounded-2xl p-6 mb-4">
+                  <h4 className="text-sm font-extrabold text-gray-800 mb-2 flex items-center gap-2">
+                    <span className="w-6 h-6 bg-primary-500 text-white rounded-full flex items-center justify-center text-xs font-black">1</span>
+                    Install Extension
+                  </h4>
+                  <p className="text-xs text-gray-500 mb-3">Download and install the Chrome extension first.</p>
+                  <a href="/LinkedInExtension.zip" download className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-xl text-xs font-bold hover:bg-primary-600 transition-all">
+                    ⬇️ Download Extension ZIP
+                  </a>
+                </div>
+
+                {/* Step 2: Auto-Connect */}
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-6 mb-4">
+                  <h4 className="text-sm font-extrabold text-gray-800 mb-2 flex items-center gap-2">
+                    <span className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-black">2</span>
+                    One-Click Connect
+                  </h4>
+                  <p className="text-xs text-gray-500 mb-3">Open the extension popup while on this page, then click <strong>"🔗 Auto-Connect"</strong>. It will link automatically!</p>
+                  <div className="bg-white rounded-xl p-4 border border-blue-100">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Your Connection Code</p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 bg-gray-50 text-sm font-mono font-bold text-gray-800 p-2 rounded-lg border">{settings.userId || 'Loading...'}</code>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(settings.userId || '');
+                          const btn = document.getElementById('copy-uid-btn');
+                          if (btn) { btn.textContent = '✅ Copied!'; setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000); }
+                        }}
+                        id="copy-uid-btn"
+                        className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-bold transition-all"
+                      >
+                        📋 Copy
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Hidden DOM element for extension auto-detection */}
+                <div
+                  id="nexora-connect-data"
+                  data-user-id={settings.userId || ''}
+                  data-dashboard-url={typeof window !== 'undefined' ? window.location.origin : ''}
+                  style={{ display: 'none' }}
+                />
+
+                {/* Step 3: Activate */}
+                <div className="bg-green-50 border-2 border-green-200 rounded-2xl p-6">
+                  <h4 className="text-sm font-extrabold text-gray-800 mb-2 flex items-center gap-2">
+                    <span className="w-6 h-6 bg-green-500 text-white rounded-full flex items-center justify-center text-xs font-black">3</span>
+                    Activate
+                  </h4>
+                  <p className="text-xs text-gray-500">Once connected, go back to the Dashboard and click <strong>🚀 START</strong> to begin automated engagement!</p>
+                </div>
+              </div>
+            </Card>
+          </div>
+        );
+
       default:
         return null;
     }

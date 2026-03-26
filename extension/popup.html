@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>LinkedIn Auto-Worker</title>
+  <title>Nexora Extension</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -42,11 +42,6 @@
     .mode-button { display: block; text-align: center; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 700; transition: all 0.2s; background: transparent; color: #666; }
     .mode-option input:checked + .mode-button { background: #0077b5; color: white; box-shadow: 0 4px 10px rgba(0,119,181,0.3); }
     .hint { font-size: 10px; color: #999; margin-top: 6px; font-style: italic; }
-    /* The following label rule is from the instruction, but it conflicts with the existing one.
-       Assuming it's meant to be a general label style for other labels, or a correction.
-       For now, placing it after the existing label rule to allow for cascading.
-       If it's meant to replace the original, the original properties would need to be merged.
-       Given the instruction, it's added as a new rule. */
     label { display: block; font-weight: bold; margin: 10px 0 5px; }
     input {
       width: 100%;
@@ -67,12 +62,50 @@
       font-size: 14px;
       transition: all 0.2s;
     }
+
+    /* Auto-Connect Button */
+    #autoConnectBtn {
+      background: linear-gradient(135deg, #0077b5, #00a0dc);
+      color: white;
+      margin-bottom: 12px;
+      font-size: 15px;
+      padding: 14px;
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0,119,181,0.3);
+    }
+    #autoConnectBtn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,119,181,0.4); }
+    #autoConnectBtn:disabled { opacity: 0.7; cursor: not-allowed; transform: none; }
+
+    #autoConnectStatus {
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+      min-height: 20px;
+      margin-bottom: 12px;
+      padding: 4px;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px dashed #e5e7eb;
+      margin: 16px 0;
+    }
+    .manual-label {
+      text-align: center;
+      font-size: 10px;
+      color: #9ca3af;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+
     #saveBtn {
-      background: #0077b5;
+      background: #6b7280;
       color: white;
       margin-bottom: 16px;
     }
-    #saveBtn:hover { background: #005e8d; }
+    #saveBtn:hover { background: #4b5563; }
     
     #syncBtn {
       background: #10b981;
@@ -94,7 +127,6 @@
       background: #f3f4f6;
       padding: 12px;
       margin-top: 16px;
-      border-radius: 0 0 0 0;
       border-top: 1px solid #e5e7eb;
     }
   </style>
@@ -103,10 +135,14 @@
   <div class="container">
     <div class="card">
       <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px;">
-        <h3 style="margin: 0;">🚀 Auto-Worker</h3>
+        <h3 style="margin: 0;">🚀 Nexora</h3>
         <button id="openTabBtn" style="background: transparent; border: 1px solid #d1d5db; color: #4b5563; padding: 4px 8px; font-size: 11px; width: auto; font-weight: 600;">↗️ Full Tab</button>
       </div>
-      
+
+      <!-- Auto-Connect Section -->
+      <button id="autoConnectBtn">🔗 Auto-Connect to Dashboard</button>
+      <div id="autoConnectStatus"></div>
+
       <!-- Professional Settings: Visibility Mode -->
       <div class="settings-group">
         <label class="group-label">Extraction Visibility</label>
@@ -122,6 +158,9 @@
         </div>
         <p class="hint">"Hidden" works silently in the background.</p>
       </div>
+
+      <hr class="divider">
+      <p class="manual-label">— or connect manually —</p>
 
       <div class="settings-group">
         <label for="dashboardUrl">Dashboard URL</label>
