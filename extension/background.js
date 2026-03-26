@@ -27,6 +27,37 @@ async function loadState() {
   });
 }
 
+// ── Live Badge Update ──
+async function updateBadge() {
+  const s = await loadState();
+  let text = s.dailyCommentsMade ? String(s.dailyCommentsMade) : '0';
+  let color = '#6b7280'; // default
+
+  if (s.isPaused) {
+    color = '#ef4444'; // Red
+    text = 'PAUSED';
+  } else if (s.isJobRunning) {
+    color = '#10b981'; // Green
+  } else {
+    // Cooldown or Idle
+    const elapsed = Date.now() - (s.lastJobTime || 0);
+    if (s.lastJobTime > 0 && elapsed < (s.cooldownMs || 0)) {
+      color = '#f59e0b'; // Orange
+    } else {
+      color = '#6b7280'; // Gray (Idle)
+    }
+  }
+
+  // Set text and color (Badge API)
+  chrome.action.setBadgeText({ text });
+  chrome.action.setBadgeBackgroundColor({ color });
+}
+
+// Call whenever state changes
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local') updateBadge();
+});
+
 async function saveState(updates) {
   await chrome.storage.local.set(updates);
 }

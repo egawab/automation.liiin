@@ -6,184 +6,251 @@
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      width: 320px;
+      width: 340px;
       padding: 0;
       margin: 0;
       color: #1f2937;
-      background: #f9fafb;
+      background: #f3f4f6;
     }
-    .container {
-      padding: 20px;
+    
+    * { box-sizing: border-box; }
+
+    /* Universal Classes */
+    .hidden { display: none !important; }
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 14px;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
     }
-    .card {
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    
+    .btn-primary { background: #0077b5; color: white; }
+    .btn-primary:hover { background: #006097; }
+    
+    .btn-outline { background: transparent; border: 1px solid #d1d5db; color: #4b5563; }
+    .btn-outline:hover { background: #f9fafb; }
+    
+    .btn-success { background: #10b981; color: white; }
+    .btn-success:hover { background: #059669; }
+    
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+
+    /* Header */
+    header {
       background: white;
-      border: 1px solid #e5e7eb;
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      padding: 16px 20px;
+      border-bottom: 1px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 10;
     }
-    h3 {
-      margin: 0 0 16px 0;
-      color: #0077b5;
+    header h1 {
+      margin: 0;
       font-size: 18px;
+      font-weight: 800;
+      color: #111827;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
-    label {
-      font-weight: 600;
-      font-size: 12px;
-      display: block;
-      margin-bottom: 4px;
-      color: #4b5563;
+    .badge-pro {
+      background: #e0f2fe;
+      color: #0284c7;
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 12px;
+      text-transform: uppercase;
     }
-    .settings-group { margin-bottom: 20px; }
-    .group-label { display: block; font-size: 11px; font-weight: 800; color: #666; text-transform: uppercase; margin-bottom: 10px; }
-    .visibility-toggle { display: flex; gap: 10px; background: #f0f0f0; padding: 5px; border-radius: 12px; }
-    .mode-option { flex: 1; cursor: pointer; position: relative; }
-    .mode-option input { position: absolute; opacity: 0; cursor: pointer; }
-    .mode-button { display: block; text-align: center; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 700; transition: all 0.2s; background: transparent; color: #666; }
-    .mode-option input:checked + .mode-button { background: #0077b5; color: white; box-shadow: 0 4px 10px rgba(0,119,181,0.3); }
-    .hint { font-size: 10px; color: #999; margin-top: 6px; font-style: italic; }
-    label { display: block; font-weight: bold; margin: 10px 0 5px; }
+
+    /* Views */
+    .view { padding: 20px; }
+
+    /* --- SETUP VIEW --- */
+    #setupView .card {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+      border: 1px solid #e5e7eb;
+      margin-bottom: 20px;
+    }
+    #autoConnectBtn {
+      background: linear-gradient(135deg, #0077b5, #00a0dc);
+      color: white;
+      font-size: 15px;
+      padding: 14px;
+      box-shadow: 0 4px 12px rgba(0,119,181,0.3);
+      margin-bottom: 16px;
+    }
+    #autoConnectBtn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,119,181,0.4); }
+    
+    .divider {
+      text-align: center;
+      font-size: 11px;
+      color: #9ca3af;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin: 20px 0;
+      position: relative;
+    }
+
     input {
       width: 100%;
-      box-sizing: border-box;
       padding: 10px;
       margin-bottom: 12px;
       border: 1px solid #d1d5db;
       border-radius: 6px;
       font-size: 13px;
     }
-    button {
-      width: 100%;
-      padding: 12px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-weight: 700;
-      font-size: 14px;
-      transition: all 0.2s;
-    }
-
-    /* Auto-Connect Button */
-    #autoConnectBtn {
-      background: linear-gradient(135deg, #0077b5, #00a0dc);
-      color: white;
-      margin-bottom: 12px;
-      font-size: 15px;
-      padding: 14px;
-      border-radius: 10px;
-      box-shadow: 0 4px 12px rgba(0,119,181,0.3);
-    }
-    #autoConnectBtn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,119,181,0.4); }
-    #autoConnectBtn:disabled { opacity: 0.7; cursor: not-allowed; transform: none; }
-
-    #autoConnectStatus {
+    label { font-size: 12px; font-weight: 600; color: #4b5563; margin-bottom: 4px; display: block; }
+    
+    /* --- DASHBOARD VIEW --- */
+    .status-card {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05);
+      border: 1px solid #f3f4f6;
       text-align: center;
-      font-size: 12px;
-      font-weight: 600;
-      min-height: 20px;
-      margin-bottom: 12px;
-      padding: 4px;
-    }
-
-    .divider {
-      border: none;
-      border-top: 1px dashed #e5e7eb;
-      margin: 16px 0;
-    }
-    .manual-label {
-      text-align: center;
-      font-size: 10px;
-      color: #9ca3af;
-      text-transform: uppercase;
-      font-weight: 700;
-      letter-spacing: 1px;
-      margin-bottom: 8px;
-    }
-
-    #saveBtn {
-      background: #6b7280;
-      color: white;
       margin-bottom: 16px;
     }
-    #saveBtn:hover { background: #4b5563; }
     
-    #syncBtn {
-      background: #10b981;
-      color: white;
+    .pulse-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
     }
-    #syncBtn:hover { background: #059669; }
-    #syncBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .pulse-green { background: #10b981; box-shadow: 0 0 0 4px rgba(16,185,129,0.2); animation: pulse 2s infinite; }
+    .pulse-red { background: #ef4444; }
+    .pulse-orange { background: #f59e0b; box-shadow: 0 0 0 4px rgba(245,158,11,0.2); animation: pulse 2s infinite; }
 
-    #status {
-      margin-top: 12px;
-      font-size: 12px;
-      text-align: center;
-      min-height: 18px;
-      font-weight: 500;
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(16,185,129,0.4); }
+      70% { box-shadow: 0 0 0 10px rgba(16,185,129,0); }
+      100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
     }
-    .info {
-      font-size: 11px;
-      color: #6b7280;
-      background: #f3f4f6;
+
+    .status-text { font-size: 15px; font-weight: 800; color: #111827; display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
+    .status-sub { font-size: 12px; color: #6b7280; }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .stat-box {
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      border: 1px solid #e5e7eb;
+    }
+    .stat-value { font-size: 24px; font-weight: 900; color: #0077b5; margin-bottom: 4px; }
+    .stat-label { font-size: 11px; color: #6b7280; font-weight: 600; text-transform: uppercase; }
+
+    .keyword-box {
+      background: #eff6ff;
+      border: 1px dashed #bfdbfe;
+      border-radius: 8px;
       padding: 12px;
-      margin-top: 16px;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .keyword-text { font-size: 13px; font-weight: 700; color: #1d4ed8; }
+
+    #playPauseBtn { font-size: 16px; padding: 16px; }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      padding: 16px;
+      font-size: 11px;
+      color: #9ca3af;
       border-top: 1px solid #e5e7eb;
     }
+    footer a { color: #0077b5; text-decoration: none; font-weight: 600; cursor: pointer; }
+    footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div class="container">
+
+  <header>
+    <h1>🚀 Nexora <span class="badge-pro">Pro</span></h1>
+    <button id="disconnectBtn" class="btn btn-outline hidden" style="width: auto; padding: 6px 10px; font-size: 11px;">Disconnect</button>
+  </header>
+
+  <!-- ==================== SETUP VIEW ==================== -->
+  <div id="setupView" class="view">
     <div class="card">
-      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px;">
-        <h3 style="margin: 0;">🚀 Nexora</h3>
-        <button id="openTabBtn" style="background: transparent; border: 1px solid #d1d5db; color: #4b5563; padding: 4px 8px; font-size: 11px; width: auto; font-weight: 600;">↗️ Full Tab</button>
-      </div>
-
-      <!-- Auto-Connect Section -->
-      <button id="autoConnectBtn">🔗 Auto-Connect to Dashboard</button>
-      <div id="autoConnectStatus"></div>
-
-      <!-- Professional Settings: Visibility Mode -->
-      <div class="settings-group">
-        <label class="group-label">Extraction Visibility</label>
-        <div class="visibility-toggle">
-          <label class="mode-option">
-            <input type="radio" name="visibilityMode" value="visible">
-            <span class="mode-button">👁️ Visible</span>
-          </label>
-          <label class="mode-option">
-            <input type="radio" name="visibilityMode" value="hidden" checked>
-            <span class="mode-button">👻 Hidden</span>
-          </label>
-        </div>
-        <p class="hint">"Hidden" works silently in the background.</p>
-      </div>
-
-      <hr class="divider">
-      <p class="manual-label">— or connect manually —</p>
-
-      <div class="settings-group">
-        <label for="dashboardUrl">Dashboard URL</label>
-        <input type="text" id="dashboardUrl" placeholder="https://your-app.vercel.app">
-      </div>
+      <h3 style="margin-top:0; font-size: 16px; margin-bottom: 16px;">Welcome</h3>
+      <p style="font-size: 13px; color: #4b5563; margin-bottom: 20px; line-height: 1.5;">Connect your browser to the Nexora Dashboard to unleash the automation engine.</p>
       
-      <label for="userId">Dashboard API Key (User ID)</label>
+      <button id="autoConnectBtn" class="btn">🔗 Auto-Connect</button>
+      <div id="setupMsg" style="text-align: center; font-size: 12px; font-weight: 600; min-height: 20px; color: #4b5563;"></div>
+
+      <div class="divider">or manual sync</div>
+
+      <label>Dashboard URL</label>
+      <input type="text" id="dashboardUrl" placeholder="https://your-app.vercel.app">
+      
+      <label>User ID</label>
       <input type="text" id="userId" placeholder="67baea48-...">
       
-      <button id="saveBtn">Save Settings</button>
-      
-      <div style="border-top: 1px dotted #e5e7eb; margin: 16px 0; padding-top: 16px;">
-        <button id="syncBtn">🔄 Sync & Run Now</button>
-      </div>
-
-      <div id="status"></div>
+      <button id="saveBtn" class="btn btn-outline" style="background: #f9fafb;">Save & Connect</button>
     </div>
   </div>
 
-  <div class="info">
-    <b>Status:</b> Runs in background. Ensure your Dashboard "System Active" is ON for this to process jobs.
+  <!-- ==================== DASHBOARD VIEW ==================== -->
+  <div id="dashboardView" class="view hidden">
+    
+    <div class="status-card">
+      <div class="status-text" id="statusHeader">
+        <span class="pulse-dot pulse-red" id="statusDot"></span>
+        <span id="statusTitle">Agent Paused</span>
+      </div>
+      <div class="status-sub" id="statusSub">Ready to automate your engagement</div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-value" id="countComments">0/15</div>
+        <div class="stat-label">Comments</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="countCycles">0/3</div>
+        <div class="stat-label">Cycles Done</div>
+      </div>
+    </div>
+
+    <div class="keyword-box" id="keywordBox">
+      <div class="stat-label" style="margin-bottom: 4px;">🎯 Targeting</div>
+      <div class="keyword-text" id="currentKeyword">Waiting for engine...</div>
+    </div>
+
+    <button id="playPauseBtn" class="btn btn-success">▶ START ENGINE</button>
+    <div id="actionMsg" style="text-align: center; font-size: 12px; font-weight: 600; margin-top: 12px; color: #6b7280; min-height: 20px;"></div>
   </div>
-  
+
+  <footer>
+    Need help? <a href="#" id="openDashboardBtn">Open Full Dashboard</a>
+  </footer>
+
   <script src="popup.js"></script>
 </body>
 </html>
