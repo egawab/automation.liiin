@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
   LayoutDashboard, Search, MessageSquareText, Settings, Activity, Users,
-  TrendingUp, AlertCircle, Play, Pause, Plus, Trash2, Bot, PenTool, Sparkles, Shield
+  TrendingUp, AlertCircle, Play, Pause, Plus, Trash2, Bot, PenTool, Sparkles, Shield, Zap
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import {
@@ -22,6 +22,7 @@ import Card from '@/components/ui/Card';
 import Input, { TextArea } from '@/components/ui/Input';
 import Spinner from '@/components/ui/Spinner';
 import Badge from '@/components/ui/Badge';
+import OnboardingWizard from '@/components/dashboard/OnboardingWizard';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -44,6 +45,10 @@ export default function Dashboard() {
   const [newCommentKeywordId, setNewCommentKeywordId] = useState<string>('');
   const [newTopic, setNewTopic] = useState('');
 
+  // Wizard State
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardHasTriggered, setWizardHasTriggered] = useState(false);
+
   const fetchData = async () => {
     // Fetch Settings
     const setRes = await fetch('/api/settings');
@@ -53,10 +58,11 @@ export default function Dashboard() {
       return;
     }
 
+    let settingsData: any = null;
     if (setRes.ok) {
-      const data = await setRes.json();
-      setSettings(data);
-      setSystemActive(data.systemActive);
+      settingsData = await setRes.json();
+      setSettings(settingsData);
+      setSystemActive(settingsData.systemActive);
     }
 
     // Fetch Stats & Logs for Dashboard
@@ -67,10 +73,20 @@ export default function Dashboard() {
       if (lgRes.ok) setLogs(await lgRes.json());
     }
 
-    // Fetch Keywords
-    if (activeTab === 'keywords') {
-      const kwRes = await fetch('/api/keywords');
-      if (kwRes.ok) setKeywords(await kwRes.json());
+    // Always fetch keywords (needed for Wizard logic and global tabs)
+    let currentKeywords = [];
+    const kwRes = await fetch('/api/keywords');
+    if (kwRes.ok) {
+      currentKeywords = await kwRes.json();
+      setKeywords(currentKeywords);
+    }
+
+    // Trigger Wizard for brand new accounts (0 keywords and never connected extension)
+    if (!wizardHasTriggered && settingsData && kwRes.ok) {
+      if (!settingsData.lastHeartbeat && currentKeywords.length === 0) {
+        setShowWizard(true);
+        setWizardHasTriggered(true);
+      }
     }
 
     // Fetch Comments
@@ -133,6 +149,25 @@ export default function Dashboard() {
     // 🚀 Send direct push to the extension (via injected dashboard-bridge.js)
     if (newState) {
       window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'START_ENGINE' }, '*');
+    }
+  };
+
+  const [isDeployingPack, setIsDeployingPack] = useState(false);
+  const loadStarterPack = async (packType: string) => {
+    setIsDeployingPack(true);
+    try {
+      const res = await fetch('/api/starter-packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pack: packType })
+      });
+      if (res.ok) {
+        await fetchData(); // Reactively updates UI with the new keywords and comments
+      }
+    } catch (e) {
+      console.error('Error loading starter pack:', e);
+    } finally {
+      setIsDeployingPack(false);
     }
   };
 
@@ -411,17 +446,46 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-gray-50">
                   {keywords.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-6 py-12 text-center">
-                        <div className="flex flex-col items-center">
-                          <div className="w-16 h-16 mb-4 rounded-full bg-gray-100 flex items-center justify-center">
-                            <Search className="w-8 h-8 text-gray-400" />
+                      <td colSpan={4} className="p-0">
+                        <div className="bg-gradient-to-br from-primary-50 to-primary-100/30 p-8 md:p-12 text-center border-b border-gray-100">
+                          <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-white shadow-xl shadow-primary-500/10 flex items-center justify-center transform -rotate-6">
+                            <Zap className="w-10 h-10 text-primary-500" />
                           </div>
-                          <p className="text-sm font-semibold text-gray-900 mb-1">
-                            No keywords yet
+                          <h4 className="text-2xl font-black text-gray-900 mb-3 tracking-tight">Zero to Hero in 1-Click</h4>
+                          <p className="text-base text-gray-600 max-w-lg mx-auto mb-10 leading-relaxed">
+                            Don't know what to target? Load a curated Starter Pack. 
+                            We'll instantly set up high-converting <strong className="text-primary-700">keywords</strong> and AI-crafted <strong className="text-primary-700">comments</strong> for you.
                           </p>
-                          <p className="text-sm text-gray-500">
-                            Add your first keyword above to start targeting posts
-                          </p>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+                            {/* Pack 1 */}
+                            <button 
+                              onClick={() => loadStarterPack('marketing')}
+                              disabled={isDeployingPack}
+                              className={`group bg-white p-6 rounded-2xl text-left border-2 transition-all ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-100 hover:border-primary-400 hover:shadow-2xl hover:shadow-primary-500/20 hover:-translate-y-1'}`}
+                            >
+                              <div className="flex justify-between items-start mb-4">
+                                <Badge variant="primary" className="bg-primary-100 text-primary-700">B2B Marketing</Badge>
+                                {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
+                              </div>
+                              <h5 className="text-lg font-extrabold text-gray-900 mb-2 group-hover:text-primary-600 transition-colors">Growth & Marketing Pack</h5>
+                              <p className="text-sm font-bold text-gray-400">+3 Keywords • +9 Comments</p>
+                            </button>
+
+                            {/* Pack 2 */}
+                            <button 
+                              onClick={() => loadStarterPack('tech')}
+                              disabled={isDeployingPack}
+                              className={`group bg-white p-6 rounded-2xl text-left border-2 transition-all ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-100 hover:border-blue-400 hover:shadow-2xl hover:shadow-blue-500/20 hover:-translate-y-1'}`}
+                            >
+                              <div className="flex justify-between items-start mb-4">
+                                <Badge variant="secondary" className="bg-blue-100 text-blue-700">Tech & SaaS</Badge>
+                                {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
+                              </div>
+                              <h5 className="text-lg font-extrabold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">Software Engineering Pack</h5>
+                              <p className="text-sm font-bold text-gray-400">+3 Keywords • +9 Comments</p>
+                            </button>
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -526,16 +590,45 @@ export default function Dashboard() {
             {/* Comments Grid */}
             <div className="p-6 md:p-8">
               {comments.length === 0 ? (
-                <div className="text-center py-12">
-                  <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
-                    <MessageSquareText className="w-8 h-8 text-gray-400" />
+                <div className="bg-gradient-to-br from-primary-50 to-primary-100/30 p-8 md:p-12 text-center rounded-3xl border border-gray-100">
+                  <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-white shadow-xl shadow-primary-500/10 flex items-center justify-center transform rotate-6">
+                    <Zap className="w-10 h-10 text-primary-500" />
                   </div>
-                  <p className="text-sm font-semibold text-gray-900 mb-1">
-                    No comments yet
+                  <h4 className="text-2xl font-black text-gray-900 mb-3 tracking-tight">Zero to Hero in 1-Click</h4>
+                  <p className="text-base text-gray-600 max-w-lg mx-auto mb-10 leading-relaxed">
+                    Don't know what to write? Load a curated Starter Pack. 
+                    We'll instantly set up high-converting <strong className="text-primary-700">keywords</strong> and AI-crafted <strong className="text-primary-700">comments</strong> for you.
                   </p>
-                  <p className="text-sm text-gray-500">
-                    Add your first comment template above
-                  </p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+                    {/* Pack 1 */}
+                    <button 
+                      onClick={() => loadStarterPack('marketing')}
+                      disabled={isDeployingPack}
+                      className={`group bg-white p-6 rounded-2xl text-left border-2 transition-all ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-100 hover:border-primary-400 hover:shadow-2xl hover:shadow-primary-500/20 hover:-translate-y-1'}`}
+                    >
+                      <div className="flex justify-between items-start mb-4">
+                        <Badge variant="primary" className="bg-primary-100 text-primary-700">B2B Marketing</Badge>
+                        {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
+                      </div>
+                      <h5 className="text-lg font-extrabold text-gray-900 mb-2 group-hover:text-primary-600 transition-colors">Growth & Marketing Pack</h5>
+                      <p className="text-sm font-bold text-gray-400">+3 Keywords • +9 Comments</p>
+                    </button>
+
+                    {/* Pack 2 */}
+                    <button 
+                      onClick={() => loadStarterPack('tech')}
+                      disabled={isDeployingPack}
+                      className={`group bg-white p-6 rounded-2xl text-left border-2 transition-all ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-100 hover:border-blue-400 hover:shadow-2xl hover:shadow-blue-500/20 hover:-translate-y-1'}`}
+                    >
+                      <div className="flex justify-between items-start mb-4">
+                        <Badge variant="secondary" className="bg-blue-100 text-blue-700">Tech & SaaS</Badge>
+                        {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
+                      </div>
+                      <h5 className="text-lg font-extrabold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">Software Engineering Pack</h5>
+                      <p className="text-sm font-bold text-gray-400">+3 Keywords • +9 Comments</p>
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1114,6 +1207,14 @@ export default function Dashboard() {
 
   return (
     <>
+      {/* Onboarding Wizard Modal */}
+      <OnboardingWizard 
+        isOpen={showWizard} 
+        onClose={() => setShowWizard(false)} 
+        loadStarterPack={loadStarterPack}
+        isDeployingPack={isDeployingPack}
+      />
+
       {/* Sidebar */}
       <Sidebar 
         activeTab={activeTab} 
