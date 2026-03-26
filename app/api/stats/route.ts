@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getUserFromToken, unauthorized } from '@/lib/auth';
 
@@ -13,7 +13,7 @@ export async function GET() {
         const commentsToday = await prisma.log.count({
             where: {
                 userId,
-                action: { contains: 'Commented' },
+                action: { contains: 'COMMENT' },
                 timestamp: { gte: today }
             }
         });
@@ -21,7 +21,7 @@ export async function GET() {
         const postsScanned = await prisma.log.count({
             where: {
                 userId,
-                action: { contains: 'Searched keyword' }
+                action: { contains: 'SEARCH' }
             }
         });
 

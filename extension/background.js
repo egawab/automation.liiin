@@ -306,19 +306,33 @@ async function finishCycle(tabId, incrementKeyword = true) {
 // ── Message Router ──
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message.action === 'COMMENT_POSTED') {
-    loadState().then(s => {
+    loadState().then(async s => { // Added async
       const newCount = (s.dailyCommentsMade || 0) + 1;
-      saveState({ dailyCommentsMade: newCount });
+      await saveState({ dailyCommentsMade: newCount });
       console.log(`💬 [Worker] Comment posted successfully. Daily quota: ${newCount}/15`);
       
       // Notify the user directly
       chrome.notifications.create({
         type: 'basic',
-        iconUrl: 'icon-48.png', // Assuming there's a default icon
+        iconUrl: 'icon-48.png', 
         title: 'Nexora AI Commenting',
         message: `Successfully posted comment #${newCount}/15 for today!`,
         priority: 2
       });
+
+      // 🔥 Send the real-time action to the dashboard Live Feed
+      const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
+      if (config.dashboardUrl && config.userId) {
+        fetch(`${config.dashboardUrl}/api/extension/action`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-extension-token': config.userId },
+          body: JSON.stringify({
+            action: 'COMMENT',
+            postUrl: message.url || 'LinkedIn Post',
+            comment: 'Commented successfully on targeted post.'
+          })
+        }).catch(e => console.error("❌ [Worker] Action Log relay failed:", e));
+      }
     });
     return;
   }
