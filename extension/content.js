@@ -85,9 +85,49 @@ window.__linkedInExtractorReady = true;
     // ── PHASE 2: Scroll to load content ──
     console.log(`[Ext] 📜 Phase 2: Scrolling 25 cycles...`);
     heartbeat('Phase2-Scrolling');
+
+    // Smart Scroll: Find LinkedIn's ACTUAL scrollable container
+    function findScrollContainer() {
+      // LinkedIn nests search results inside these containers with their own overflow
+      const candidates = [
+        '.scaffold-layout__main',
+        '.scaffold-layout__list',
+        '.search-results-container',
+        '.scaffold-layout__content',
+        'main.scaffold-layout__main'
+      ];
+      for (const sel of candidates) {
+        const el = document.querySelector(sel);
+        if (el && el.scrollHeight > el.clientHeight) {
+          console.log(`[Ext]    🎯 Found scrollable container: ${sel} (scrollH=${el.scrollHeight}, clientH=${el.clientHeight})`);
+          return el;
+        }
+      }
+      // Fallback: search for any large scrollable div
+      const allDivs = document.querySelectorAll('div[class*="scaffold"], div[class*="search"], main');
+      for (const div of allDivs) {
+        if (div.scrollHeight > div.clientHeight + 200) {
+          console.log(`[Ext]    🎯 Found scrollable fallback: ${div.className.substring(0, 60)} (scrollH=${div.scrollHeight})`);
+          return div;
+        }
+      }
+      console.log(`[Ext]    ⚠️ No nested scroll container found. Using document.scrollingElement`);
+      return document.scrollingElement || document.documentElement;
+    }
+
+    const scrollTarget = findScrollContainer();
+
     for (let i = 0; i < 25; i++) {
+      // Scroll the correct container
+      scrollTarget.scrollTop += 800;
+      // Also try window as double-safety
       window.scrollBy({ top: 800, behavior: 'smooth' });
+      
       await wait(2000, 3500);
+
+      // Send heartbeat every 5 scrolls to keep the monitor alive
+      if (i % 5 === 4) heartbeat(`Phase2-Scroll-${i+1}/25`);
+
       // Click "Show more results" if it appears
       const more = Array.from(document.querySelectorAll('button')).find(b =>
         b.innerText.toLowerCase().includes('show more') ||
@@ -96,6 +136,8 @@ window.__linkedInExtractorReady = true;
       );
       if (more && more.offsetParent !== null) { more.click(); await wait(2000, 3000); }
     }
+    // Scroll back to top on the SAME container
+    scrollTarget.scrollTop = 0;
     window.scrollTo({ top: 0, behavior: 'smooth' });
     await wait(2000, 3000);
 
