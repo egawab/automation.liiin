@@ -118,10 +118,8 @@ window.__linkedInExtractorReady = true;
     const scrollTarget = findScrollContainer();
 
     for (let i = 0; i < 25; i++) {
-      // Scroll the correct container
-      scrollTarget.scrollTop += 800;
-      // Also try window as double-safety
-      window.scrollBy({ top: 800, behavior: 'smooth' });
+      // Smooth scroll the correct container
+      scrollTarget.scroll({ top: scrollTarget.scrollTop + 800, behavior: 'smooth' });
       
       await wait(2000, 3500);
 
@@ -136,9 +134,8 @@ window.__linkedInExtractorReady = true;
       );
       if (more && more.offsetParent !== null) { more.click(); await wait(2000, 3000); }
     }
-    // Scroll back to top on the SAME container
-    scrollTarget.scrollTop = 0;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // Scroll back to top smoothly
+    scrollTarget.scroll({ top: 0, behavior: 'smooth' });
     await wait(2000, 3000);
 
     // ── PHASE 3: Discover post containers ──
@@ -511,6 +508,19 @@ window.__linkedInExtractorReady = true;
           }
           
           await wait(4000, 7000); // Rest before next action
+
+          // 5. CLEANUP: Collapse this post's comment section so the next post's
+          //    editor detection doesn't accidentally re-target this one.
+          try {
+            // Click the comment button again to toggle/collapse the editor
+            const closeBtn = p.element.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
+            if (closeBtn) {
+              closeBtn.click();
+              console.log(`[Ext]    🧹 Collapsed comment section for post by ${p.author}.`);
+              await wait(1000, 2000);
+            }
+          } catch (cleanupErr) { /* silently ignore cleanup failures */ }
+
         } catch (e) {
           console.error(`[Ext] ❌ Error Auto-Commenting:`, e);
         }
