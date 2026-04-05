@@ -1,19 +1,31 @@
 // ═══════════════════════════════════════════════════════════
-// LinkedIn Precision Extraction Engine v3
+// LinkedIn Precision Extraction Engine v4 (Re-Injectable)
 // Injected by background.js via chrome.scripting.executeScript
 // ═══════════════════════════════════════════════════════════
 
-if (typeof window.__linkedInExtractorReady === 'undefined') {
-  window.__linkedInExtractorReady = true;
+// Clean up any previous injection's listener before registering fresh
+if (window.__linkedInExtractorCleanup) {
+  try { window.__linkedInExtractorCleanup(); } catch(e) {}
+}
+window.__linkedInExtractorReady = true;
+
+{
   let isExtracting = false;
 
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  function messageHandler(request, sender, sendResponse) {
     if (request.action === 'EXECUTE_SEARCH') {
       sendResponse({ received: true });
       console.log(`[Ext] ✅ Received EXECUTE_SEARCH for: "${request.keyword}"`);
       runExtraction(request.keyword, request.settings, request.comments, request.dashboardUrl, request.userId);
     }
-  });
+  }
+  chrome.runtime.onMessage.addListener(messageHandler);
+
+  // Expose cleanup so next injection can remove this listener
+  window.__linkedInExtractorCleanup = () => {
+    chrome.runtime.onMessage.removeListener(messageHandler);
+    console.log('[Ext] 🧹 Previous listener cleaned up.');
+  };
 
   async function runExtraction(keyword, settings, comments, dashboardUrl, userId) {
     if (isExtracting) { console.log("[Ext] ⏭️ Already running, skip."); return; }
@@ -50,8 +62,14 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     console.log(`[Ext] Keyword: "${keyword}" | Reach: minLikes=${minL}, minComments=${minC}`);
     console.log(`[Ext] Current URL: ${window.location.href}`);
 
+    // ── Heartbeat helper ──
+    function heartbeat(phase) {
+      try { chrome.runtime.sendMessage({ action: 'HEARTBEAT', phase }); } catch(e) {}
+    }
+
     // ── PHASE 1: Wait for page + click Posts tab ──
     console.log(`[Ext] ⏳ Phase 1: Page hydration...`);
+    heartbeat('Phase1-Hydration');
     await wait(5000, 7000);
 
     if (!window.location.href.includes('/content/')) {
@@ -66,6 +84,7 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
 
     // ── PHASE 2: Scroll to load content ──
     console.log(`[Ext] 📜 Phase 2: Scrolling 25 cycles...`);
+    heartbeat('Phase2-Scrolling');
     for (let i = 0; i < 25; i++) {
       window.scrollBy({ top: 800, behavior: 'smooth' });
       await wait(2000, 3500);
@@ -81,6 +100,7 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     await wait(2000, 3000);
 
     // ── PHASE 3: Discover post containers ──
+    heartbeat('Phase3-Discovery');
     console.log(`[Ext] 🔍 Phase 3: Discovering containers...`);
 
     // Strategy A: Primary CSS selectors
@@ -286,6 +306,7 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     }
 
     // ── PHASE 5: Flexible High-Reach Filter ──
+    heartbeat('Phase5-Filtering');
     console.log(`[Ext] 🎯 Phase 5: Applying high-reach filter...`);
 
     // Tier 1: EXACT match — sorted by HIGHEST REACH (NaN-safe)
@@ -325,7 +346,7 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
       await wait(3000, 5000);
       
       // Limit to max 2 comments per cycle to maintain human pacing
-      const targetPosts = tier1.slice(0, 2); 
+      const targetPosts = final.slice(0, 2); // Use final[] (Tier1 + Tier2) so cold accounts can still comment
       
       for (const p of targetPosts) {
         if (!p.element) continue;
@@ -457,6 +478,7 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     }
 
     // ── PHASE 6: Sync to dashboard ──
+    heartbeat('Phase6-Sync');
     if (final.length > 0) {
       console.log(`[Ext] 📤 Phase 6: Syncing ${final.length} posts...`);
       await syncToDashboard(final, keyword, dashboardUrl, userId);
@@ -479,4 +501,4 @@ if (typeof window.__linkedInExtractorReady === 'undefined') {
     });
   }
 
-} // end guard
+} // end scope

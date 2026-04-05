@@ -235,9 +235,11 @@ async function _checkJobsInner() {
   }
 }
 
-// ── Scraping Cycle (fully await-based, single tab) ──
+// ── Scraping Cycle (Navigation-Resilient v2) ──
 async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId) {
   const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+  let injectionCount = 0;
+  const MAX_INJECTIONS = 3;
 
   try {
     const tab = await chrome.tabs.create({ url: searchUrl, active: true });
@@ -249,57 +251,116 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
     await waitForTabLoad(tab.id, 15000);
     await sleep(3000); // LinkedIn JS hydration
 
-    // Verify tab still exists
-    try {
-      await chrome.tabs.get(tab.id);
-    } catch (e) {
-      console.warn("⚠️ [Worker] Tab lost before injection.");
-      await finishCycle(null, false);
-      return;
-    }
+    // ── Helper: Inject and Start ──
+    async function injectAndStart() {
+      injectionCount++;
+      console.log(`🛠️ [Worker] Injection attempt #${injectionCount}/${MAX_INJECTIONS}...`);
 
-    // Inject content script
-    console.log("🛠️ [Worker] Injecting content.js...");
-    try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-    } catch (e) {
-      console.error("❌ [Worker] Inject failed:", e.message);
-      chrome.tabs.remove(tab.id).catch(() => {});
-      await finishCycle(null, false);
-      return;
-    }
+      // Verify tab still exists
+      let currentTab;
+      try {
+        currentTab = await chrome.tabs.get(tab.id);
+      } catch (e) {
+        console.warn("⚠️ [Worker] Tab lost before injection.");
+        await finishCycle(null, false);
+        return false;
+      }
 
-    await sleep(1500); // Let script register listener
+      // Verify URL is still LinkedIn (not a redirect to login/captcha/etc)
+      if (!currentTab.url || !currentTab.url.includes('linkedin.com')) {
+        console.warn(`⚠️ [Worker] Tab URL is no longer LinkedIn: ${currentTab.url}`);
+        chrome.tabs.remove(tab.id).catch(() => {});
+        await finishCycle(null, false);
+        return false;
+      }
 
-    // Send EXECUTE_SEARCH
-    console.log("🚀 [Worker] Sending EXECUTE_SEARCH...");
-    try {
-      await new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(tab.id, {
-          action: 'EXECUTE_SEARCH', keyword, settings, comments, dashboardUrl, userId
-        }, (res) => {
-          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-          else resolve(res);
+      console.log(`📍 [Worker] Tab URL verified: ${currentTab.url.substring(0, 80)}...`);
+
+      // Inject content script
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      } catch (e) {
+        console.error("❌ [Worker] Inject failed:", e.message);
+        chrome.tabs.remove(tab.id).catch(() => {});
+        await finishCycle(null, false);
+        return false;
+      }
+
+      await sleep(1500); // Let script register listener
+
+      // Send EXECUTE_SEARCH
+      console.log("🚀 [Worker] Sending EXECUTE_SEARCH...");
+      try {
+        await new Promise((resolve, reject) => {
+          chrome.tabs.sendMessage(tab.id, {
+            action: 'EXECUTE_SEARCH', keyword, settings, comments, dashboardUrl, userId
+          }, (res) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve(res);
+          });
         });
-      });
-      console.log("✅ [Worker] Content script acknowledged.");
-
-      // 3-minute watchdog: force-kill tab if content script hangs
-      const watchdogTabId = tab.id;
-      setTimeout(async () => {
-        const s = await loadState();
-        if (s.isJobRunning && s.activeTabId === watchdogTabId) {
-          console.warn("⏱️ [Worker] WATCHDOG: 3-min timeout. Force-killing tab.");
-          chrome.tabs.remove(watchdogTabId).catch(() => {});
-          await finishCycle(null, false);
+        console.log("✅ [Worker] Content script acknowledged.");
+        _lastContentHeartbeat = Date.now();
+        return true;
+      } catch (e) {
+        console.error(`❌ [Worker] Comm error on attempt #${injectionCount}:`, e.message);
+        if (injectionCount < MAX_INJECTIONS) {
+          console.log("🔄 [Worker] Will retry injection after navigation settles...");
+          await sleep(5000);
+          return injectAndStart(); // Retry
         }
-      }, 180000); // 3 minutes
-    } catch (e) {
-      console.error("❌ [Worker] Comm error:", e.message);
-      chrome.tabs.remove(tab.id).catch(() => {});
-      await finishCycle(null, false);
-      return;
+        chrome.tabs.remove(tab.id).catch(() => {});
+        await finishCycle(null, false);
+        return false;
+      }
     }
+
+    // ── First injection attempt ──
+    const started = await injectAndStart();
+    if (!started) return;
+
+    // ── Tab navigation listener: re-inject if LinkedIn re-renders ──
+    const navListener = async (tabId, changeInfo) => {
+      if (tabId !== tab.id) return;
+      if (changeInfo.status === 'complete' && injectionCount < MAX_INJECTIONS) {
+        // The tab URL reloaded — LinkedIn did a silent navigation
+        console.log("🔄 [Worker] Tab re-navigated! Re-injecting content script...");
+        await sleep(3000); // Let the new page hydrate
+        await injectAndStart();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(navListener);
+
+    // ── Heartbeat monitor: re-inject if content script dies silently ──
+    const heartbeatInterval = setInterval(async () => {
+      const s = await loadState();
+      if (!s.isJobRunning || s.activeTabId !== tab.id) {
+        // Job already finished, cleanup
+        clearInterval(heartbeatInterval);
+        chrome.tabs.onUpdated.removeListener(navListener);
+        return;
+      }
+
+      const timeSinceHeartbeat = Date.now() - _lastContentHeartbeat;
+      if (timeSinceHeartbeat > 45000 && injectionCount < MAX_INJECTIONS) {
+        // No heartbeat for 45 seconds — script likely died
+        console.warn(`💀 [Worker] No heartbeat for ${Math.round(timeSinceHeartbeat/1000)}s. Script may be dead. Re-injecting...`);
+        await injectAndStart();
+      }
+    }, 15000); // Check every 15 seconds
+
+    // ── 4-minute watchdog (extended from 3 for slower accounts) ──
+    const watchdogTabId = tab.id;
+    setTimeout(async () => {
+      clearInterval(heartbeatInterval);
+      chrome.tabs.onUpdated.removeListener(navListener);
+      const s = await loadState();
+      if (s.isJobRunning && s.activeTabId === watchdogTabId) {
+        console.warn("⏱️ [Worker] WATCHDOG: 4-min timeout. Force-killing tab.");
+        chrome.tabs.remove(watchdogTabId).catch(() => {});
+        await finishCycle(null, false);
+      }
+    }, 240000); // 4 minutes
 
   } catch (err) {
     console.error("❌ [Worker] Cycle failed:", err.message);
@@ -335,7 +396,16 @@ async function finishCycle(tabId, incrementKeyword = true) {
 }
 
 // ── Message Router ──
+// Track heartbeat time globally for the heartbeat monitor in startScrapingCycle
+let _lastContentHeartbeat = 0;
+
 chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message.action === 'HEARTBEAT') {
+    _lastContentHeartbeat = Date.now();
+    console.log(`💓 [Worker] Heartbeat from content script (Phase: ${message.phase || '?'})`);
+    return;
+  }
+
   if (message.action === 'COMMENT_POSTED') {
     loadState().then(async s => { // Added async
       const newCount = (s.dailyCommentsMade || 0) + 1;
