@@ -379,6 +379,8 @@ window.__linkedInExtractorReady = true;
     }
     console.log(`[Ext] ✅ Final output: ${final.length} posts (${tier1.length} exact, ${final.length - tier1.length} best available)`);
 
+    let commentsPostedThisCycle = 0;
+
     // ── PHASE 5b: Autonomous Safe Commenting (Hybrid Relayer) ──
     if (!settings.searchOnlyMode && comments && comments.length > 0 && final.length > 0) {
       console.log(`[Ext] 🤖 Phase 5b: Safe Auto-Commenting enabled. Waiting 3s...`);
@@ -386,36 +388,52 @@ window.__linkedInExtractorReady = true;
       
       // ── NO-REPETITION: Load history of already-commented post URLs ──
       let commentedHistory = [];
+      let usedCommentHistory = [];
       try {
-        const stored = await chrome.storage.local.get('commentedPosts');
+        const stored = await chrome.storage.local.get(['commentedPosts', 'usedCommentTexts']);
         commentedHistory = stored.commentedPosts || [];
+        usedCommentHistory = stored.usedCommentTexts || [];
       } catch(e) {}
       const commentedSet = new Set(commentedHistory);
+      const usedCommentSet = new Set(usedCommentHistory);
 
       // Filter out posts we've already commented on in previous runs
       const freshPosts = final.filter(p => p.url && !commentedSet.has(p.url));
       console.log(`[Ext]    ${final.length} total → ${freshPosts.length} fresh (${commentedSet.size} in history)`);
 
-      // Limit to max 2 comments per cycle
-      const targetPosts = freshPosts.slice(0, 2);
+      if (freshPosts.length === 0) {
+        console.warn(`[Ext] ⚠️ Zero fresh posts remain! Skipping commenting phase for this cycle.`);
+      } else {
+        // Limit to max 2 comments per cycle
+        const targetPosts = freshPosts.slice(0, 2);
 
-      // ── DUAL COMMENT: Shuffle comments and assign unique text to each post ──
-      const shuffled = [...comments].sort(() => Math.random() - 0.5);
-      const usedTexts = new Set();
-
-      for (let idx = 0; idx < targetPosts.length; idx++) {
-        const p = targetPosts[idx];
-        if (!p.element) continue;
-
-        // Pick unique comment: try shuffled[idx], fallback to first unused
-        let commentObj = shuffled[idx % shuffled.length];
-        if (usedTexts.has(commentObj.text) && shuffled.length > 1) {
-          commentObj = shuffled.find(c => !usedTexts.has(c.text)) || commentObj;
-        }
-        usedTexts.add(commentObj.text);
-        const textToType = commentObj.text;
+        // ── DUAL COMMENT: Shuffle comments and assign unique text to each post ──
+        // Additionally filter out comments used in recent cycles
+        let availableComments = comments.filter(c => !usedCommentSet.has(c.text));
         
-        try {
+        // If we ran out of fresh comments, fallback to all comments (so we don't crash)
+        if (availableComments.length < targetPosts.length) {
+          console.warn(`[Ext] ⚠️ Not enough fresh comments left in history. Reusing older comments.`);
+          availableComments = comments;
+        }
+
+        const shuffled = [...availableComments].sort(() => Math.random() - 0.5);
+        const usedTexts = new Set();
+        let successfulTargetPosts = [];
+
+        for (let idx = 0; idx < targetPosts.length; idx++) {
+          const p = targetPosts[idx];
+          if (!p.element) continue;
+
+          // Pick unique comment: try shuffled[idx], fallback to first unused
+          let commentObj = shuffled[idx % shuffled.length];
+          if (usedTexts.has(commentObj.text) && shuffled.length > 1) {
+            commentObj = shuffled.find(c => !usedTexts.has(c.text)) || commentObj;
+          }
+          usedTexts.add(commentObj.text);
+          const textToType = commentObj.text;
+          
+          try {
           console.log(`[Ext] 🎯 Engaging with post by ${p.author}...`);
           p.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           await wait(2000, 4000); // Read the post
@@ -528,6 +546,8 @@ window.__linkedInExtractorReady = true;
             submitBtn.click();
             console.log(`[Ext] ✅ Comment Posted: "${textToType.substring(0, 30)}..."`);
             chrome.runtime.sendMessage({ action: 'COMMENT_POSTED', url: p.url });
+            commentsPostedThisCycle++;
+            successfulTargetPosts.push(p);
           }
           
           await wait(4000, 7000); // Rest before next action
@@ -549,12 +569,18 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // ── Save newly commented URLs to history (rolling 200 cap) ──
-      const newlyCommented = targetPosts.map(p => p.url).filter(Boolean);
+      // ── Save newly commented URLs and used texts to history ──
+      const newlyCommented = successfulTargetPosts.map(p => p.url).filter(Boolean);
       if (newlyCommented.length > 0) {
-        const updated = [...commentedHistory, ...newlyCommented].slice(-200);
-        try { await chrome.storage.local.set({ commentedPosts: updated }); } catch(e) {}
-        console.log(`[Ext]    📝 Saved ${newlyCommented.length} URLs to history (total: ${updated.length})`);
+        const updatedPosts = [...commentedHistory, ...newlyCommented].slice(-200);
+        const updatedComments = [...usedCommentHistory, ...Array.from(usedTexts)].slice(-50);
+        try { 
+          await chrome.storage.local.set({ 
+            commentedPosts: updatedPosts,
+            usedCommentTexts: updatedComments 
+          }); 
+        } catch(e) {}
+        console.log(`[Ext]    📝 Saved ${newlyCommented.length} URLs to history (total URLs: ${updatedPosts.length}, total Comments: ${updatedComments.length})`);
       }
     } else {
       console.log(`[Ext] 🛡️ Search-Only Mode Active OR No Comments found. Skipping engagement.`);
@@ -571,7 +597,11 @@ window.__linkedInExtractorReady = true;
         `ALL:${allPosts.length}|T1:${tier1.length}|T2:${tier2.length}|minL:${minL}|minC:${minC}`);
     }
 
-    chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
+    chrome.runtime.sendMessage({ 
+      action: 'JOB_COMPLETED', 
+      commentsPostedCount: commentsPostedThisCycle,
+      searchOnlyMode: settings.searchOnlyMode || false
+    });
     console.log(`[Ext] ═══ PIPELINE COMPLETE ═══`);
   }
 

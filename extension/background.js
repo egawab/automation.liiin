@@ -452,7 +452,20 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
     const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
     console.log(`🏁 [Worker] Job ${status}.`);
-    finishCycle(sender.tab?.id, message.action === 'JOB_COMPLETED');
+    
+    let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
+    
+    // Safety Gap 1: Only count as a completed cycle if it actually did work
+    if (isSuccessfulCycle && message.searchOnlyMode === false) {
+      if ((message.commentsPostedCount || 0) === 0) {
+        console.log(`[Worker] ⚠️ Cycle finished but 0 comments posted (no fresh targets). Will NOT consume a cycle slot.`);
+        isSuccessfulCycle = false;
+      } else {
+        console.log(`[Worker] ✅ Cycle posted ${message.commentsPostedCount} comments. Counting as complete.`);
+      }
+    }
+
+    finishCycle(sender.tab?.id, isSuccessfulCycle);
   }
 });
 
