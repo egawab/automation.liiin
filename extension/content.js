@@ -404,33 +404,23 @@ window.__linkedInExtractorReady = true;
       if (freshPosts.length === 0) {
         console.warn(`[Ext] ⚠️ Zero fresh posts remain! Skipping commenting phase for this cycle.`);
       } else {
-        // Limit to max 2 comments per cycle
-        const targetPosts = freshPosts.slice(0, 2);
+        let targetPosts = freshPosts.slice(0, 2);
 
-        // ── DUAL COMMENT: Shuffle comments and assign unique text to each post ──
-        // Additionally filter out comments used in recent cycles
-        let availableComments = comments.filter(c => !usedCommentSet.has(c.text));
-        
-        // If we ran out of fresh comments, fallback to all comments (so we don't crash)
-        if (availableComments.length < targetPosts.length) {
-          console.warn(`[Ext] ⚠️ Not enough fresh comments left in history. Reusing older comments.`);
-          availableComments = comments;
+        // ── STRICT COMMENT MAPPING (No randomness) ──
+        // The background worker already filters 'comments' to exactly the ones assigned to this cycle
+        if (!comments || comments.length === 0) {
+          console.warn(`[Ext] ⚠️ No comments mapped to this cycle! Skipping comment phase.`);
+          targetPosts = []; // Clear target posts to skip commenting
         }
 
-        const shuffled = [...availableComments].sort(() => Math.random() - 0.5);
-        const usedTexts = new Set();
         let successfulTargetPosts = [];
 
         for (let idx = 0; idx < targetPosts.length; idx++) {
           const p = targetPosts[idx];
           if (!p.element) continue;
 
-          // Pick unique comment: try shuffled[idx], fallback to first unused
-          let commentObj = shuffled[idx % shuffled.length];
-          if (usedTexts.has(commentObj.text) && shuffled.length > 1) {
-            commentObj = shuffled.find(c => !usedTexts.has(c.text)) || commentObj;
-          }
-          usedTexts.add(commentObj.text);
+          // Strictly map the array: comment 0 -> post 0, comment 1 -> post 1
+          let commentObj = comments[idx % comments.length];
           const textToType = commentObj.text;
           
           try {
@@ -567,21 +557,23 @@ window.__linkedInExtractorReady = true;
         } catch (e) {
           console.error(`[Ext] ❌ Error Auto-Commenting:`, e);
         }
-      }
+        } // closes for loop
 
-      // ── Save newly commented URLs and used texts to history ──
-      const newlyCommented = successfulTargetPosts.map(p => p.url).filter(Boolean);
-      if (newlyCommented.length > 0) {
-        const updatedPosts = [...commentedHistory, ...newlyCommented].slice(-200);
-        const updatedComments = [...usedCommentHistory, ...Array.from(usedTexts)].slice(-50);
-        try { 
-          await chrome.storage.local.set({ 
-            commentedPosts: updatedPosts,
-            usedCommentTexts: updatedComments 
-          }); 
-        } catch(e) {}
-        console.log(`[Ext]    📝 Saved ${newlyCommented.length} URLs to history (total URLs: ${updatedPosts.length}, total Comments: ${updatedComments.length})`);
-      }
+        // ── Save newly commented URLs and used texts to history ──
+        const newlyCommented = successfulTargetPosts.map(p => p.url).filter(Boolean);
+        if (newlyCommented.length > 0) {
+          const updatedPosts = [...commentedHistory, ...newlyCommented].slice(-200);
+          const usedTexts = comments.map(c => c.text); // since we strictly mapped them 
+          const updatedComments = [...usedCommentHistory, ...usedTexts].slice(-50);
+          try { 
+            await chrome.storage.local.set({ 
+              commentedPosts: updatedPosts,
+              usedCommentTexts: updatedComments 
+            }); 
+          } catch(e) {}
+          console.log(`[Ext]    📝 Saved ${newlyCommented.length} URLs to history (total URLs: ${updatedPosts.length}, total Comments: ${updatedComments.length})`);
+        }
+      } // closes else block
     } else {
       console.log(`[Ext] 🛡️ Search-Only Mode Active OR No Comments found. Skipping engagement.`);
     }

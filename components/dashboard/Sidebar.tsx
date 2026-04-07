@@ -20,8 +20,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'saved-posts', label: 'Saved Posts', icon: Bookmark },
-  { id: 'keywords', label: 'Target Keywords', icon: Search },
-  { id: 'comments', label: 'Comment Bank', icon: MessageSquareText },
+  { id: 'keywords', label: 'Target Campaigns', icon: Search },
   { id: 'autoposts', label: 'Auto Posts', icon: Sparkles },
   { id: 'extension-connect', label: 'Connect Extension', icon: Shield },
   { id: 'settings', label: 'Settings', icon: Settings },

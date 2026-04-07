@@ -183,15 +183,15 @@ async function _checkJobsInner() {
       return;
     }
 
-    // Filter keywords that haven't hit 3-cycle limit
+    // Filter keywords that haven't hit their dynamic cycle limit
     const kc = (await loadState()).keywordCycles || {};
-    const availableKeywords = data.keywords.filter(k => (kc[k.keyword] || 0) < 3);
+    const availableKeywords = data.keywords.filter(k => (kc[k.keyword] || 0) < (k.targetCycles || 1));
 
     // Auto-pause if all keywords hit limit
     if (availableKeywords.length === 0) {
       if (!state.isPaused) {
         await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: randomCooldown(), dailyCommentsMade: 0 });
-        console.log("⏸️ [Worker] AUTO-PAUSED: All keywords completed 3 cycles. Resetting limits.");
+        console.log("⏸️ [Worker] AUTO-PAUSED: All keywords completed their target cycles. Resetting limits.");
         console.log("⏸️ [Worker] Toggle Dashboard OFF → ON to reset.");
       }
       return;
@@ -205,6 +205,8 @@ async function _checkJobsInner() {
     // ── Start cycle ──
     const kwObj = availableKeywords[Math.floor(Math.random() * availableKeywords.length)];
     const kw = kwObj.keyword;
+    const cycleNum = (kc[kw] || 0) + 1;
+
     // ── Daily Safety Limit Check ──
     const today = new Date().toDateString();
     if (state.lastCommentDate !== today) {
@@ -215,19 +217,19 @@ async function _checkJobsInner() {
     
     const settings = data.settings || {};
     const allComments = data.comments || [];
-    const keywordComments = allComments.filter(c => !c.keywordId || c.keywordId === kwObj.id);
+    
+    // STRICT ASSIGNMENT: Filter comments specifically for this keyword AND this exact cycle
+    const keywordComments = allComments.filter(c => c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum);
     
     if (state.dailyCommentsMade >= 15 && !settings.searchOnlyMode) {
       console.warn("🛡️ [Worker] Daily comment limit (15) reached! Forcing Search-Only mode for the rest of today.");
       settings.searchOnlyMode = true;
     }
 
-    const cycleNum = (kc[kw] || 0) + 1;
-
     // Mark as running BEFORE creating tab
     await saveState({ isJobRunning: true, currentKeyword: kw, lastJobTime: Date.now() });
 
-    console.log(`🚀 [Worker] Starting cycle #${cycleNum}/3 for: "${kw}"`);
+    console.log(`🚀 [Worker] Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}"`);
     await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId);
 
   } catch (error) {

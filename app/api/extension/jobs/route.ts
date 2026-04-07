@@ -40,7 +40,7 @@ export async function GET(req: Request) {
     // Get active comments
     const comments = await prisma.comment.findMany({
       where: { userId },
-      select: { id: true, text: true, keywordId: true }
+      select: { id: true, text: true, keywordId: true, cycleIndex: true }
     });
 
     // Return the settings required for the extension to operate
@@ -55,8 +55,8 @@ export async function GET(req: Request) {
         maxKeywordsPerCycle: 3,
         searchOnlyMode: settings.searchOnlyMode ?? true // Default to true for safety
       },
-      keywords: keywords.map(k => ({ id: k.id, keyword: k.keyword })),
-      comments: comments // Send available comments to the extension
+      keywords: keywords.map(k => ({ id: k.id, keyword: k.keyword, targetCycles: k.targetCycles || 1 })),
+      comments: comments.map(c => ({ id: c.id, text: c.text, keywordId: c.keywordId, cycleIndex: c.cycleIndex || 1 }))
     }, { status: 200 }));
 
   } catch (error: any) {

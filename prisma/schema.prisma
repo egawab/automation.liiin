@@ -66,6 +66,7 @@ model Keyword {
   id          String   @id @default(uuid())
   keyword     String
   targetReach Int      @default(1000)
+  targetCycles Int     @default(1)
   active      Boolean  @default(true)
   matches     Int      @default(0)
   createdAt   DateTime @default(now())
@@ -76,17 +77,18 @@ model Keyword {
 }
 
 model Comment {
-  id        String   @id @default(uuid())
-  text      String
-  category  String   @default("General")
-  timesUsed Int      @default(0)
-  createdAt DateTime @default(now())
+  id          String   @id @default(uuid())
+  text        String
+  category    String   @default("General")
+  timesUsed   Int      @default(0)
+  cycleIndex  Int      @default(1)
+  createdAt   DateTime @default(now())
   
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
-  keywordId String?
-  keyword   Keyword? @relation(fields: [keywordId], references: [id], onDelete: SetNull)
+  keywordId   String?
+  keyword     Keyword? @relation(fields: [keywordId], references: [id], onDelete: Cascade)
 }
 
 model Log {

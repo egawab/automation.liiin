@@ -37,12 +37,12 @@ export default function Dashboard() {
   const [autoPosts, setAutoPosts] = useState<any[]>([]);
   const [settings, setSettings] = useState<any>({});
 
-  // Form states
+  // Campaign Builder states
   const [newKeyword, setNewKeyword] = useState('');
   const [newKeywordReach, setNewKeywordReach] = useState(1000);
-  const [newCommentText, setNewCommentText] = useState('');
-  const [newCommentCat, setNewCommentCat] = useState('General');
-  const [newCommentKeywordId, setNewCommentKeywordId] = useState<string>('');
+  const [newTargetCycles, setNewTargetCycles] = useState(1);
+  // Flattened array of comments. Cycle 1 gets index 0 and 1. Cycle 2 gets 2 and 3, etc.
+  const [newComments, setNewComments] = useState<string[]>(['', '']);
   const [newTopic, setNewTopic] = useState('');
 
   // Wizard State
@@ -136,6 +136,28 @@ export default function Dashboard() {
   }, [activeTab]);
 
   const toggleSystem = async () => {
+    // START VALIDATION
+    if (!systemActive) {
+      if (keywords.length === 0) {
+        alert("You must define at least one keyword campaign before starting.");
+        return;
+      }
+      
+      const invalidKeywords: string[] = [];
+      for (const kw of keywords) {
+        const required = (kw.targetCycles || 1) * 2;
+        const kwComments = comments.filter(c => c.keywordId === kw.id);
+        if (kwComments.length !== required) {
+          invalidKeywords.push(kw.keyword);
+        }
+      }
+
+      if (invalidKeywords.length > 0) {
+        alert(`Cannot start. The following campaigns have missing or invalid comment configurations:\n\n${invalidKeywords.join(', ')}\n\nPlease recreate them with exact comments for each cycle.`);
+        return;
+      }
+    }
+
     const newState = !systemActive;
     
     // Optimistic UI update
@@ -176,36 +198,43 @@ export default function Dashboard() {
   };
 
   const addKeyword = async () => {
-    if (!newKeyword) return;
+    if (!newKeyword) {
+      alert("Missing Keyword.");
+      return;
+    }
+    
+    // Validate comments
+    const requiredCommentsCount = newTargetCycles * 2;
+    const commentsToSubmit = newComments.slice(0, requiredCommentsCount);
+    if (commentsToSubmit.some(c => !c.trim())) {
+      alert(`Missing comments. You must provide exactly ${requiredCommentsCount} comments.`);
+      return;
+    }
+
+    const formattedComments = commentsToSubmit.map((text, i) => ({
+      text,
+      cycleIndex: Math.floor(i / 2) + 1 // 0,1 -> 1. 2,3 -> 2. 4,5 -> 3
+    }));
+
     await fetch('/api/keywords', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyword: newKeyword, targetReach: newKeywordReach })
+      body: JSON.stringify({ 
+        keyword: newKeyword, 
+        targetReach: newKeywordReach,
+        targetCycles: newTargetCycles,
+        comments: formattedComments
+      })
     });
     setNewKeyword('');
     setNewKeywordReach(1000);
+    setNewTargetCycles(1);
+    setNewComments(['', '']);
     fetchData();
   };
 
   const deleteKeyword = async (id: string) => {
     await fetch(`/api/keywords/${id}`, { method: 'DELETE' });
-    fetchData();
-  };
-
-  const addComment = async () => {
-    if (!newCommentText) return;
-    await fetch('/api/comments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        text: newCommentText, 
-        category: newCommentCat,
-        keywordId: newCommentKeywordId || null
-      })
-    });
-    setNewCommentText('');
-    setNewCommentCat('General');
-    setNewCommentKeywordId('');
     fetchData();
   };
 
@@ -392,41 +421,98 @@ export default function Dashboard() {
       case 'keywords':
         return (
           <Card>
-            <div className="p-6 md:p-8 border-b border-gray-100">
-              <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
+            <div className="p-6 md:p-8 border-b border-gray-100 bg-gray-50 flex flex-col gap-6">
                 <div>
                   <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                     <Search className="w-5 h-5 text-primary-500" />
-                    Search Queries
+                    New Campaign Builder
                   </h3>
                   <p className="text-sm text-gray-600 mt-1">
-                    Add keywords or full sentences your AI agent scans for on LinkedIn
+                    Setup a keyword and strictly map exact comments for each of its cycles.
                   </p>
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <Input
+                    label="Keyword or Topic"
                     type="text"
                     value={newKeyword}
                     onChange={e => setNewKeyword(e.target.value)}
-                    placeholder="E.g. how to grow a marketing agency"
-                    className="min-w-[200px]"
+                    placeholder="E.g. SaaS growth"
                   />
-                  <select
-                    value={newKeywordReach}
-                    onChange={e => setNewKeywordReach(parseInt(e.target.value))}
-                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  >
-                    <option value={100}>100-500 (Small)</option>
-                    <option value={500}>500-1K (Medium)</option>
-                    <option value={1000}>1K-5K (Large)</option>
-                    <option value={5000}>5K-10K (Viral)</option>
-                    <option value={10000}>10K+ (Mega)</option>
-                  </select>
-                  <Button onClick={addKeyword} leftIcon={<Plus className="w-4 h-4" />}>
-                    Add
-                  </Button>
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">Target Reach</label>
+                    <select
+                      value={newKeywordReach}
+                      onChange={e => setNewKeywordReach(parseInt(e.target.value))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-primary-500"
+                    >
+                      <option value={100}>100-500 (Small)</option>
+                      <option value={500}>500-1K (Medium)</option>
+                      <option value={1000}>1K-5K (Large)</option>
+                      <option value={5000}>5K-10K (Viral)</option>
+                      <option value={10000}>10K+ (Mega)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">Cycles to Run</label>
+                    <select
+                      value={newTargetCycles}
+                      onChange={e => {
+                        const val = parseInt(e.target.value);
+                        setNewTargetCycles(val);
+                        setNewComments(prev => {
+                          const newArr = [...prev];
+                          while(newArr.length < val * 2) newArr.push('');
+                          return newArr;
+                        });
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-primary-500"
+                    >
+                      <option value={1}>1 Cycle (2 actions)</option>
+                      <option value={2}>2 Cycles (4 actions)</option>
+                      <option value={3}>3 Cycles (6 actions)</option>
+                    </select>
+                  </div>
                 </div>
-              </div>
+
+                <div className="space-y-4 pt-2">
+                  {Array.from({ length: newTargetCycles }).map((_, cycleIndex) => (
+                    <div key={cycleIndex} className="bg-white border border-gray-200 p-4 rounded-xl shadow-sm">
+                      <h4 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">Cycle {cycleIndex + 1} Comments</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <TextArea
+                          label="Comment 1"
+                          value={newComments[cycleIndex * 2] || ''}
+                          onChange={e => {
+                             const arr = [...newComments];
+                             arr[cycleIndex*2] = e.target.value;
+                             setNewComments(arr);
+                          }}
+                          placeholder="Your exact comment here..."
+                          rows={2}
+                        />
+                        <TextArea
+                          label="Comment 2"
+                          value={newComments[cycleIndex * 2 + 1] || ''}
+                          onChange={e => {
+                             const arr = [...newComments];
+                             arr[cycleIndex*2+1] = e.target.value;
+                             setNewComments(arr);
+                          }}
+                          placeholder="Your exact comment here..."
+                          rows={2}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex justify-end pt-2">
+                   <Button onClick={addKeyword} leftIcon={<Plus className="w-4 h-4" />}>
+                     Save Campaign
+                   </Button>
+                </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -528,149 +614,7 @@ export default function Dashboard() {
             </div>
           </Card>
         );
-      case 'comments':
-        return (
-          <Card>
-            <div className="p-6 md:p-8 border-b border-gray-100">
-              <div className="flex flex-col gap-4">
-                <div>
-                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                    <MessageSquareText className="w-5 h-5 text-primary-500" />
-                    Comment Bank
-                  </h3>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Pre-written thoughts your agent will deploy on LinkedIn
-                  </p>
-                </div>
 
-                {/* Add Comment Form */}
-                <div className="flex flex-col gap-3 p-4 bg-gray-50 rounded-2xl border border-gray-100">
-                  <div className="flex flex-col lg:flex-row items-start lg:items-end gap-3">
-                    <Input
-                      label="Category"
-                      type="text"
-                      value={newCommentCat}
-                      onChange={e => setNewCommentCat(e.target.value)}
-                      placeholder="General"
-                      className="lg:w-40"
-                    />
-                    <div className="flex-1 min-w-[200px]">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Link to Keyword (Optional)
-                      </label>
-                      <select
-                        value={newCommentKeywordId}
-                        onChange={e => setNewCommentKeywordId(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                      >
-                        <option value="">-- No keyword --</option>
-                        {keywords.map((kw: any) => (
-                          <option key={kw.id} value={kw.id}>
-                            {kw.keyword}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div className="flex flex-col lg:flex-row items-start lg:items-end gap-3">
-                    <TextArea
-                      label="Comment Text"
-                      value={newCommentText}
-                      onChange={e => setNewCommentText(e.target.value)}
-                      placeholder="Type a thoughtful comment..."
-                      rows={2}
-                      className="flex-1 min-w-[250px]"
-                      showCharCount
-                      maxLength={280}
-                    />
-                    <Button onClick={addComment} leftIcon={<Plus className="w-4 h-4" />} className="lg:mb-0">
-                      Add Comment
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Comments Grid */}
-            <div className="p-6 md:p-8">
-              {comments.length === 0 ? (
-                <div className="bg-gradient-to-br from-primary-50 to-primary-100/30 p-8 md:p-12 text-center rounded-3xl border border-gray-100">
-                  <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-white shadow-xl shadow-primary-500/10 flex items-center justify-center transform rotate-6">
-                    <Zap className="w-10 h-10 text-primary-500" />
-                  </div>
-                  <h4 className="text-2xl font-black text-gray-900 mb-3 tracking-tight">Zero to Hero in 1-Click</h4>
-                  <p className="text-base text-gray-600 max-w-lg mx-auto mb-10 leading-relaxed">
-                    Don't know what to write? Load a curated Starter Pack. 
-                    We'll instantly set up high-converting <strong className="text-primary-700">keywords</strong> and AI-crafted <strong className="text-primary-700">comments</strong> for you.
-                  </p>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-                    {/* Pack 1 */}
-                    <button 
-                      onClick={() => loadStarterPack('marketing')}
-                      disabled={isDeployingPack}
-                      className={`group bg-white p-6 rounded-2xl text-left border-2 transition-all ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-100 hover:border-primary-400 hover:shadow-2xl hover:shadow-primary-500/20 hover:-translate-y-1'}`}
-                    >
-                      <div className="flex justify-between items-start mb-4">
-                        <Badge variant="primary" className="bg-primary-100 text-primary-700">B2B Marketing</Badge>
-                        {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
-                      </div>
-                      <h5 className="text-lg font-extrabold text-gray-900 mb-2 group-hover:text-primary-600 transition-colors">Growth & Marketing Pack</h5>
-                      <p className="text-sm font-bold text-gray-400">+3 Keywords • +9 Comments</p>
-                    </button>
-
-                    {/* Pack 2 */}
-                    <button 
-                      onClick={() => loadStarterPack('tech')}
-                      disabled={isDeployingPack}
-                      className={`group bg-white p-6 rounded-2xl text-left border-2 transition-all ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-100 hover:border-blue-400 hover:shadow-2xl hover:shadow-blue-500/20 hover:-translate-y-1'}`}
-                    >
-                      <div className="flex justify-between items-start mb-4">
-                        <Badge variant="secondary" className="bg-blue-100 text-blue-700">Tech & SaaS</Badge>
-                        {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
-                      </div>
-                      <h5 className="text-lg font-extrabold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">Software Engineering Pack</h5>
-                      <p className="text-sm font-bold text-gray-400">+3 Keywords • +9 Comments</p>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {comments.map((comment: any) => (
-                    <Card key={comment.id} variant="default" hover className="group relative">
-                      <div className="flex justify-between items-start mb-3">
-                        <div className="flex flex-wrap gap-2">
-                          <Badge variant="primary" size="sm">
-                            {comment.category}
-                          </Badge>
-                          {comment.keyword && (
-                            <Badge variant="secondary" size="sm">
-                              🔗 {comment.keyword.keyword}
-                            </Badge>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => deleteComment(comment.id)}
-                          className="text-gray-400 opacity-0 group-hover:opacity-100 hover:text-error-600 hover:bg-error-50 p-1.5 rounded-lg transition-all"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <p className="text-sm text-gray-700 leading-relaxed">
-                        "{comment.text}"
-                      </p>
-                      {!comment.keyword && (
-                        <p className="text-xs text-gray-400 mt-2 italic">
-                          Not linked to any keyword
-                        </p>
-                      )}
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </div>
-          </Card>
-        );
       case 'extension-connect':
         return (
           <div className="max-w-5xl mx-auto space-y-8">
@@ -979,22 +923,22 @@ export default function Dashboard() {
                     <div>
                       <label className="block text-xs font-bold text-gray-500 mb-1.5">Searches / Hour</label>
                       <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="12"
-                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-transparent" />
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-500 mb-1.5">Searches / Day</label>
                       <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 20} min="1" max="60"
-                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-transparent" />
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Delay (min)</label>
                       <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="1" max="30"
-                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-transparent" />
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-500 mb-1.5">Keywords / Cycle</label>
                       <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 3} min="1" max="10"
-                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-transparent" />
                     </div>
                   </div>
 
@@ -1016,13 +960,13 @@ export default function Dashboard() {
                       <div>
                         <label className="block text-xs text-gray-500 mb-1">Start hour</label>
                         <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
-                          className="w-20 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold" />
+                          className="w-20 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-bold text-gray-900" />
                       </div>
                       <span className="text-gray-300 mt-4">&rarr;</span>
                       <div>
                         <label className="block text-xs text-gray-500 mb-1">End hour</label>
                         <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
-                          className="w-20 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold" />
+                          className="w-20 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-bold text-gray-900" />
                       </div>
                     </div>
                   </div>
@@ -1043,22 +987,22 @@ export default function Dashboard() {
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Likes</label>
                         <input type="number" name="minLikes" defaultValue={settings.minLikes ?? 10}
-                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Likes</label>
                         <input type="number" name="maxLikes" defaultValue={settings.maxLikes ?? 10000}
-                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Comments</label>
                         <input type="number" name="minComments" defaultValue={settings.minComments ?? 2}
-                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Comments</label>
                         <input type="number" name="maxComments" defaultValue={settings.maxComments ?? 1000}
-                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
                       </div>
                     </div>
                   </div>
@@ -1076,18 +1020,18 @@ export default function Dashboard() {
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Delay (Mins)</label>
                         <input type="number" name="minDelayMins" defaultValue={settings.minDelayMins ?? 15}
-                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Delay (Mins)</label>
                         <input type="number" name="maxDelayMins" defaultValue={settings.maxDelayMins ?? 45}
-                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Comments / Day</label>
                       <input type="number" name="maxCommentsPerDay" defaultValue={settings.maxCommentsPerDay ?? 20}
-                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
                     </div>
                     <p className="text-[10px] text-gray-400 italic">Randomized delays emulate human behavior.</p>
                   </div>

@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getUserFromToken, unauthorized } from '@/lib/auth';
 
@@ -9,6 +9,7 @@ export async function GET() {
     try {
         const keywords = await prisma.keyword.findMany({
             where: { userId },
+            include: { comments: true },
             orderBy: { createdAt: 'desc' }
         });
         return NextResponse.json(keywords);
@@ -32,7 +33,9 @@ export async function POST(req: Request) {
         
         // Handle both 'keyword' and 'term' from frontend
         const keywordText = body.keyword || body.term;
-        const targetReach = body.targetReach || 1000; // Default to 1000 if not provided
+        const targetReach = parseInt((body.targetReach || 1000).toString());
+        const targetCycles = parseInt((body.targetCycles || 1).toString());
+        const commentsToCreate = Array.isArray(body.comments) ? body.comments : [];
         
         if (!keywordText) {
             return NextResponse.json({ error: 'Keyword text is required' }, { status: 400 });
@@ -41,12 +44,21 @@ export async function POST(req: Request) {
         const newKeyword = await prisma.keyword.create({
             data: { 
                 keyword: keywordText,
-                targetReach: parseInt(targetReach.toString()),
-                userId 
-            }
+                targetReach,
+                targetCycles,
+                userId,
+                comments: {
+                    create: commentsToCreate.map((c: { text: string, cycleIndex: number }) => ({
+                        text: c.text,
+                        cycleIndex: parseInt((c.cycleIndex || 1).toString()),
+                        userId
+                    }))
+                }
+            },
+            include: { comments: true }
         });
         
-        console.log('Created keyword:', newKeyword);
+        console.log('Created keyword with nested comments:', newKeyword);
         return NextResponse.json(newKeyword);
     } catch (error) {
         console.error('Keywords POST error:', error);
