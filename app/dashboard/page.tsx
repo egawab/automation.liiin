@@ -93,11 +93,7 @@ export default function Dashboard() {
       }
     }
 
-    // Fetch Comments
-    if (activeTab === 'comments') {
-      const cmRes = await fetch('/api/comments');
-      if (cmRes.ok) setComments(await cmRes.json());
-    }
+
 
     // Fetch AutoPosts
     if (activeTab === 'autoposts') {
@@ -146,7 +142,8 @@ export default function Dashboard() {
       const invalidKeywords: string[] = [];
       for (const kw of keywords) {
         const required = (kw.targetCycles || 1) * 2;
-        const kwComments = comments.filter(c => c.keywordId === kw.id);
+        // Use the nested comments array returned directly from the API include query
+        const kwComments = kw.comments || [];
         if (kwComments.length !== required) {
           invalidKeywords.push(kw.keyword);
         }
