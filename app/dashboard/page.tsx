@@ -17,6 +17,7 @@ import ActivityFeed from '@/components/dashboard/ActivityFeed';
 import Chart from '@/components/dashboard/Chart';
 import DailySummaryCard from '@/components/dashboard/DailySummaryCard';
 import { SavedPostsPanel } from '@/components/dashboard/SavedPostsPanel';
+import Terminal, { LogEntry } from '@/components/dashboard/Terminal';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Input, { TextArea } from '@/components/ui/Input';
@@ -36,6 +37,8 @@ export default function Dashboard() {
   const [comments, setComments] = useState<any[]>([]);
   const [autoPosts, setAutoPosts] = useState<any[]>([]);
   const [settings, setSettings] = useState<any>({});
+  
+  const [liveLogs, setLiveLogs] = useState<LogEntry[]>([]);
 
   // Campaign Builder states
   const [newKeyword, setNewKeyword] = useState('');
@@ -111,8 +114,15 @@ export default function Dashboard() {
         console.log('🔗 Extension Bridge connected');
       } else if (event.data.action === 'ENGINE_STARTED_ACK') {
         console.log('🚀 Extension acknowledged START command');
-        // Force an immediate fetch to sync UI
         fetchData();
+      } else if (event.data.action === 'LIVE_LOG') {
+        const log = event.data.log;
+        setLiveLogs(prev => {
+          const newLogs = [...prev, { id: Math.random().toString(), ...log }];
+          // Keep only the last 400 logs to prevent memory bloat
+          if (newLogs.length > 400) return newLogs.slice(newLogs.length - 400);
+          return newLogs;
+        });
       }
     };
     
@@ -172,6 +182,8 @@ export default function Dashboard() {
     // 🚀 Send direct push to the extension (via injected dashboard-bridge.js)
     if (newState) {
       window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'START_ENGINE' }, '*');
+      // Switch automatically to the detailed terminal logs
+      setActiveTab('terminal');
     }
   };
 
@@ -610,6 +622,15 @@ export default function Dashboard() {
               </table>
             </div>
           </Card>
+        );
+
+      case 'terminal':
+        return (
+          <Terminal 
+            logs={liveLogs} 
+            onClear={() => setLiveLogs([])} 
+            systemActive={systemActive} 
+          />
         );
 
       case 'extension-connect':

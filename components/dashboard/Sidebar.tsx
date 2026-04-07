@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { LayoutDashboard, Search, MessageSquareText, PenTool, Settings, Sparkles, Shield, Bookmark } from 'lucide-react';
+import { LayoutDashboard, Search, MessageSquareText, PenTool, Settings, Sparkles, Shield, Bookmark, Terminal } from 'lucide-react';
 import NexoraLogo from '@/components/ui/NexoraLogo';
 
 interface SidebarProps {
@@ -22,6 +22,7 @@ const navItems: NavItem[] = [
   { id: 'saved-posts', label: 'Saved Posts', icon: Bookmark },
   { id: 'keywords', label: 'Target Campaigns', icon: Search },
   { id: 'autoposts', label: 'Auto Posts', icon: Sparkles },
+  { id: 'terminal', label: 'Live Logs', icon: Terminal },
   { id: 'extension-connect', label: 'Connect Extension', icon: Shield },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];

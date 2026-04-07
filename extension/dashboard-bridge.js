@@ -28,3 +28,20 @@ window.addEventListener('message', (event) => {
     }
   }
 });
+
+// 3. Listen for broadcast messages from the Extension and relay them to the Dashboard
+try {
+  if (chrome && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.action === 'LIVE_LOG') {
+        window.postMessage({ 
+          source: 'NEXORA_EXTENSION', 
+          action: 'LIVE_LOG', 
+          log: message.log 
+        }, '*');
+      }
+    });
+  }
+} catch (e) {
+  console.error("[Nexora Bridge] Failed to setup extension listener:", e);
+}

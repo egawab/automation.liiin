@@ -3,6 +3,25 @@
 // Injected by background.js via chrome.scripting.executeScript
 // ═══════════════════════════════════════════════════════════
 
+// --- LIVE LOGS BRIDGE ---
+const _origLog = console.log;
+const _origWarn = console.warn;
+const _origError = console.error;
+
+function broadcastLog(level, args) {
+  try {
+    const text = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    chrome.runtime.sendMessage({
+      action: 'LIVE_LOG',
+      log: { level, text, timestamp: new Date().toISOString(), source: 'content' }
+    }).catch(() => {});
+  } catch(e) {}
+}
+
+console.log = function(...args) { _origLog.apply(console, args); broadcastLog('SUCCESS', args); };
+console.warn = function(...args) { _origWarn.apply(console, args); broadcastLog('WARN', args); };
+console.error = function(...args) { _origError.apply(console, args); broadcastLog('ERROR', args); };
+
 // Clean up any previous injection's listener before registering fresh
 if (window.__linkedInExtractorCleanup) {
   try { window.__linkedInExtractorCleanup(); } catch(e) {}

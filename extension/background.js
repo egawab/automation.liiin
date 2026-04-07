@@ -11,6 +11,25 @@
 
 console.log("[Worker] ═══ Safety Worker v4 (Persistent) Initialized ═══");
 
+// --- LIVE LOGS BRIDGE ---
+const _origLog = console.log;
+const _origWarn = console.warn;
+const _origError = console.error;
+
+function broadcastLog(level, args) {
+  try {
+    const text = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    chrome.runtime.sendMessage({
+      action: 'LIVE_LOG',
+      log: { level, text, timestamp: new Date().toISOString(), source: 'background' }
+    }).catch(() => {});
+  } catch(e) {}
+}
+
+console.log = function(...args) { _origLog.apply(console, args); broadcastLog('SUCCESS', args); }; // Default to SUCCESS for nice styling
+console.warn = function(...args) { _origWarn.apply(console, args); broadcastLog('WARN', args); };
+console.error = function(...args) { _origError.apply(console, args); broadcastLog('ERROR', args); };
+
 // ── Persistent State (chrome.storage.local) ──
 async function loadState() {
   return chrome.storage.local.get({
