@@ -216,84 +216,68 @@ export function SavedPostsPanel() {
           {filteredPosts.map(post => (
             <Card
               key={post.id}
-              className={`p-4 hover:shadow-lg transition-shadow ${
-                post.visited ? 'bg-gray-50' : 'bg-white border-l-4 border-l-purple-500'
+              className={`p-4 sm:p-5 hover:shadow-lg transition-shadow ${
+                post.visited ? 'bg-gray-50 opacity-80' : 'bg-white border-l-4 border-l-purple-500'
               }`}
             >
-              <div className="flex items-start justify-between gap-4">
-                {/* Post Info */}
-                <div className="flex-1 min-w-0">
-                  {/* Header */}
-                  <div className="flex items-center gap-3 mb-2">
-                    <Badge variant={post.visited ? 'secondary' : 'primary'}>
-                      {post.keyword}
-                    </Badge>
-                    {!post.visited && (
-                      <Badge variant="success">New</Badge>
-                    )}
-                    <span className="text-sm text-gray-500">
-                      {new Date(post.savedAt).toLocaleDateString()}
-                    </span>
-                  </div>
+              {/* Post Content Preview — PRIMARY focus */}
+              {post.postPreview ? (
+                <p className="text-gray-800 text-sm sm:text-base leading-relaxed mb-3 line-clamp-3 font-medium">
+                  {post.postPreview}
+                </p>
+              ) : (
+                <p className="text-gray-400 text-sm italic mb-3">No preview available</p>
+              )}
 
-                  {/* Author */}
-                  {post.postAuthor && (
-                    <div className="font-semibold text-gray-900 mb-2">
-                      {post.postAuthor}
-                    </div>
-                  )}
+              {/* Metadata row: Author + Engagement + Badges */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs sm:text-sm text-gray-500 mb-3">
+                {post.postAuthor && (
+                  <span className="font-semibold text-gray-700 truncate max-w-[200px]">
+                    {post.postAuthor}
+                  </span>
+                )}
+                <span>👍 {post.likes}</span>
+                <span>💬 {post.comments}</span>
+                <Badge variant={post.visited ? 'secondary' : 'primary'} size="sm">
+                  {post.keyword}
+                </Badge>
+                {!post.visited && <Badge variant="success" size="sm">New</Badge>}
+                <span className="text-gray-400 ml-auto">
+                  {new Date(post.savedAt).toLocaleDateString()}
+                </span>
+              </div>
 
-                  {/* Preview */}
-                  {post.postPreview && (
-                    <p className="text-gray-700 text-sm mb-3 line-clamp-2">
-                      {post.postPreview}
-                    </p>
-                  )}
-
-                  {/* Engagement */}
-                  <div className="flex items-center gap-4 text-sm text-gray-600">
-                    <span className="flex items-center gap-1">
-                      <span className="font-semibold">👍 {post.likes}</span>
-                      <span className="text-gray-400">likes</span>
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <span className="font-semibold">💬 {post.comments}</span>
-                      <span className="text-gray-400">comments</span>
-                    </span>
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex flex-col gap-2">
+              {/* Actions — responsive row */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  onClick={() => openPost(post)}
+                  variant="primary"
+                  size="sm"
+                  className="whitespace-nowrap"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                  Open
+                </Button>
+                {!post.visited && (
                   <Button
-                    onClick={() => openPost(post)}
-                    variant="primary"
+                    onClick={() => markAsVisited(post.id)}
+                    variant="outline"
+                    size="sm"
                     className="whitespace-nowrap"
                   >
-                    <ExternalLink className="w-4 h-4 mr-2" />
-                    Open Post
+                    <Eye className="w-3.5 h-3.5 mr-1.5" />
+                    Visited
                   </Button>
-                  
-                  {!post.visited && (
-                    <Button
-                      onClick={() => markAsVisited(post.id)}
-                      variant="outline"
-                      className="whitespace-nowrap"
-                    >
-                      <Eye className="w-4 h-4 mr-2" />
-                      Mark Visited
-                    </Button>
-                  )}
-
-                  <Button
-                    onClick={() => deletePost(post.id)}
-                    variant="outline"
-                    className="whitespace-nowrap text-red-600 hover:text-red-700"
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Delete
-                  </Button>
-                </div>
+                )}
+                <Button
+                  onClick={() => deletePost(post.id)}
+                  variant="outline"
+                  size="sm"
+                  className="whitespace-nowrap text-red-500 hover:text-red-700"
+                >
+                  <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                  Delete
+                </Button>
               </div>
             </Card>
           ))}

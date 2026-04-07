@@ -384,12 +384,35 @@ window.__linkedInExtractorReady = true;
       console.log(`[Ext] 🤖 Phase 5b: Safe Auto-Commenting enabled. Waiting 3s...`);
       await wait(3000, 5000);
       
-      // Limit to max 2 comments per cycle to maintain human pacing
-      const targetPosts = final.slice(0, 2); // Use final[] (Tier1 + Tier2) so cold accounts can still comment
-      
-      for (const p of targetPosts) {
+      // ── NO-REPETITION: Load history of already-commented post URLs ──
+      let commentedHistory = [];
+      try {
+        const stored = await chrome.storage.local.get('commentedPosts');
+        commentedHistory = stored.commentedPosts || [];
+      } catch(e) {}
+      const commentedSet = new Set(commentedHistory);
+
+      // Filter out posts we've already commented on in previous runs
+      const freshPosts = final.filter(p => p.url && !commentedSet.has(p.url));
+      console.log(`[Ext]    ${final.length} total → ${freshPosts.length} fresh (${commentedSet.size} in history)`);
+
+      // Limit to max 2 comments per cycle
+      const targetPosts = freshPosts.slice(0, 2);
+
+      // ── DUAL COMMENT: Shuffle comments and assign unique text to each post ──
+      const shuffled = [...comments].sort(() => Math.random() - 0.5);
+      const usedTexts = new Set();
+
+      for (let idx = 0; idx < targetPosts.length; idx++) {
+        const p = targetPosts[idx];
         if (!p.element) continue;
-        const commentObj = comments[Math.floor(Math.random() * comments.length)];
+
+        // Pick unique comment: try shuffled[idx], fallback to first unused
+        let commentObj = shuffled[idx % shuffled.length];
+        if (usedTexts.has(commentObj.text) && shuffled.length > 1) {
+          commentObj = shuffled.find(c => !usedTexts.has(c.text)) || commentObj;
+        }
+        usedTexts.add(commentObj.text);
         const textToType = commentObj.text;
         
         try {
@@ -524,6 +547,14 @@ window.__linkedInExtractorReady = true;
         } catch (e) {
           console.error(`[Ext] ❌ Error Auto-Commenting:`, e);
         }
+      }
+
+      // ── Save newly commented URLs to history (rolling 200 cap) ──
+      const newlyCommented = targetPosts.map(p => p.url).filter(Boolean);
+      if (newlyCommented.length > 0) {
+        const updated = [...commentedHistory, ...newlyCommented].slice(-200);
+        try { await chrome.storage.local.set({ commentedPosts: updated }); } catch(e) {}
+        console.log(`[Ext]    📝 Saved ${newlyCommented.length} URLs to history (total: ${updated.length})`);
       }
     } else {
       console.log(`[Ext] 🛡️ Search-Only Mode Active OR No Comments found. Skipping engagement.`);

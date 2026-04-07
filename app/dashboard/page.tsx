@@ -397,10 +397,10 @@ export default function Dashboard() {
                 <div>
                   <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                     <Search className="w-5 h-5 text-primary-500" />
-                    Target Keywords
+                    Search Queries
                   </h3>
                   <p className="text-sm text-gray-600 mt-1">
-                    Manage the phrases your AI agent scans for on LinkedIn
+                    Add keywords or full sentences your AI agent scans for on LinkedIn
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -408,7 +408,7 @@ export default function Dashboard() {
                     type="text"
                     value={newKeyword}
                     onChange={e => setNewKeyword(e.target.value)}
-                    placeholder="E.g. #growthhacking"
+                    placeholder="E.g. how to grow a marketing agency"
                     className="min-w-[200px]"
                   />
                   <select
@@ -931,201 +931,205 @@ export default function Dashboard() {
         );
       case 'settings':
         return (
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-4xl mx-auto space-y-6">
 
-            <Card>
-              <div className="p-6 md:p-8 border-b border-gray-100">
-                <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                  <Settings className="w-5 h-5 text-primary-500" />
-                  Agent Configuration
-                </h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  Fine-tune your autopilot's parameters and safety thresholds
-                </p>
-              </div>
-              <form onSubmit={saveSettings} className="p-6 md:p-8 space-y-8">
+            {/* Page Header */}
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <Settings className="w-6 h-6 text-primary-500" />
+                Agent Configuration
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">Fine-tune your autopilot&apos;s parameters and safety thresholds</p>
+            </div>
 
-                {/* Search-Only Mode Toggle */}
-                <div className="bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl p-6 shadow-xl">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1">
-                      <h4 className="text-sm font-extrabold text-white mb-2 flex items-center gap-2">
-                        <Search size={16} className="text-white" />
-                        Search-Only Mode (Recommended)
-                      </h4>
-                      <p className="text-xs text-blue-100 mb-3">
-                        Enable this mode to search and save posts WITHOUT auto-commenting. Safer and avoids CAPTCHA triggers.
-                      </p>
-                      <label className="flex items-center gap-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          name="searchOnlyMode"
-                          defaultChecked={settings.searchOnlyMode ?? true}
-                          className="w-5 h-5 rounded border-2 border-white/30 bg-white/10 text-primary-600 focus:ring-2 focus:ring-white/50"
-                        />
-                        <span className="text-sm font-semibold text-white">
-                          Enable Search-Only Mode
-                        </span>
+            <form onSubmit={saveSettings} className="space-y-6">
+
+              {/* Section 1: Mode Selection */}
+              <Card className="overflow-hidden">
+                <div className="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
+                    <Search size={16} /> Operating Mode
+                  </h3>
+                </div>
+                <div className="p-6">
+                  <label className="flex items-start gap-4 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      name="searchOnlyMode"
+                      defaultChecked={settings.searchOnlyMode ?? true}
+                      className="w-5 h-5 mt-0.5 rounded border-2 border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500"
+                    />
+                    <div>
+                      <span className="text-sm font-bold text-gray-900 group-hover:text-primary-600 transition-colors">Search-Only Mode (Recommended)</span>
+                      <p className="text-xs text-gray-500 mt-1">Search and save posts WITHOUT auto-commenting. Safer and avoids CAPTCHA triggers.</p>
+                    </div>
+                  </label>
+                </div>
+              </Card>
+
+              {/* Section 2: Search Limits */}
+              <Card className="overflow-hidden">
+                <div className="bg-gradient-to-r from-green-600 to-emerald-600 px-6 py-4">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
+                    <Shield size={16} /> Search Limits
+                  </h3>
+                </div>
+                <div className="p-6 space-y-5">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Searches / Hour</label>
+                      <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="12"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Searches / Day</label>
+                      <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 20} min="1" max="60"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Delay (min)</label>
+                      <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="1" max="30"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Keywords / Cycle</label>
+                      <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 3} min="1" max="10"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                    </div>
+                  </div>
+
+                  {/* Schedule Controls */}
+                  <div className="border-t border-gray-100 pt-5 space-y-4">
+                    <div className="flex flex-wrap gap-x-6 gap-y-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="workHoursOnly" defaultChecked={settings.workHoursOnly ?? true}
+                          className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500" />
+                        <span className="text-sm font-medium text-gray-700">Work hours only</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="skipWeekends" defaultChecked={settings.skipWeekends ?? true}
+                          className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500" />
+                        <span className="text-sm font-medium text-gray-700">Skip weekends</span>
                       </label>
                     </div>
-                  </div>
-                </div>
-
-                {/* Conservative Search Limits (Search-Only Mode) */}
-                <div className="bg-gradient-to-br from-green-600 to-emerald-700 rounded-2xl p-6 shadow-xl">
-                  <h4 className="text-sm font-extrabold text-white mb-2 flex items-center gap-2">
-                    <Shield size={16} className="text-white" />
-                    Conservative Search Limits (Safest)
-                  </h4>
-                  <p className="text-xs text-green-100 mb-4">
-                    Limits to minimize CAPTCHA and detection. Recommended for first tests.
-                  </p>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-green-100 mb-1">Max Searches/Hour</label>
-                      <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="12"
-                        className="w-full px-3 py-2 rounded-lg bg-white/20 border border-white/30 text-white font-bold text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-green-100 mb-1">Max Searches/Day</label>
-                      <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 20} min="1" max="60"
-                        className="w-full px-3 py-2 rounded-lg bg-white/20 border border-white/30 text-white font-bold text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-green-100 mb-1">Min Delay (min)</label>
-                      <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="5" max="30"
-                        className="w-full px-3 py-2 rounded-lg bg-white/20 border border-white/30 text-white font-bold text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-green-100 mb-1">Keywords/Cycle</label>
-                      <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 3} min="1" max="10"
-                        className="w-full px-3 py-2 rounded-lg bg-white/20 border border-white/30 text-white font-bold text-sm" />
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" name="workHoursOnly" defaultChecked={settings.workHoursOnly ?? true}
-                        className="w-4 h-4 rounded border-2 border-white/50" />
-                      <span className="text-sm font-semibold text-white">Work hours only (09:00–18:00)</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" name="skipWeekends" defaultChecked={settings.skipWeekends ?? true}
-                        className="w-4 h-4 rounded border-2 border-white/50" />
-                      <span className="text-sm font-semibold text-white">Skip weekends</span>
-                    </label>
-                  </div>
-                  <div className="mt-3 flex gap-4">
-                    <div>
-                      <label className="block text-xs text-green-100 mb-1">Start hour</label>
-                      <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
-                        className="w-20 px-2 py-1 rounded bg-white/20 border border-white/30 text-white text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-green-100 mb-1">End hour</label>
-                      <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
-                        className="w-20 px-2 py-1 rounded bg-white/20 border border-white/30 text-white text-sm" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* API & Connection Profile Section */}
-                <div className="bg-gray-900 rounded-2xl p-8 border border-gray-800 shadow-2xl relative overflow-hidden">
-                  <div className="absolute right-0 top-0 text-white/5 opacity-50 scale-150 -translate-y-1/4 translate-x-1/4">
-                    <Shield size={200} />
-                  </div>
-                  
-                  <div className="relative z-10 space-y-8">
-                    <h4 className="text-sm font-extrabold text-white mb-6 uppercase tracking-widest flex items-center gap-3">
-                       <Shield className="w-5 h-5 text-primary-500" />
-                       Connection Profile
-                    </h4>
-                    
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                      <div className="space-y-3">
-                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">
-                          LinkedIn Session Cookie (li_at)
-                        </label>
-                        <input
-                          type="text"
-                          name="linkedinSessionCookie"
-                          defaultValue={settings.linkedinSessionCookie || ''}
-                          placeholder="Paste your li_at cookie here"
-                          className="w-full px-4 py-3 bg-gray-800 border-2 border-gray-700 rounded-xl text-sm font-mono font-bold text-primary-400 outline-none focus:border-primary-500 transition-all"
-                        />
-                        <p className="text-[10px] text-gray-500 font-medium italic">Crucial for server-side authentication. Do not share.</p>
+                    <div className="flex items-center gap-4">
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Start hour</label>
+                        <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
+                          className="w-20 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold" />
                       </div>
-                      
-                      <div className="space-y-3">
-                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">
-                          Network Status
-                        </label>
-                        <div className="px-5 py-3 bg-primary-500/10 border-2 border-primary-500/20 rounded-xl text-sm font-bold text-primary-400 flex items-center gap-3">
-                           <div className="w-2.5 h-2.5 rounded-full bg-primary-500 animate-pulse shadow-[0_0_10px_rgba(59,130,246,0.6)]" />
-                           Cloud Scraper Mode Active
-                        </div>
+                      <span className="text-gray-300 mt-4">&rarr;</span>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">End hour</label>
+                        <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
+                          className="w-20 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold" />
                       </div>
                     </div>
                   </div>
                 </div>
+              </Card>
 
-                {/* Post Targeting & Human Emulation Grid */}
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-                  {/* Targeting Criteria */}
-                  <div className="bg-white border-2 border-gray-100 rounded-3xl p-8 hover:border-primary-200 transition-all shadow-sm">
-                    <h4 className="text-sm font-bold text-gray-900 mb-6 uppercase tracking-widest flex items-center gap-2">
-                      <Search className="w-5 h-5 text-primary-600" />
-                      Targeting Criteria
-                    </h4>
+              {/* Section 3: Targeting + Delays (side-by-side on desktop) */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Targeting Criteria */}
+                <Card className="overflow-hidden">
+                  <div className="bg-gray-800 px-6 py-4">
+                    <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
+                      <Search size={16} /> Targeting Criteria
+                    </h3>
+                  </div>
+                  <div className="p-6">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Min Likes</label>
-                        <input type="number" name="minLikes" defaultValue={settings.minLikes ?? 10} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Likes</label>
+                        <input type="number" name="minLikes" defaultValue={settings.minLikes ?? 10}
+                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Max Likes</label>
-                        <input type="number" name="maxLikes" defaultValue={settings.maxLikes ?? 10000} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Likes</label>
+                        <input type="number" name="maxLikes" defaultValue={settings.maxLikes ?? 10000}
+                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Min Comm.</label>
-                        <input type="number" name="minComments" defaultValue={settings.minComments ?? 2} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Comments</label>
+                        <input type="number" name="minComments" defaultValue={settings.minComments ?? 2}
+                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Max Comm.</label>
-                        <input type="number" name="maxComments" defaultValue={settings.maxComments ?? 1000} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Comments</label>
+                        <input type="number" name="maxComments" defaultValue={settings.maxComments ?? 1000}
+                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
                       </div>
                     </div>
                   </div>
+                </Card>
 
-                  {/* Safety Delays */}
-                  <div className="bg-white border-2 border-gray-100 rounded-3xl p-8 hover:border-accent-200 transition-all shadow-sm">
-                    <h4 className="text-sm font-bold text-gray-900 mb-6 uppercase tracking-widest flex items-center gap-2">
-                      <Bot className="w-5 h-5 text-accent-500" />
-                      Safety Delays
-                    </h4>
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Min (Mins)</label>
-                          <input type="number" name="minDelayMins" defaultValue={settings.minDelayMins ?? 15} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Max (Mins)</label>
-                          <input type="number" name="maxDelayMins" defaultValue={settings.maxDelayMins ?? 45} className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-bold" />
-                        </div>
+                {/* Safety Delays */}
+                <Card className="overflow-hidden">
+                  <div className="bg-gray-800 px-6 py-4">
+                    <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
+                      <Bot size={16} /> Safety Delays
+                    </h3>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Delay (Mins)</label>
+                        <input type="number" name="minDelayMins" defaultValue={settings.minDelayMins ?? 15}
+                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
                       </div>
-                      <p className="text-[10px] text-gray-400 italic">Randomized delays emulate human behavior to prevent detection.</p>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Delay (Mins)</label>
+                        <input type="number" name="maxDelayMins" defaultValue={settings.maxDelayMins ?? 45}
+                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Comments / Day</label>
+                      <input type="number" name="maxCommentsPerDay" defaultValue={settings.maxCommentsPerDay ?? 20}
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                    </div>
+                    <p className="text-[10px] text-gray-400 italic">Randomized delays emulate human behavior.</p>
+                  </div>
+                </Card>
+              </div>
+
+              {/* Section 4: Connection Profile */}
+              <Card className="overflow-hidden">
+                <div className="bg-gray-900 px-6 py-4">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
+                    <Shield size={16} className="text-primary-400" /> Connection Profile
+                  </h3>
+                </div>
+                <div className="p-6 bg-gray-50 space-y-4">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1.5">LinkedIn Session Cookie (li_at)</label>
+                      <input
+                        type="text"
+                        name="linkedinSessionCookie"
+                        defaultValue={settings.linkedinSessionCookie || ''}
+                        placeholder="Paste your li_at cookie"
+                        className="w-full px-3 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-mono font-bold text-gray-700 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Profile Views / Day</label>
+                      <input type="number" name="maxProfileViewsPerDay" defaultValue={settings.maxProfileViewsPerDay ?? 100}
+                        className="w-full px-3 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
                     </div>
                   </div>
+                  <p className="text-[10px] text-gray-400 italic">Session cookie is used for server-side authentication. Do not share.</p>
                 </div>
+              </Card>
 
-                {/* Submit Button */}
-                <div className="pt-8 flex justify-end">
-                  <Button type="submit" variant="primary" size="lg" className="px-16 py-6 text-lg shadow-2xl shadow-primary-500/30">
-                    Apply Global Settings
-                  </Button>
-                </div>
-              </form>
-            </Card>
+              {/* Submit */}
+              <div className="flex justify-end">
+                <Button type="submit" variant="primary" size="lg" className="px-12 shadow-xl shadow-primary-500/20">
+                  Save Settings
+                </Button>
+              </div>
+            </form>
           </div>
         );
 
