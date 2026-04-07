@@ -12,23 +12,28 @@
 console.log("[Worker] ═══ Safety Worker v4 (Persistent) Initialized ═══");
 
 // --- LIVE LOGS BRIDGE ---
+// Background service worker must use chrome.tabs.sendMessage to reach content scripts (like dashboard-bridge.js).
+// chrome.runtime.sendMessage does NOT reach content scripts.
 const _origLog = console.log;
 const _origWarn = console.warn;
 const _origError = console.error;
 
-function broadcastLog(level, args) {
+function broadcastLogToTabs(level, args) {
   try {
     const text = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-    chrome.runtime.sendMessage({
-      action: 'LIVE_LOG',
-      log: { level, text, timestamp: new Date().toISOString(), source: 'background' }
-    }).catch(() => {});
+    const logPayload = { action: 'LIVE_LOG', log: { level, text, timestamp: new Date().toISOString(), source: 'background' } };
+    // Send to ALL tabs — the dashboard-bridge content script will pick it up on the dashboard page
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of (tabs || [])) {
+        try { chrome.tabs.sendMessage(tab.id, logPayload).catch(() => {}); } catch(e) {}
+      }
+    });
   } catch(e) {}
 }
 
-console.log = function(...args) { _origLog.apply(console, args); broadcastLog('SUCCESS', args); }; // Default to SUCCESS for nice styling
-console.warn = function(...args) { _origWarn.apply(console, args); broadcastLog('WARN', args); };
-console.error = function(...args) { _origError.apply(console, args); broadcastLog('ERROR', args); };
+console.log = function(...args) { _origLog.apply(console, args); broadcastLogToTabs('SUCCESS', args); };
+console.warn = function(...args) { _origWarn.apply(console, args); broadcastLogToTabs('WARN', args); };
+console.error = function(...args) { _origError.apply(console, args); broadcastLogToTabs('ERROR', args); };
 
 // ── Persistent State (chrome.storage.local) ──
 async function loadState() {
@@ -210,8 +215,19 @@ async function _checkJobsInner() {
     if (availableKeywords.length === 0) {
       if (!state.isPaused) {
         await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: randomCooldown(), dailyCommentsMade: 0 });
-        console.log("⏸️ [Worker] AUTO-PAUSED: All keywords completed their target cycles. Resetting limits.");
-        console.log("⏸️ [Worker] Toggle Dashboard OFF → ON to reset.");
+        console.log("⏸️ [Worker] AUTO-PAUSED: All keywords completed their target cycles.");
+        console.log("⏸️ [Worker] Deactivating system on the dashboard...");
+        // Deactivate the dashboard toggle via API so the system truly stops
+        try {
+          await fetch(`${dashboardUrl}/api/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+            body: JSON.stringify({ systemActive: false })
+          });
+          console.log("✅ [Worker] Dashboard systemActive set to FALSE. Engine fully stopped.");
+        } catch(e) {
+          console.error("❌ [Worker] Failed to deactivate dashboard:", e.message);
+        }
       }
       return;
     }
@@ -407,7 +423,7 @@ async function finishCycle(tabId, incrementKeyword = true) {
   if (incrementKeyword && state.currentKeyword) {
     const kc = state.keywordCycles || {};
     kc[state.currentKeyword] = (kc[state.currentKeyword] || 0) + 1;
-    console.log(`[Worker] Keyword "${state.currentKeyword}" done: ${kc[state.currentKeyword]}/3 cycles.`);
+    console.log(`[Worker] Keyword "${state.currentKeyword}" cycle ${kc[state.currentKeyword]} complete.`);
     updates.keywordCycles = kc;
     updates.currentKeyword = null;
   }
@@ -421,9 +437,19 @@ async function finishCycle(tabId, incrementKeyword = true) {
 let _lastContentHeartbeat = 0;
 
 chrome.runtime.onMessage.addListener((message, sender) => {
+  // Relay LIVE_LOG from content scripts to all dashboard tabs
+  if (message.action === 'LIVE_LOG') {
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of (tabs || [])) {
+        try { chrome.tabs.sendMessage(tab.id, message).catch(() => {}); } catch(e) {}
+      }
+    });
+    return;
+  }
+
   if (message.action === 'HEARTBEAT') {
     _lastContentHeartbeat = Date.now();
-    console.log(`💓 [Worker] Heartbeat from content script (Phase: ${message.phase || '?'})`);
+    _origLog.apply(console, [`💓 [Worker] Heartbeat from content script (Phase: ${message.phase || '?'})`]);
     return;
   }
 

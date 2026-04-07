@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getUserFromToken, unauthorized } from '@/lib/auth';
 
@@ -40,7 +40,11 @@ export async function GET() {
 
 export async function POST(req: Request) {
     try {
-        const userId = await getUserFromToken();
+        // Support both cookie auth (dashboard) and extension token auth (auto-pause)
+        let userId = await getUserFromToken();
+        if (!userId) {
+            userId = req.headers.get('x-extension-token');
+        }
         if (!userId) return unauthorized();
 
         const data = await req.json();
