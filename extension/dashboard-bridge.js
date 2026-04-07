@@ -17,31 +17,18 @@ window.addEventListener('message', (event) => {
   if (event.data.action === 'START_ENGINE') {
     console.log("[Nexora Bridge] Received START_ENGINE from Dashboard! Relaying to background worker...");
     try {
-      if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
+      if (chrome && chrome.runtime && chrome.runtime.id && chrome.runtime.sendMessage) {
         chrome.runtime.sendMessage({ action: 'START_POLLING' }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.warn("[Nexora Bridge] Extension context error (safe to ignore):", chrome.runtime.lastError.message);
+            return;
+          }
           console.log("[Nexora Bridge] Background worker acknowledged start command.", response);
           window.postMessage({ source: 'NEXORA_EXTENSION', action: 'ENGINE_STARTED_ACK' }, '*');
         });
       }
     } catch (e) {
-      console.error("[Nexora Bridge] Failed to relay command to extension:", e);
+      console.warn("[Nexora Bridge] Extension not available:", e.message);
     }
   }
 });
-
-// 3. Listen for broadcast messages from the Extension and relay them to the Dashboard
-try {
-  if (chrome && chrome.runtime && chrome.runtime.onMessage) {
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.action === 'LIVE_LOG') {
-        window.postMessage({ 
-          source: 'NEXORA_EXTENSION', 
-          action: 'LIVE_LOG', 
-          log: message.log 
-        }, '*');
-      }
-    });
-  }
-} catch (e) {
-  console.error("[Nexora Bridge] Failed to setup extension listener:", e);
-}

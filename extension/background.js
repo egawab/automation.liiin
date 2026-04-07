@@ -11,29 +11,6 @@
 
 console.log("[Worker] ═══ Safety Worker v4 (Persistent) Initialized ═══");
 
-// --- LIVE LOGS BRIDGE ---
-// Background service worker must use chrome.tabs.sendMessage to reach content scripts (like dashboard-bridge.js).
-// chrome.runtime.sendMessage does NOT reach content scripts.
-const _origLog = console.log;
-const _origWarn = console.warn;
-const _origError = console.error;
-
-function broadcastLogToTabs(level, args) {
-  try {
-    const text = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-    const logPayload = { action: 'LIVE_LOG', log: { level, text, timestamp: new Date().toISOString(), source: 'background' } };
-    // Send to ALL tabs — the dashboard-bridge content script will pick it up on the dashboard page
-    chrome.tabs.query({}, (tabs) => {
-      for (const tab of (tabs || [])) {
-        try { chrome.tabs.sendMessage(tab.id, logPayload).catch(() => {}); } catch(e) {}
-      }
-    });
-  } catch(e) {}
-}
-
-console.log = function(...args) { _origLog.apply(console, args); broadcastLogToTabs('SUCCESS', args); };
-console.warn = function(...args) { _origWarn.apply(console, args); broadcastLogToTabs('WARN', args); };
-console.error = function(...args) { _origError.apply(console, args); broadcastLogToTabs('ERROR', args); };
 
 // ── Persistent State (chrome.storage.local) ──
 async function loadState() {
@@ -437,19 +414,9 @@ async function finishCycle(tabId, incrementKeyword = true) {
 let _lastContentHeartbeat = 0;
 
 chrome.runtime.onMessage.addListener((message, sender) => {
-  // Relay LIVE_LOG from content scripts to all dashboard tabs
-  if (message.action === 'LIVE_LOG') {
-    chrome.tabs.query({}, (tabs) => {
-      for (const tab of (tabs || [])) {
-        try { chrome.tabs.sendMessage(tab.id, message).catch(() => {}); } catch(e) {}
-      }
-    });
-    return;
-  }
-
   if (message.action === 'HEARTBEAT') {
     _lastContentHeartbeat = Date.now();
-    _origLog.apply(console, [`💓 [Worker] Heartbeat from content script (Phase: ${message.phase || '?'})`]);
+    console.log(`💓 [Worker] Heartbeat from content script (Phase: ${message.phase || '?'})`);
     return;
   }
 
