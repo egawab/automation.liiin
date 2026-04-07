@@ -413,7 +413,17 @@ async function finishCycle(tabId, incrementKeyword = true) {
 // Track heartbeat time globally for the heartbeat monitor in startScrapingCycle
 let _lastContentHeartbeat = 0;
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'START_POLLING') {
+    console.log("🚀 [Worker] Received START command from dashboard. Resetting system limits and waking up.");
+    // Clear out the dynamic limits so the pilot can run fresh!
+    saveState({ isPaused: false, keywordCycles: {}, cooldownMs: 0 }).then(() => {
+      checkJobs(); 
+    });
+    if (sendResponse) sendResponse({ ok: true });
+    return true;
+  }
+
   if (message.action === 'HEARTBEAT') {
     _lastContentHeartbeat = Date.now();
     console.log(`💓 [Worker] Heartbeat from content script (Phase: ${message.phase || '?'})`);
