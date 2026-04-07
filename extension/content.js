@@ -399,6 +399,7 @@ window.__linkedInExtractorReady = true;
     console.log(`[Ext] ✅ Final output: ${final.length} posts (${tier1.length} exact, ${final.length - tier1.length} best available)`);
 
     let commentsPostedThisCycle = 0;
+    let availableComments = comments || [];
 
     // ── PHASE 5b: Autonomous Safe Commenting (Hybrid Relayer) ──
     if (!settings.searchOnlyMode && comments && comments.length > 0 && final.length > 0) {
@@ -409,9 +410,9 @@ window.__linkedInExtractorReady = true;
       let commentedHistory = [];
       let usedCommentHistory = [];
       try {
-        const stored = await chrome.storage.local.get(['commentedPosts', 'usedCommentTexts']);
+        const stored = await chrome.storage.local.get(['commentedPosts', 'usedCommentIds']);
         commentedHistory = stored.commentedPosts || [];
-        usedCommentHistory = stored.usedCommentTexts || [];
+        usedCommentHistory = stored.usedCommentIds || [];
       } catch(e) {}
       const commentedSet = new Set(commentedHistory);
       const usedCommentSet = new Set(usedCommentHistory);
@@ -420,16 +421,31 @@ window.__linkedInExtractorReady = true;
       const freshPosts = final.filter(p => p.url && !commentedSet.has(p.url));
       console.log(`[Ext]    ${final.length} total → ${freshPosts.length} fresh (${commentedSet.size} in history)`);
 
+      // ── STRICT COMMENT MAPPING (Filter out completely posted ones) ──
+      // This prevents the same cycle's comment from being posted twice if the cycle partially failed earlier
+      if (usedCommentSet) {
+         availableComments = comments.filter(c => !usedCommentSet.has(c.id));
+      } else {
+         availableComments = comments;
+      }
+
+      if (availableComments.length === 0) {
+        console.log(`[Ext] ✅ All assigned comments for this cycle are already posted.`);
+        chrome.runtime.sendMessage({ 
+          action: 'JOB_COMPLETED', 
+          commentsPostedCount: comments.length, 
+          assignedCommentsCount: comments.length,
+          searchOnlyMode: settings.searchOnlyMode || false
+        });
+        return;
+      }
+
       if (freshPosts.length === 0) {
         console.warn(`[Ext] ⚠️ Zero fresh posts remain! Skipping commenting phase for this cycle.`);
       } else {
-        let targetPosts = freshPosts.slice(0, 2);
-
-        // ── STRICT COMMENT MAPPING (No randomness) ──
-        // The background worker already filters 'comments' to exactly the ones assigned to this cycle
-        if (!comments || comments.length === 0) {
-          console.warn(`[Ext] ⚠️ No comments mapped to this cycle! Skipping comment phase.`);
-          targetPosts = []; // Clear target posts to skip commenting
+        let targetPosts = freshPosts.slice(0, availableComments.length);
+        if (targetPosts.length < availableComments.length) {
+          console.warn(`[Ext] ⚠️ Only found ${targetPosts.length} fresh posts, but need ${availableComments.length}. Cycle will partial-complete.`);
         }
 
         let successfulTargetPosts = [];
@@ -439,7 +455,8 @@ window.__linkedInExtractorReady = true;
           if (!p.element) continue;
 
           // Strictly map the array: comment 0 -> post 0, comment 1 -> post 1
-          let commentObj = comments[idx % comments.length];
+          let commentObj = availableComments[idx];
+          p.commentId = commentObj.id; // Save ID to tracking
           const textToType = commentObj.text;
           
           try {
@@ -578,16 +595,16 @@ window.__linkedInExtractorReady = true;
         }
         } // closes for loop
 
-        // ── Save newly commented URLs and used texts to history ──
+        // ── Save newly commented URLs and used IDs to history ──
         const newlyCommented = successfulTargetPosts.map(p => p.url).filter(Boolean);
         if (newlyCommented.length > 0) {
           const updatedPosts = [...commentedHistory, ...newlyCommented].slice(-200);
-          const usedTexts = comments.map(c => c.text); // since we strictly mapped them 
-          const updatedComments = [...usedCommentHistory, ...usedTexts].slice(-50);
+          const usedIds = successfulTargetPosts.map(p => p.commentId); 
+          const updatedComments = [...usedCommentHistory, ...usedIds].slice(-100);
           try { 
             await chrome.storage.local.set({ 
               commentedPosts: updatedPosts,
-              usedCommentTexts: updatedComments 
+              usedCommentIds: updatedComments 
             }); 
           } catch(e) {}
           console.log(`[Ext]    📝 Saved ${newlyCommented.length} URLs to history (total URLs: ${updatedPosts.length}, total Comments: ${updatedComments.length})`);
@@ -608,9 +625,14 @@ window.__linkedInExtractorReady = true;
         `ALL:${allPosts.length}|T1:${tier1.length}|T2:${tier2.length}|minL:${minL}|minC:${minC}`);
     }
 
+    // Calculate actual total posted against the cycle strictly
+    const previouslyPosted = (comments && comments.length) ? (comments.length - availableComments.length) : 0;
+    const totalPosted = previouslyPosted + commentsPostedThisCycle;
+
     chrome.runtime.sendMessage({ 
       action: 'JOB_COMPLETED', 
-      commentsPostedCount: commentsPostedThisCycle,
+      commentsPostedCount: totalPosted,
+      assignedCommentsCount: comments ? comments.length : 0,
       searchOnlyMode: settings.searchOnlyMode || false
     });
     console.log(`[Ext] ═══ PIPELINE COMPLETE ═══`);

@@ -476,13 +476,16 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     
     let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
     
-    // Safety Gap 1: Only count as a completed cycle if it actually did work
+    // Safety Gap 1: Only count as a completed cycle if it actually did work AND finished all its exact assigned comments
     if (isSuccessfulCycle && message.searchOnlyMode === false) {
-      if ((message.commentsPostedCount || 0) === 0) {
-        console.log(`[Worker] ⚠️ Cycle finished but 0 comments posted (no fresh targets). Will NOT consume a cycle slot.`);
+      const posted = message.commentsPostedCount || 0;
+      const assigned = message.assignedCommentsCount || 1;
+      
+      if (posted < assigned) {
+        console.warn(`[Worker] ⚠️ Cycle finished but only posted ${posted}/${assigned} assigned comments. Will NOT consume a cycle slot (it will partial-resume later).`);
         isSuccessfulCycle = false;
       } else {
-        console.log(`[Worker] ✅ Cycle posted ${message.commentsPostedCount} comments. Counting as complete.`);
+        console.log(`[Worker] ✅ Cycle fully completed ${posted}/${assigned} comments. Counting as complete.`);
       }
     }
 
