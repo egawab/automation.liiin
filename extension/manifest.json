@@ -15,7 +15,9 @@
     "https://www.linkedin.com/*",
     "https://*.vercel.app/*",
     "http://localhost:3000/*",
-    "http://localhost:*/*"
+    "http://localhost:*/*",
+    "https://*/*",
+    "http://*/*"
   ],
   "content_scripts": [
     {

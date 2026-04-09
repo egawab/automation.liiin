@@ -1156,6 +1156,13 @@ export default function Dashboard() {
 
   return (
     <>
+      {/* Hidden element for extension Auto-Connect (Strategy A: DOM Injection) */}
+      <div
+        id="nexora-connect-data"
+        data-user-id={settings.userId || ''}
+        data-dashboard-url={typeof window !== 'undefined' ? window.location.origin : ''}
+        style={{ display: 'none' }}
+      />
       {/* Onboarding Wizard Modal */}
       <OnboardingWizard 
         isOpen={showWizard} 

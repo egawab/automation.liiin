@@ -69,32 +69,49 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
           const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (!tab || !tab.id || !tab.url) throw new Error('No active tab found');
+          if (!tab || !tab.id || !tab.url) throw new Error('No active tab found. Open your Nexora dashboard first.');
+
+          // Validate URL is not a chrome:// or edge:// internal page
+          if (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
+            throw new Error('Please navigate to your Nexora Dashboard page first, then click Auto-Connect.');
+          }
 
           const tabUrl = new URL(tab.url);
           const dashboardOrigin = tabUrl.origin;
+          setupMsg.textContent = '🔍 Scanning dashboard...';
 
-          // Strategy A: DOM Injection detection
-          const results = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: () => {
-              const el = document.getElementById('nexora-connect-data');
-              if (el) return { userId: el.getAttribute('data-user-id'), dashboardUrl: el.getAttribute('data-dashboard-url') };
-              return null;
-            }
-          });
+          let pageData = null;
 
-          let pageData = results?.[0]?.result;
-
-          // Strategy B: API Fallback
-          if (!pageData) {
-            setupMsg.textContent = '🔍 Scanning page...';
-            const res = await fetch(`${dashboardOrigin}/api/connect`, { credentials: 'include' });
-            if (res.ok) {
-              const resJson = await res.json();
-              if (resJson.userId && resJson.platformUrl) {
-                pageData = { userId: resJson.userId, dashboardUrl: resJson.platformUrl };
+          // Strategy A: DOM Injection detection (fastest — instant if dashboard has the hidden element)
+          try {
+            const results = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: () => {
+                const el = document.getElementById('nexora-connect-data');
+                if (el) return { userId: el.getAttribute('data-user-id'), dashboardUrl: el.getAttribute('data-dashboard-url') };
+                return null;
               }
+            });
+            pageData = results?.[0]?.result;
+            if (pageData) console.log('[POPUP] Auto-Connect: Strategy A (DOM) succeeded.');
+          } catch (scriptErr) {
+            console.warn('[POPUP] Strategy A failed (scripting):', scriptErr.message);
+          }
+
+          // Strategy B: API Fallback (if DOM element wasn't found)
+          if (!pageData || !pageData.userId) {
+            setupMsg.textContent = '🔍 Trying API connection...';
+            try {
+              const res = await fetch(`${dashboardOrigin}/api/connect`, { credentials: 'include' });
+              if (res.ok) {
+                const resJson = await res.json();
+                if (resJson.userId && resJson.platformUrl) {
+                  pageData = { userId: resJson.userId, dashboardUrl: resJson.platformUrl };
+                  console.log('[POPUP] Auto-Connect: Strategy B (API) succeeded.');
+                }
+              }
+            } catch (apiErr) {
+              console.warn('[POPUP] Strategy B failed (API):', apiErr.message);
             }
           }
 
@@ -104,12 +121,12 @@ document.addEventListener('DOMContentLoaded', () => {
               setupMsg.style.color = '#10b981';
               setupMsg.textContent = '✅ Connected Successfully!';
               autoConnectBtn.textContent = '✅ Connected!';
-              setTimeout(() => loadInitialState(), 1000);
+              setTimeout(() => loadInitialState(), 800);
             });
             return;
           }
 
-          throw new Error('Nexora Dashboard not found. Navigate to your dashboard first.');
+          throw new Error('Dashboard not detected. Make sure you are logged in to your Nexora Dashboard and this tab is showing it.');
         } catch (err) {
           setupMsg.style.color = '#ef4444';
           setupMsg.textContent = '❌ ' + err.message;
