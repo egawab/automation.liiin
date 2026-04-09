@@ -88,30 +88,46 @@ document.addEventListener('DOMContentLoaded', () => {
               target: { tabId: tab.id },
               func: () => {
                 const el = document.getElementById('nexora-connect-data');
-                if (el) return { userId: el.getAttribute('data-user-id'), dashboardUrl: el.getAttribute('data-dashboard-url') };
+                if (el) {
+                  const uid = el.getAttribute('data-user-id');
+                  const durl = el.getAttribute('data-dashboard-url');
+                  if (uid && uid.length > 5) return { userId: uid, dashboardUrl: durl };
+                }
                 return null;
               }
             });
             pageData = results?.[0]?.result;
-            if (pageData) console.log('[POPUP] Auto-Connect: Strategy A (DOM) succeeded.');
+            if (pageData && pageData.userId) console.log('[POPUP] Auto-Connect: Strategy A (DOM) succeeded.');
           } catch (scriptErr) {
             console.warn('[POPUP] Strategy A failed (scripting):', scriptErr.message);
           }
 
-          // Strategy B: API Fallback (if DOM element wasn't found)
+          // Strategy B: Execute fetch INSIDE the dashboard tab where auth cookies are available
           if (!pageData || !pageData.userId) {
             setupMsg.textContent = '🔍 Trying API connection...';
             try {
-              const res = await fetch(`${dashboardOrigin}/api/connect`, { credentials: 'include' });
-              if (res.ok) {
-                const resJson = await res.json();
-                if (resJson.userId && resJson.platformUrl) {
-                  pageData = { userId: resJson.userId, dashboardUrl: resJson.platformUrl };
-                  console.log('[POPUP] Auto-Connect: Strategy B (API) succeeded.');
+              const apiResults = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: async () => {
+                  try {
+                    const res = await fetch('/api/connect', { credentials: 'include' });
+                    if (res.ok) {
+                      const data = await res.json();
+                      if (data.userId && data.platformUrl) {
+                        return { userId: data.userId, dashboardUrl: data.platformUrl };
+                      }
+                    }
+                  } catch (e) {}
+                  return null;
                 }
+              });
+              const apiData = apiResults?.[0]?.result;
+              if (apiData && apiData.userId) {
+                pageData = apiData;
+                console.log('[POPUP] Auto-Connect: Strategy B (in-tab API) succeeded.');
               }
             } catch (apiErr) {
-              console.warn('[POPUP] Strategy B failed (API):', apiErr.message);
+              console.warn('[POPUP] Strategy B failed:', apiErr.message);
             }
           }
 
