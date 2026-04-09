@@ -77,12 +77,40 @@ document.addEventListener('DOMContentLoaded', () => {
           }
 
           const tabUrl = new URL(tab.url);
-          const dashboardOrigin = tabUrl.origin;
-          setupMsg.textContent = '🔍 Scanning dashboard...';
+          const dashboardUrl = tabUrl.origin;
+          setupMsg.textContent = '🔍 Reading auth credentials...';
 
-          let pageData = null;
+          // Strategy: Read the auth_token cookie directly from the dashboard domain
+          // Then decode the JWT payload to extract the userId — zero network calls needed
+          const cookie = await chrome.cookies.get({ url: dashboardUrl, name: 'auth_token' });
 
-          // Strategy A: DOM Injection detection (fastest — instant if dashboard has the hidden element)
+          if (cookie && cookie.value) {
+            // Decode JWT payload (middle segment, base64url encoded)
+            try {
+              const parts = cookie.value.split('.');
+              if (parts.length === 3) {
+                // Decode base64url → base64 → string
+                const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+                const decoded = JSON.parse(atob(payload));
+                
+                if (decoded.userId) {
+                  console.log('[POPUP] Auto-Connect: Cookie strategy succeeded. userId:', decoded.userId);
+                  chrome.storage.sync.set({ dashboardUrl: dashboardUrl, userId: decoded.userId }, () => {
+                    setupMsg.style.color = '#10b981';
+                    setupMsg.textContent = '✅ Connected Successfully!';
+                    autoConnectBtn.textContent = '✅ Connected!';
+                    setTimeout(() => loadInitialState(), 800);
+                  });
+                  return;
+                }
+              }
+            } catch (decodeErr) {
+              console.warn('[POPUP] JWT decode failed:', decodeErr.message);
+            }
+          }
+
+          // Fallback: DOM element detection (if dashboard has the hidden connect element)
+          setupMsg.textContent = '🔍 Scanning page...';
           try {
             const results = await chrome.scripting.executeScript({
               target: { tabId: tab.id },
@@ -96,53 +124,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 return null;
               }
             });
-            pageData = results?.[0]?.result;
-            if (pageData && pageData.userId) console.log('[POPUP] Auto-Connect: Strategy A (DOM) succeeded.');
-          } catch (scriptErr) {
-            console.warn('[POPUP] Strategy A failed (scripting):', scriptErr.message);
-          }
-
-          // Strategy B: Execute fetch INSIDE the dashboard tab where auth cookies are available
-          if (!pageData || !pageData.userId) {
-            setupMsg.textContent = '🔍 Trying API connection...';
-            try {
-              const apiResults = await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: async () => {
-                  try {
-                    const res = await fetch('/api/connect', { credentials: 'include' });
-                    if (res.ok) {
-                      const data = await res.json();
-                      if (data.userId && data.platformUrl) {
-                        return { userId: data.userId, dashboardUrl: data.platformUrl };
-                      }
-                    }
-                  } catch (e) {}
-                  return null;
-                }
+            const domData = results?.[0]?.result;
+            if (domData && domData.userId) {
+              console.log('[POPUP] Auto-Connect: DOM fallback succeeded.');
+              chrome.storage.sync.set({ dashboardUrl: domData.dashboardUrl, userId: domData.userId }, () => {
+                setupMsg.style.color = '#10b981';
+                setupMsg.textContent = '✅ Connected Successfully!';
+                autoConnectBtn.textContent = '✅ Connected!';
+                setTimeout(() => loadInitialState(), 800);
               });
-              const apiData = apiResults?.[0]?.result;
-              if (apiData && apiData.userId) {
-                pageData = apiData;
-                console.log('[POPUP] Auto-Connect: Strategy B (in-tab API) succeeded.');
-              }
-            } catch (apiErr) {
-              console.warn('[POPUP] Strategy B failed:', apiErr.message);
+              return;
             }
+          } catch (domErr) {
+            console.warn('[POPUP] DOM fallback failed:', domErr.message);
           }
 
-          if (pageData && pageData.userId && pageData.dashboardUrl) {
-            const url = pageData.dashboardUrl.replace(/\/$/, '');
-            chrome.storage.sync.set({ dashboardUrl: url, userId: pageData.userId }, () => {
-              setupMsg.style.color = '#10b981';
-              setupMsg.textContent = '✅ Connected Successfully!';
-              autoConnectBtn.textContent = '✅ Connected!';
-              setTimeout(() => loadInitialState(), 800);
-            });
-            return;
-          }
-
-          throw new Error('Dashboard not detected. Make sure you are logged in to your Nexora Dashboard and this tab is showing it.');
+          throw new Error('Not logged in. Please log in to your Nexora Dashboard first, then try Auto-Connect again.');
         } catch (err) {
           setupMsg.style.color = '#ef4444';
           setupMsg.textContent = '❌ ' + err.message;

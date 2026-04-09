@@ -9,7 +9,8 @@
     "tabs",
     "scripting",
     "activeTab",
-    "notifications"
+    "notifications",
+    "cookies"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
