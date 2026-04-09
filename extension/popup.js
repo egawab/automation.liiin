@@ -59,7 +59,67 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. SETUP VIEW LOGIC
     // ==========================================
     
+    // Auto-Connect (Seamless Flow)
+    if (autoConnectBtn) {
+      autoConnectBtn.addEventListener('click', async () => {
+        autoConnectBtn.disabled = true;
+        autoConnectBtn.textContent = '🔄 Connecting...';
+        setupMsg.textContent = '';
+        setupMsg.style.color = '#6b7280';
 
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tab || !tab.id || !tab.url) throw new Error('No active tab found');
+
+          const tabUrl = new URL(tab.url);
+          const dashboardOrigin = tabUrl.origin;
+
+          // Strategy A: DOM Injection detection
+          const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              const el = document.getElementById('nexora-connect-data');
+              if (el) return { userId: el.getAttribute('data-user-id'), dashboardUrl: el.getAttribute('data-dashboard-url') };
+              return null;
+            }
+          });
+
+          let pageData = results?.[0]?.result;
+
+          // Strategy B: API Fallback
+          if (!pageData) {
+            setupMsg.textContent = '🔍 Scanning page...';
+            const res = await fetch(`${dashboardOrigin}/api/connect`, { credentials: 'include' });
+            if (res.ok) {
+              const resJson = await res.json();
+              if (resJson.userId && resJson.platformUrl) {
+                pageData = { userId: resJson.userId, dashboardUrl: resJson.platformUrl };
+              }
+            }
+          }
+
+          if (pageData && pageData.userId && pageData.dashboardUrl) {
+            const url = pageData.dashboardUrl.replace(/\/$/, '');
+            chrome.storage.sync.set({ dashboardUrl: url, userId: pageData.userId }, () => {
+              setupMsg.style.color = '#10b981';
+              setupMsg.textContent = '✅ Connected Successfully!';
+              autoConnectBtn.textContent = '✅ Connected!';
+              setTimeout(() => loadInitialState(), 1000);
+            });
+            return;
+          }
+
+          throw new Error('Nexora Dashboard not found. Navigate to your dashboard first.');
+        } catch (err) {
+          setupMsg.style.color = '#ef4444';
+          setupMsg.textContent = '❌ ' + err.message;
+          setTimeout(() => {
+            autoConnectBtn.disabled = false;
+            autoConnectBtn.textContent = '🔗 Auto-Connect';
+          }, 3000);
+        }
+      });
+    }
 
     // Manual Save
     if (saveBtn) {
