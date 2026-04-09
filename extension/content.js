@@ -119,8 +119,16 @@ window.__linkedInExtractorReady = true;
     const scrollTarget = findScrollContainer();
 
     for (let i = 0; i < 25; i++) {
-      // Smooth scroll the correct container
-      scrollTarget.scroll({ top: scrollTarget.scrollTop + 800, behavior: 'smooth' });
+      // Use 'auto' (instant) instead of 'smooth' to bypass Chrome's background-tab animation throttling
+      if (typeof scrollTarget.scrollBy === 'function') {
+        scrollTarget.scrollBy({ top: 1200, behavior: 'auto' });
+      } else {
+        scrollTarget.scrollTop += 1200;
+      }
+      
+      // Force trigger scroll events so LinkedIn's lazy-loader triggers even if the tab is hidden
+      window.dispatchEvent(new Event('scroll'));
+      scrollTarget.dispatchEvent(new Event('scroll'));
       
       await wait(2000, 3500);
 
