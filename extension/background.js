@@ -469,8 +469,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           })
         }).catch(e => console.error("❌ [Worker] Action Log relay failed:", e));
       }
+      
+      if (sendResponse) sendResponse({ ok: true });
     });
-    return;
+    return true;
   }
 
   if (message.action === 'SYNC_RESULTS') {
@@ -481,7 +483,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
       body: JSON.stringify({ keyword, posts, debugInfo })
     }).catch(e => console.error("❌ [Worker] Relay failed:", e));
-    return;
+    
+    if (sendResponse) sendResponse({ ok: true });
+    return true;
   }
 
   if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {

@@ -630,10 +630,20 @@ window.__linkedInExtractorReady = true;
 
   async function syncToDashboard(posts, keyword, dashboardUrl, userId, debug = null) {
     return new Promise((resolve) => {
-      chrome.runtime.sendMessage({
-        action: 'SYNC_RESULTS',
-        posts, keyword, dashboardUrl, userId, debugInfo: debug
-      }, () => resolve());
+      try {
+        chrome.runtime.sendMessage({
+          action: 'SYNC_RESULTS',
+          posts, keyword, dashboardUrl, userId, debugInfo: debug
+        }, () => {
+          if (chrome.runtime.lastError) {
+             console.warn("[Ext] Sync message failed safely:", chrome.runtime.lastError.message);
+          }
+          resolve();
+        });
+      } catch (err) {
+        console.warn("[Ext] Catch sync error safely:", err.message);
+        resolve();
+      }
     });
   }
 
