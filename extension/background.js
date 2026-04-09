@@ -256,7 +256,18 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
   const MAX_INJECTIONS = 3;
 
   try {
-    const tab = await chrome.tabs.create({ url: searchUrl, active: true });
+    // 🚀 NEW: Spawn in a completely separate window. 
+    // This tricks Chrome into treating the tab as "Active" in its own context, 
+    // bypassing the extreme throttling applied to background tabs in the main window.
+    const win = await chrome.windows.create({ 
+      url: searchUrl, 
+      type: 'normal',
+      state: 'normal',
+      focused: false, // Don't steal user focus immediately
+      width: 1100,
+      height: 900
+    });
+    const tab = win.tabs[0];
     await saveState({ activeTabId: tab.id });
 
     console.log(`💉 [Worker] Tab ${tab.id} created. Waiting for page load...`);
