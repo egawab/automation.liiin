@@ -528,16 +528,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
     
-    // Safety Gap 1: Only count as a completed cycle if it actually did work AND finished all its exact assigned comments
+    // Safety Gap 1: Count cycle as done if it posted at least SOME comments.
+    // The fallback pool system already tries ALL available posts, so if it still
+    // couldn't place all comments, retrying the same cycle won't help — it'll just loop forever.
     if (isSuccessfulCycle && message.searchOnlyMode === false) {
       const posted = message.commentsPostedCount || 0;
       const assigned = message.assignedCommentsCount || 1;
       
-      if (posted < assigned) {
-        console.warn(`[Worker] ⚠️ Cycle finished but only posted ${posted}/${assigned} assigned comments. Will NOT consume a cycle slot (it will partial-resume later).`);
+      if (posted === 0 && assigned > 0) {
+        // Only refuse to count the cycle if ZERO comments were placed
+        console.warn(`[Worker] ⚠️ Cycle posted 0/${assigned} comments. Will NOT consume a cycle slot.`);
         isSuccessfulCycle = false;
       } else {
-        console.log(`[Worker] ✅ Cycle fully completed ${posted}/${assigned} comments. Counting as complete.`);
+        console.log(`[Worker] ✅ Cycle completed with ${posted}/${assigned} comments. Counting as done.`);
       }
     }
 

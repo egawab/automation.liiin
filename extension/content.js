@@ -454,24 +454,24 @@ window.__linkedInExtractorReady = true;
       if (freshPosts.length === 0) {
         console.warn(`[Ext] ⚠️ Zero fresh posts remain! Skipping commenting phase for this cycle.`);
       } else {
-        let targetPosts = freshPosts.slice(0, availableComments.length);
-        if (targetPosts.length < availableComments.length) {
-          console.warn(`[Ext] ⚠️ Only found ${targetPosts.length} fresh posts, but need ${availableComments.length}. Cycle will partial-complete.`);
-        }
-
+        // Use ALL fresh posts as candidates, not just slice(0, N).
+        // If post X fails (no comment button, no editor, etc.), we try post X+1 with the same comment.
+        let commentIdx = 0;
         let successfulTargetPosts = [];
+        let commentsNeeded = availableComments.length;
+        console.log(`[Ext]    Attempting ${commentsNeeded} comments across ${freshPosts.length} candidate posts...`);
 
-        for (let idx = 0; idx < targetPosts.length; idx++) {
-          const p = targetPosts[idx];
+        for (let postIdx = 0; postIdx < freshPosts.length && commentIdx < commentsNeeded; postIdx++) {
+          const p = freshPosts[postIdx];
           if (!p.element) continue;
 
-          // Strictly map the array: comment 0 -> post 0, comment 1 -> post 1
-          let commentObj = availableComments[idx];
-          p.commentId = commentObj.id; // Save ID to tracking
+          // Current comment to place
+          let commentObj = availableComments[commentIdx];
+          p.commentId = commentObj.id;
           const textToType = commentObj.text;
           
           try {
-          heartbeat('Phase5-Typing', `⌨️ Comment ${idx+1}/${targetPosts.length}: Scrolling to target post by ${p.author}...`);
+          heartbeat('Phase5-Typing', `⌨️ Comment ${commentIdx+1}/${commentsNeeded}: Scrolling to target post by ${p.author}...`);
           console.log(`[Ext] 🎯 Engaging with post by ${p.author}...`);
           p.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           await wait(2000, 4000); // Read the post
@@ -487,7 +487,7 @@ window.__linkedInExtractorReady = true;
           }
           if (!commentBtn) { console.log("[Ext] ⏭️ No comment button found, skipping."); continue; }
           commentBtn.click();
-          heartbeat('Phase5-Editor', `💬 Comment ${idx+1}/${targetPosts.length}: Opening editor...`);
+          heartbeat('Phase5-Editor', `💬 Comment ${commentIdx+1}/${commentsNeeded}: Opening editor...`);
           console.log("[Ext]    Comment button clicked. Waiting for editor...");
           await wait(2000, 3500); // Wait for editor to expand
           
@@ -501,7 +501,7 @@ window.__linkedInExtractorReady = true;
             }
           }
           if (!editor) { console.log("[Ext] ⏭️ No text editor found, skipping."); continue; }
-          heartbeat('Phase5-Typing', `⌨️ Comment ${idx+1}/${targetPosts.length}: Human-typing ${textToType.length} characters...`);
+          heartbeat('Phase5-Typing', `⌨️ Comment ${commentIdx+1}/${commentsNeeded}: Human-typing ${textToType.length} characters...`);
           console.log("[Ext]    Editor found. Starting human typing...");
           
           // 3. Human Typewriter (char-by-char via execCommand on EDITOR focus)
@@ -520,7 +520,7 @@ window.__linkedInExtractorReady = true;
             await wait(40, 150);
           }
           console.log(`[Ext]    Typed ${textToType.length} chars. Reviewing...`);
-          heartbeat('Phase5-Submit', `✅ Comment ${idx+1}/${targetPosts.length}: Submitting comment...`);
+          heartbeat('Phase5-Submit', `✅ Comment ${commentIdx+1}/${commentsNeeded}: Submitting comment...`);
           await wait(2000, 4000); // Pause to "review" the comment
           
           // 4. Find & Click Submit Button (5-layer detection)
@@ -576,6 +576,7 @@ window.__linkedInExtractorReady = true;
             console.log(`[Ext] ✅ Comment submitted via Ctrl+Enter: "${textToType.substring(0, 30)}..."`);
             safeSend({ action: 'COMMENT_POSTED', url: p.url });
             commentsPostedThisCycle++;
+            commentIdx++;
             successfulTargetPosts.push(p);
           }
           
@@ -590,11 +591,12 @@ window.__linkedInExtractorReady = true;
             console.log(`[Ext] ✅ Comment Posted: "${textToType.substring(0, 30)}..."`);
             safeSend({ action: 'COMMENT_POSTED', url: p.url });
             commentsPostedThisCycle++;
+            commentIdx++;
             successfulTargetPosts.push(p);
           }
           
           await wait(4000, 7000); // Rest before next action
-          heartbeat('Phase5-Done', `✅ Comment ${idx+1}/${targetPosts.length} posted successfully!`);
+          heartbeat('Phase5-Done', `✅ Comment ${commentIdx}/${commentsNeeded} posted successfully!`);
 
           // 5. CLEANUP: Collapse this post's comment section so the next post's
           //    editor detection doesn't accidentally re-target this one.
