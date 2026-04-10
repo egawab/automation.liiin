@@ -63,6 +63,99 @@ async function saveState(updates) {
   await chrome.storage.local.set(updates);
 }
 
+// ── Premium In-Page Toast Notifications ──
+function injectToastDOM(title, message, isError) {
+  let container = document.getElementById('nexora-toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'nexora-toast-container';
+    container.style.cssText = 'position: fixed; bottom: 24px; right: 24px; z-index: 2147483647; display: flex; flex-direction: column; gap: 12px; pointer-events: none;';
+    (document.body || document.documentElement).appendChild(container);
+  }
+  
+  const host = document.createElement('div');
+  container.appendChild(host);
+  const shadow = host.attachShadow({ mode: 'open' });
+  
+  const accent = isError ? '#ef4444' : '#06b6d4';
+  const icon = isError ? '⚠️' : '✨';
+  
+  shadow.innerHTML = `
+    <style>
+      .toast {
+        width: 320px;
+        background: rgba(11, 15, 26, 0.85);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 16px 20px;
+        color: #f1f5f9;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        transform: translateX(120%);
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        overflow: hidden;
+        position: relative;
+      }
+      .toast.show { transform: translateX(0); opacity: 1; }
+      .toast.hiding { transform: translateX(120%); opacity: 0; }
+      .icon { font-size: 20px; line-height: 1; filter: drop-shadow(0 0 8px ${accent}60); }
+      .content { flex: 1; }
+      .title { font-size: 14px; font-weight: 700; margin: 0 0 4px 0; color: #ffffff; letter-spacing: -0.01em; }
+      .message { font-size: 13px; font-weight: 400; margin: 0; color: #94a3b8; line-height: 1.4; }
+      .progress {
+        position: absolute; bottom: 0; left: 0; height: 3px; background: ${accent}; width: 100%;
+        animation: shrink 4s linear forwards;
+      }
+      @keyframes shrink { from { width: 100%; } to { width: 0%; } }
+    </style>
+    <div class="toast">
+      <div class="icon">${icon}</div>
+      <div class="content">
+        <h4 class="title">${title}</h4>
+        <p class="message">${message}</p>
+      </div>
+      <div class="progress"></div>
+    </div>
+  `;
+  
+  const toastEl = shadow.querySelector('.toast');
+  requestAnimationFrame(() => requestAnimationFrame(() => toastEl.classList.add('show')));
+  setTimeout(() => {
+    toastEl.classList.remove('show');
+    toastEl.classList.add('hiding');
+    setTimeout(() => { host.remove(); if (container.childElementCount === 0) container.remove(); }, 500);
+  }, 4000);
+}
+
+async function showPremiumToast(title, message, isError = false) {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length > 0 && tabs[0].url && tabs[0].url.startsWith('http')) {
+      await chrome.scripting.executeScript({
+        target: { tabId: tabs[0].id },
+        func: injectToastDOM,
+        args: [title, message, isError]
+      });
+      return;
+    }
+  } catch (e) { console.warn("Failed to inject toast:", e); }
+  
+  // Fallback to Native OS Notification if we are on a protected chrome:// tab
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'icon-48.png',
+    title: title,
+    message: message,
+    priority: 1
+  });
+}
+
 // ── Helpers ──
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -242,12 +335,7 @@ async function _checkJobsInner() {
     await saveState({ isJobRunning: true, currentKeyword: kw, lastJobTime: Date.now(), liveStatusText: `🚀 Starting cycle #${cycleNum} for "${kw}"...` });
 
     console.log(`🚀 [Worker] Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}"`);
-    chrome.notifications.create('nexora-live-status', {
-      type: 'basic', iconUrl: 'icon-48.png',
-      title: 'Nexora Engine',
-      message: `🚀 Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}"`,
-      priority: 2
-    });
+    showPremiumToast('Nexora Engine Started', `Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for "${kw}"`, false);
     await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId);
 
   } catch (error) {
@@ -426,12 +514,7 @@ async function finishCycle(tabId, incrementKeyword = true) {
   await saveState(updates);
   const cdMin = Math.round(cd / 60000);
   console.log(`[Worker] Cycle done. Next cooldown: ${cdMin} min.`);
-  chrome.notifications.create('nexora-live-status', {
-    type: 'basic', iconUrl: 'icon-48.png',
-    title: 'Nexora Engine',
-    message: `✅ Cycle complete! Cooling down for ${cdMin} minutes before next cycle.`,
-    priority: 2
-  });
+  showPremiumToast('Cycle Complete', `✅ Cycle complete! Cooling down for ${cdMin} minutes...`, false);
 }
 
 // ── Message Router ──
@@ -483,14 +566,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await saveState({ dailyCommentsMade: newCount });
       console.log(`💬 [Worker] Comment posted successfully. Daily quota: ${newCount}/15`);
       
-      // Notify the user directly
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icon-48.png', 
-        title: 'Nexora AI Commenting',
-        message: `Successfully posted comment #${newCount}/15 for today!`,
-        priority: 2
-      });
+      // Notify the user directly via Premium Toast
+      showPremiumToast('Comment Posted', `Successfully posted comment #${newCount}/15 for today!`, false);
 
       // 🔥 Send the real-time action to the dashboard Live Feed
       const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
