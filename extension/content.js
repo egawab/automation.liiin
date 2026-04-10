@@ -157,8 +157,8 @@ window.__linkedInExtractorReady = true;
       // ── ADAPTIVE SCROLLING (EARLY EXIT) ──
       // Check if we already have enough posts rendered to stop scrolling early.
       if (i > 5 && i % 3 === 0) {
-        // Quick DOM scan for common post containers
-        const quickCount = document.querySelectorAll('.reusable-search__result-container, .feed-shared-update-v2, li.artdeco-card, [data-urn*="activity:"]').length;
+        // Quick DOM scan for strictly-defined post containers to avoid false positives (like sidebar cards)
+        const quickCount = document.querySelectorAll('.reusable-search__result-container, .feed-shared-update-v2').length;
         // Require at least 25 posts, or 3x the number of comments we need (whichever is larger)
         const targetCount = Math.max(25, (comments ? comments.length : 0) * 3);
         
