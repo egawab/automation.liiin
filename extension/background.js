@@ -135,18 +135,24 @@ function injectToastDOM(title, message, isError) {
 
 async function showPremiumToast(title, message, isError = false) {
   try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs.length > 0 && tabs[0].url && tabs[0].url.startsWith('http')) {
-      await chrome.scripting.executeScript({
-        target: { tabId: tabs[0].id },
-        func: injectToastDOM,
-        args: [title, message, isError]
-      });
-      return;
+    // 1. Check if the user is currently focused on Chrome. 
+    // If Chrome is minimized or unfocused, we SKIP DOM injection to guarantee OS-level global visibility.
+    const win = await chrome.windows.getLastFocused();
+    
+    if (win && win.focused) {
+      const tabs = await chrome.tabs.query({ active: true, windowId: win.id });
+      if (tabs.length > 0 && tabs[0].url && tabs[0].url.startsWith('http')) {
+        await chrome.scripting.executeScript({
+          target: { tabId: tabs[0].id },
+          func: injectToastDOM,
+          args: [title, message, isError]
+        });
+        return; // Success, premium toast injected
+      }
     }
   } catch (e) { console.warn("Failed to inject toast:", e); }
   
-  // Fallback to Native OS Notification if we are on a protected chrome:// tab
+  // 2. Fallback to Native OS Notification if Chrome is unfocused OR if we are on a protected chrome:// tab
   chrome.notifications.create({
     type: 'basic',
     iconUrl: 'icon-48.png',
