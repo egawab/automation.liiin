@@ -32,7 +32,14 @@ window.__linkedInExtractorReady = true;
     if (isExtracting) { console.log("[Ext] ⏭️ Already running, skip."); return; }
     isExtracting = true;
     try { await extractPipeline(keyword, settings, comments, dashboardUrl, userId); }
-    catch (e) { console.error("[Ext] ❌ Fatal:", e); chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }); }
+    catch (e) { 
+      console.error("[Ext] ❌ Fatal:", e); 
+      try { 
+        chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }, () => {
+          if (chrome.runtime.lastError) { /* ignore */ }
+        }); 
+      } catch(x){} 
+    }
     finally { isExtracting = false; }
   }
 
@@ -63,14 +70,21 @@ window.__linkedInExtractorReady = true;
     console.log(`[Ext] Keyword: "${keyword}" | Reach: minLikes=${minL}, minComments=${minC}`);
     console.log(`[Ext] Current URL: ${window.location.href}`);
 
+    // ── Safe message sender (prevents 'Receiving end does not exist' crash) ──
+    function safeSend(msg) {
+      try {
+        chrome.runtime.sendMessage(msg, () => {
+          if (chrome.runtime.lastError) { /* silently ignore */ }
+        });
+      } catch(e) {}
+    }
+
     // ── Heartbeat & Status helper ──
     function heartbeat(phase, statusMessage = '') {
-      try { 
-        chrome.runtime.sendMessage({ action: 'HEARTBEAT', phase }); 
-        if (statusMessage) {
-          chrome.runtime.sendMessage({ action: 'LIVE_STATUS', text: statusMessage }); 
-        }
-      } catch(e) {}
+      safeSend({ action: 'HEARTBEAT', phase });
+      if (statusMessage) {
+        safeSend({ action: 'LIVE_STATUS', text: statusMessage });
+      }
     }
 
     // ── PHASE 1: Wait for page + click Posts tab ──
@@ -428,7 +442,7 @@ window.__linkedInExtractorReady = true;
 
       if (availableComments.length === 0) {
         console.log(`[Ext] ✅ All assigned comments for this cycle are already posted.`);
-        chrome.runtime.sendMessage({ 
+        safeSend({ 
           action: 'JOB_COMPLETED', 
           commentsPostedCount: comments.length, 
           assignedCommentsCount: comments.length,
@@ -457,7 +471,7 @@ window.__linkedInExtractorReady = true;
           const textToType = commentObj.text;
           
           try {
-          heartbeat('Phase5-Typing', `⌨️ Target found! Human-typing comment...`);
+          heartbeat('Phase5-Typing', `⌨️ Comment ${idx+1}/${targetPosts.length}: Scrolling to target post by ${p.author}...`);
           console.log(`[Ext] 🎯 Engaging with post by ${p.author}...`);
           p.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           await wait(2000, 4000); // Read the post
@@ -473,6 +487,7 @@ window.__linkedInExtractorReady = true;
           }
           if (!commentBtn) { console.log("[Ext] ⏭️ No comment button found, skipping."); continue; }
           commentBtn.click();
+          heartbeat('Phase5-Editor', `💬 Comment ${idx+1}/${targetPosts.length}: Opening editor...`);
           console.log("[Ext]    Comment button clicked. Waiting for editor...");
           await wait(2000, 3500); // Wait for editor to expand
           
@@ -486,6 +501,7 @@ window.__linkedInExtractorReady = true;
             }
           }
           if (!editor) { console.log("[Ext] ⏭️ No text editor found, skipping."); continue; }
+          heartbeat('Phase5-Typing', `⌨️ Comment ${idx+1}/${targetPosts.length}: Human-typing ${textToType.length} characters...`);
           console.log("[Ext]    Editor found. Starting human typing...");
           
           // 3. Human Typewriter (char-by-char via execCommand on EDITOR focus)
@@ -504,6 +520,7 @@ window.__linkedInExtractorReady = true;
             await wait(40, 150);
           }
           console.log(`[Ext]    Typed ${textToType.length} chars. Reviewing...`);
+          heartbeat('Phase5-Submit', `✅ Comment ${idx+1}/${targetPosts.length}: Submitting comment...`);
           await wait(2000, 4000); // Pause to "review" the comment
           
           // 4. Find & Click Submit Button (5-layer detection)
@@ -557,7 +574,9 @@ window.__linkedInExtractorReady = true;
             editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', ctrlKey: true, bubbles: true }));
             await wait(1000, 2000);
             console.log(`[Ext] ✅ Comment submitted via Ctrl+Enter: "${textToType.substring(0, 30)}..."`);
-            chrome.runtime.sendMessage({ action: 'COMMENT_POSTED', url: p.url });
+            safeSend({ action: 'COMMENT_POSTED', url: p.url });
+            commentsPostedThisCycle++;
+            successfulTargetPosts.push(p);
           }
           
           if (submitBtn) {
@@ -569,12 +588,13 @@ window.__linkedInExtractorReady = true;
             }
             submitBtn.click();
             console.log(`[Ext] ✅ Comment Posted: "${textToType.substring(0, 30)}..."`);
-            chrome.runtime.sendMessage({ action: 'COMMENT_POSTED', url: p.url });
+            safeSend({ action: 'COMMENT_POSTED', url: p.url });
             commentsPostedThisCycle++;
             successfulTargetPosts.push(p);
           }
           
           await wait(4000, 7000); // Rest before next action
+          heartbeat('Phase5-Done', `✅ Comment ${idx+1}/${targetPosts.length} posted successfully!`);
 
           // 5. CLEANUP: Collapse this post's comment section so the next post's
           //    editor detection doesn't accidentally re-target this one.
@@ -627,7 +647,7 @@ window.__linkedInExtractorReady = true;
     const previouslyPosted = (comments && comments.length) ? (comments.length - availableComments.length) : 0;
     const totalPosted = previouslyPosted + commentsPostedThisCycle;
 
-    chrome.runtime.sendMessage({ 
+    safeSend({ 
       action: 'JOB_COMPLETED', 
       commentsPostedCount: totalPosted,
       assignedCommentsCount: comments ? comments.length : 0,

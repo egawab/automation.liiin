@@ -239,9 +239,15 @@ async function _checkJobsInner() {
     }
 
     // Mark as running BEFORE creating tab
-    await saveState({ isJobRunning: true, currentKeyword: kw, lastJobTime: Date.now() });
+    await saveState({ isJobRunning: true, currentKeyword: kw, lastJobTime: Date.now(), liveStatusText: `🚀 Starting cycle #${cycleNum} for "${kw}"...` });
 
     console.log(`🚀 [Worker] Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}"`);
+    chrome.notifications.create('nexora-live-status', {
+      type: 'basic', iconUrl: 'icon-48.png',
+      title: 'Nexora Engine',
+      message: `🚀 Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}"`,
+      priority: 2
+    });
     await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId);
 
   } catch (error) {
@@ -418,7 +424,14 @@ async function finishCycle(tabId, incrementKeyword = true) {
   }
 
   await saveState(updates);
-  console.log(`[Worker] Cycle done. Next cooldown: ${Math.round(cd / 60000)} min.`);
+  const cdMin = Math.round(cd / 60000);
+  console.log(`[Worker] Cycle done. Next cooldown: ${cdMin} min.`);
+  chrome.notifications.create('nexora-live-status', {
+    type: 'basic', iconUrl: 'icon-48.png',
+    title: 'Nexora Engine',
+    message: `✅ Cycle complete! Cooling down for ${cdMin} minutes before next cycle.`,
+    priority: 2
+  });
 }
 
 // ── Message Router ──
@@ -444,8 +457,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'LIVE_STATUS') {
     saveState({ liveStatusText: message.text });
-    // Broadcast directly to popup if it's open
-    try { chrome.runtime.sendMessage({ action: 'EXTENSION_LIVE_STATUS', text: message.text }); } catch(e){}
+    // Native OS notification — user sees it regardless of popup/tab state
+    chrome.notifications.create('nexora-live-status', {
+      type: 'basic',
+      iconUrl: 'icon-48.png',
+      title: 'Nexora Engine',
+      message: message.text,
+      priority: 1,
+      silent: true  // Don't spam sound on every update
+    });
+    // Also try popup forwarding (will silently fail if popup is closed)
+    try { 
+      chrome.runtime.sendMessage({ action: 'EXTENSION_LIVE_STATUS', text: message.text }, () => {
+        if (chrome.runtime.lastError) { /* popup closed, ignore */ }
+      }); 
+    } catch(e){}
     return;
   }
 

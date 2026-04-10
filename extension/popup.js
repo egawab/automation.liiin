@@ -177,7 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
         lastJobTime: 0,
         currentKeyword: null,
         dailyCommentsMade: 0,
-        keywordCycles: {}
+        keywordCycles: {},
+        liveStatusText: ''
       }, updateDashboardUI);
     }
 
