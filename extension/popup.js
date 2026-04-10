@@ -15,7 +15,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Dashboard Elements
     const disconnectBtn = document.getElementById('disconnectBtn');
     const openDashboardBtn = document.getElementById('openDashboardBtn');
-    const statusDot = document.getElementById('statusDot');
     const statusTitle = document.getElementById('statusTitle');
     const statusSub = document.getElementById('statusSub');
     const countComments = document.getElementById('countComments');
@@ -169,6 +168,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // 2. DASHBOARD VIEW LOGIC
     // ==========================================
 
+    // New element references for redesigned popup
+    const statusCard = document.getElementById('statusCard');
+    const statusIndicator = document.getElementById('statusIndicator');
+    const statusIcon = document.getElementById('statusIcon');
+    const activityLogEl = document.getElementById('activityLog');
+
     function refreshDashboardStats() {
       chrome.storage.local.get({
         isJobRunning: false,
@@ -178,8 +183,12 @@ document.addEventListener('DOMContentLoaded', () => {
         currentKeyword: null,
         dailyCommentsMade: 0,
         keywordCycles: {},
-        liveStatusText: ''
-      }, updateDashboardUI);
+        liveStatusText: '',
+        activityLog: []
+      }, (state) => {
+        updateDashboardUI(state);
+        renderActivityLog(state.activityLog || []);
+      });
     }
 
     function updateDashboardUI(state) {
@@ -192,64 +201,73 @@ document.addEventListener('DOMContentLoaded', () => {
             const cycles = state.keywordCycles[state.currentKeyword] || 0;
             countCycles.textContent = `${cycles}/3`;
         } else {
-            currentKeyword.textContent = 'Waiting for jobs...';
+            currentKeyword.textContent = 'Waiting for engine...';
             countCycles.textContent = '-/3';
         }
 
-        // Status Logic
-        statusDot.className = 'pulse-dot';
-        const liveStatusEl = document.getElementById('liveStatusText');
-        const terminalHud = document.getElementById('terminalHud');
+        // Reset indicator classes
+        statusIndicator.className = 'status-indicator';
+        statusCard.className = 'glass-card status-card';
         
         if (state.isPaused) {
-            statusDot.classList.add('pulse-red');
+            statusIndicator.classList.add('paused');
+            statusIcon.textContent = '⏸';
             statusTitle.textContent = 'Engine Paused';
             statusSub.textContent = 'Click Start to resume automation';
             playPauseBtn.className = 'btn btn-success';
             playPauseBtn.innerHTML = '▶ START ENGINE';
-            if (terminalHud) terminalHud.style.display = 'none';
             return;
         }
 
         if (state.isJobRunning) {
-            statusDot.classList.add('pulse-green');
+            statusIndicator.classList.add('active');
+            statusCard.classList.add('active');
+            statusIcon.textContent = '⚡';
             statusTitle.textContent = 'Engine Active';
-            statusSub.textContent = 'Currently scanning and commenting';
+            statusSub.textContent = state.liveStatusText || 'Processing...';
             playPauseBtn.className = 'btn btn-danger';
             playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
-            if (terminalHud) {
-                terminalHud.style.display = 'block';
-                if (liveStatusEl) liveStatusEl.textContent = state.liveStatusText || 'Initializing components...';
-            }
             return;
         }
 
         // Cooldown or Idle check
         const elapsed = Date.now() - state.lastJobTime;
         if (state.lastJobTime > 0 && elapsed < state.cooldownMs) {
-            statusDot.classList.add('pulse-orange');
-            statusTitle.textContent = 'Engine Resting';
-            const left = Math.ceil((state.cooldownMs - elapsed)/60000);
-            statusSub.textContent = `Cooling down safely (${left}m left)`;
+            statusIndicator.classList.add('resting');
+            statusIcon.textContent = '🛌';
+            statusTitle.textContent = 'Cooling Down';
+            const left = Math.ceil((state.cooldownMs - elapsed) / 60000);
+            statusSub.textContent = `Resuming in ${left} minute${left !== 1 ? 's' : ''}...`;
             playPauseBtn.className = 'btn btn-danger';
             playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
-            if (terminalHud) {
-                terminalHud.style.display = 'block';
-                if (liveStatusEl) liveStatusEl.innerHTML = `<span style="color:#f59e0b;">Waiting for cooldown... resuming in ${left}m.</span>`;
-            }
             return;
         }
 
         // Default Idle
-        statusDot.classList.add('pulse-orange');
+        statusIcon.textContent = '💤';
         statusTitle.textContent = 'Idle';
-        statusSub.textContent = 'Waiting to trigger net cycle';
+        statusSub.textContent = 'Waiting for next cycle trigger';
         playPauseBtn.className = 'btn btn-danger';
         playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
-        if (terminalHud) {
-            terminalHud.style.display = 'block';
-            if (liveStatusEl) liveStatusEl.textContent = 'Waiting for jobs...';
-        }
+    }
+
+    // ── Activity Log Renderer ──
+    function renderActivityLog(log) {
+      if (!activityLogEl) return;
+      if (!log || log.length === 0) {
+        activityLogEl.innerHTML = '<div class="log-empty">No activity yet</div>';
+        return;
+      }
+      // Show newest first
+      const reversed = [...log].reverse();
+      activityLogEl.innerHTML = reversed.map((entry, i) => {
+        const d = new Date(entry.time);
+        const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `<div class="log-entry${i === 0 ? ' flash' : ''}">
+          <span class="log-time">${timeStr}</span>
+          <span class="log-text">${entry.text}</span>
+        </div>`;
+      }).join('');
     }
 
     // Live update when background changes storage
@@ -262,15 +280,14 @@ document.addEventListener('DOMContentLoaded', () => {
         playPauseBtn.addEventListener('click', () => {
             chrome.storage.local.get(['isPaused'], (state) => {
                 const newState = !state.isPaused;
-                // If unpausing, let's reset cooldown so it can start immediately
                 const updates = { isPaused: newState };
                 if (!newState) {
-                  updates.lastJobTime = 0; // immediate trigger
+                  updates.lastJobTime = 0;
                   updates.cooldownMs = 0;
                 }
                 chrome.storage.local.set(updates, () => {
-                  actionMsg.textContent = newState ? 'Engine paused manually.' : 'Engine started!';
-                  setTimeout(() => actionMsg.textContent = '', 2000);
+                  actionMsg.textContent = newState ? 'Engine paused.' : 'Engine started!';
+                  setTimeout(() => actionMsg.textContent = '', 2500);
                 });
             });
         });
@@ -294,16 +311,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Live terminal listening
+    // Live status forwarding from background
     chrome.runtime.onMessage.addListener((message) => {
         if (message.action === 'EXTENSION_LIVE_STATUS') {
-            const liveStatusEl = document.getElementById('liveStatusText');
-            if (liveStatusEl) {
-                liveStatusEl.textContent = message.text;
-                // Add tiny flash effect to indicate it updated
-                liveStatusEl.style.opacity = '0.5';
-                setTimeout(() => liveStatusEl.style.opacity = '1', 100);
-            }
+            // Update the status subtitle live
+            if (statusSub) statusSub.textContent = message.text;
+            // Refresh to pick up new activity log entry
+            refreshDashboardStats();
         }
     });
 

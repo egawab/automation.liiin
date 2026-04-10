@@ -456,17 +456,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'LIVE_STATUS') {
+    // Save current status text for popup display
     saveState({ liveStatusText: message.text });
-    // Native OS notification — user sees it regardless of popup/tab state
-    chrome.notifications.create('nexora-live-status', {
-      type: 'basic',
-      iconUrl: 'icon-48.png',
-      title: 'Nexora Engine',
-      message: message.text,
-      priority: 1,
-      silent: true  // Don't spam sound on every update
+    
+    // Append to activity log (rolling last 8 entries) for the popup Activity Timeline
+    loadState().then(s => {
+      const log = s.activityLog || [];
+      log.push({ text: message.text, time: Date.now() });
+      // Keep only last 8 entries
+      while (log.length > 8) log.shift();
+      saveState({ activityLog: log });
     });
-    // Also try popup forwarding (will silently fail if popup is closed)
+
+    // Forward to popup if open (will silently fail if popup is closed)
     try { 
       chrome.runtime.sendMessage({ action: 'EXTENSION_LIVE_STATUS', text: message.text }, () => {
         if (chrome.runtime.lastError) { /* popup closed, ignore */ }
