@@ -154,20 +154,7 @@ window.__linkedInExtractorReady = true;
       // Send heartbeat every 5 scrolls to keep the monitor alive
       if (i % 5 === 4) heartbeat(`Phase2-Scroll-${i+1}/25`, `📜 Scrolling feed: ${i+1}/25...`);
 
-      // ── ADAPTIVE SCROLLING (EARLY EXIT) ──
-      // Check if we already have enough posts rendered to stop scrolling early.
-      if (i > 5 && i % 3 === 0) {
-        // Quick DOM scan for strictly-defined post containers to avoid false positives (like sidebar cards)
-        const quickCount = document.querySelectorAll('.reusable-search__result-container, .feed-shared-update-v2').length;
-        // Require at least 25 posts, or 3x the number of comments we need (whichever is larger)
-        const targetCount = Math.max(25, (comments ? comments.length : 0) * 3);
-        
-        if (quickCount >= targetCount) {
-          heartbeat(`Phase2-EarlyExit`, `📜 Found ${quickCount} posts after ${i+1} scrolls. Skipping remaining...`);
-          console.log(`[Ext] 📜 Adaptive Scroll early exit: Found ${quickCount} posts (Target: ${targetCount}). Stopping at scroll ${i+1}/25.`);
-          break; // Stop scrolling completely
-        }
-      }
+
 
       // Click "Show more results" if it appears
       const more = Array.from(document.querySelectorAll('button')).find(b =>
