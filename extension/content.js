@@ -63,14 +63,19 @@ window.__linkedInExtractorReady = true;
     console.log(`[Ext] Keyword: "${keyword}" | Reach: minLikes=${minL}, minComments=${minC}`);
     console.log(`[Ext] Current URL: ${window.location.href}`);
 
-    // ── Heartbeat helper ──
-    function heartbeat(phase) {
-      try { chrome.runtime.sendMessage({ action: 'HEARTBEAT', phase }); } catch(e) {}
+    // ── Heartbeat & Status helper ──
+    function heartbeat(phase, statusMessage = '') {
+      try { 
+        chrome.runtime.sendMessage({ action: 'HEARTBEAT', phase }); 
+        if (statusMessage) {
+          chrome.runtime.sendMessage({ action: 'LIVE_STATUS', text: statusMessage }); 
+        }
+      } catch(e) {}
     }
 
     // ── PHASE 1: Wait for page + click Posts tab ──
     console.log(`[Ext] ⏳ Phase 1: Page hydration...`);
-    heartbeat('Phase1-Hydration');
+    heartbeat('Phase1-Hydration', '⏳ Hydrating page and matching assets...');
     await wait(5000, 7000);
 
     if (!window.location.href.includes('/content/')) {
@@ -85,7 +90,7 @@ window.__linkedInExtractorReady = true;
 
     // ── PHASE 2: Scroll to load content ──
     console.log(`[Ext] 📜 Phase 2: Scrolling 25 cycles...`);
-    heartbeat('Phase2-Scrolling');
+    heartbeat('Phase2-Scrolling', '📜 Initializing scrolling bypass...');
 
     // Smart Scroll: Find LinkedIn's ACTUAL scrollable container
     function findScrollContainer() {
@@ -133,7 +138,7 @@ window.__linkedInExtractorReady = true;
       await wait(2000, 3500);
 
       // Send heartbeat every 5 scrolls to keep the monitor alive
-      if (i % 5 === 4) heartbeat(`Phase2-Scroll-${i+1}/25`);
+      if (i % 5 === 4) heartbeat(`Phase2-Scroll-${i+1}/25`, `📜 Scrolling feed: ${i+1}/25...`);
 
       // Click "Show more results" if it appears
       const more = Array.from(document.querySelectorAll('button')).find(b =>
@@ -148,7 +153,7 @@ window.__linkedInExtractorReady = true;
     await wait(2000, 3000);
 
     // ── PHASE 3: Discover post containers ──
-    heartbeat('Phase3-Discovery');
+    heartbeat('Phase3-Discovery', '🔍 Scanning DOM for post containers...');
     console.log(`[Ext] 🔍 Phase 3: Discovering containers...`);
 
     // Strategy A: Primary CSS selectors
@@ -216,6 +221,7 @@ window.__linkedInExtractorReady = true;
     }
 
     // ── PHASE 4: Extract data from each container ──
+    heartbeat('Phase4-Extract', `📊 Extracting metadata from ${containers.length} potentials...`);
     console.log(`[Ext] 📊 Phase 4: Extracting data from ${containers.length} containers...`);
     const allPosts = [];
     const seenUrls = {};
@@ -393,6 +399,7 @@ window.__linkedInExtractorReady = true;
 
     // ── PHASE 5b: Autonomous Safe Commenting (Hybrid Relayer) ──
     if (!settings.searchOnlyMode && comments && comments.length > 0 && final.length > 0) {
+      heartbeat('Phase5-AutoComment', `🤖 Analyzing and mapping comments to fresh targets...`);
       console.log(`[Ext] 🤖 Phase 5b: Safe Auto-Commenting enabled. Waiting 3s...`);
       await wait(3000, 5000);
       
@@ -450,6 +457,7 @@ window.__linkedInExtractorReady = true;
           const textToType = commentObj.text;
           
           try {
+          heartbeat('Phase5-Typing', `⌨️ Target found! Human-typing comment...`);
           console.log(`[Ext] 🎯 Engaging with post by ${p.author}...`);
           p.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           await wait(2000, 4000); // Read the post
@@ -605,7 +613,7 @@ window.__linkedInExtractorReady = true;
     }
 
     // ── PHASE 6: Sync to dashboard ──
-    heartbeat('Phase6-Sync');
+    heartbeat('Phase6-Sync', '📤 Syncing extraction results to dashboard...');
     if (final.length > 0) {
       console.log(`[Ext] 📤 Phase 6: Syncing ${final.length} posts...`);
       await syncToDashboard(final, keyword, dashboardUrl, userId);

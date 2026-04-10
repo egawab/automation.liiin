@@ -405,7 +405,8 @@ async function finishCycle(tabId, incrementKeyword = true) {
     isJobRunning: false,
     activeTabId: null,
     lastJobTime: Date.now(),
-    cooldownMs: cd
+    cooldownMs: cd,
+    liveStatusText: ''
   };
 
   if (incrementKeyword && state.currentKeyword) {
@@ -438,6 +439,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'HEARTBEAT') {
     _lastContentHeartbeat = Date.now();
     console.log(`💓 [Worker] Heartbeat from content script (Phase: ${message.phase || '?'})`);
+    return;
+  }
+
+  if (message.action === 'LIVE_STATUS') {
+    saveState({ liveStatusText: message.text });
+    // Broadcast directly to popup if it's open
+    try { chrome.runtime.sendMessage({ action: 'EXTENSION_LIVE_STATUS', text: message.text }); } catch(e){}
     return;
   }
 

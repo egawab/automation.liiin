@@ -197,6 +197,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Status Logic
         statusDot.className = 'pulse-dot';
+        const liveStatusEl = document.getElementById('liveStatusText');
+        const terminalHud = document.getElementById('terminalHud');
         
         if (state.isPaused) {
             statusDot.classList.add('pulse-red');
@@ -204,6 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
             statusSub.textContent = 'Click Start to resume automation';
             playPauseBtn.className = 'btn btn-success';
             playPauseBtn.innerHTML = '▶ START ENGINE';
+            if (terminalHud) terminalHud.style.display = 'none';
             return;
         }
 
@@ -213,6 +216,10 @@ document.addEventListener('DOMContentLoaded', () => {
             statusSub.textContent = 'Currently scanning and commenting';
             playPauseBtn.className = 'btn btn-danger';
             playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
+            if (terminalHud) {
+                terminalHud.style.display = 'block';
+                if (liveStatusEl) liveStatusEl.textContent = state.liveStatusText || 'Initializing components...';
+            }
             return;
         }
 
@@ -225,6 +232,10 @@ document.addEventListener('DOMContentLoaded', () => {
             statusSub.textContent = `Cooling down safely (${left}m left)`;
             playPauseBtn.className = 'btn btn-danger';
             playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
+            if (terminalHud) {
+                terminalHud.style.display = 'block';
+                if (liveStatusEl) liveStatusEl.innerHTML = `<span style="color:#f59e0b;">Waiting for cooldown... resuming in ${left}m.</span>`;
+            }
             return;
         }
 
@@ -234,6 +245,10 @@ document.addEventListener('DOMContentLoaded', () => {
         statusSub.textContent = 'Waiting to trigger net cycle';
         playPauseBtn.className = 'btn btn-danger';
         playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
+        if (terminalHud) {
+            terminalHud.style.display = 'block';
+            if (liveStatusEl) liveStatusEl.textContent = 'Waiting for jobs...';
+        }
     }
 
     // Live update when background changes storage
@@ -277,5 +292,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (currentDashboardUrl) chrome.tabs.create({ url: currentDashboardUrl });
         });
     }
+
+    // Live terminal listening
+    chrome.runtime.onMessage.addListener((message) => {
+        if (message.action === 'EXTENSION_LIVE_STATUS') {
+            const liveStatusEl = document.getElementById('liveStatusText');
+            if (liveStatusEl) {
+                liveStatusEl.textContent = message.text;
+                // Add tiny flash effect to indicate it updated
+                liveStatusEl.style.opacity = '0.5';
+                setTimeout(() => liveStatusEl.style.opacity = '1', 100);
+            }
+        }
+    });
 
 });
