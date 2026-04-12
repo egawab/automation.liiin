@@ -8,7 +8,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
+    <div className="w-full h-screen overflow-hidden" style={{ background: 'var(--bg-page)' }}>
       {children}
     </div>
   );

@@ -611,30 +611,30 @@ export default function Dashboard() {
           <div className="max-w-5xl mx-auto space-y-8">
             {/* Professional Setup Card */}
             <Card variant="dashboard" accent="extension" className="overflow-hidden shadow-2xl dash-card">
-              <div className="p-8 md:p-12 border-b border-gray-100 bg-gradient-to-br from-gray-900 to-gray-800 text-primary relative">
-                <div className="absolute top-0 right-0 p-12 opacity-10 pointer-events-none">
-                  <Shield className="w-48 h-48" />
+              <div className="p-8 md:p-12 border-b relative" style={{ background: 'var(--dash-surface-1)', borderColor: 'var(--dash-border)' }}>
+                <div className="absolute top-0 right-0 p-12 opacity-[0.03] pointer-events-none">
+                  <Shield className="w-48 h-48" style={{ color: 'var(--text-primary)' }} />
                 </div>
                 
                 <div className="relative z-10">
-                  <Badge variant="primary" className="mb-4 bg-primary-500 text-primary border-none">Step-by-Step Guide</Badge>
-                  <h3 className="text-4xl font-black mb-4">Connect Nexora <span className="text-primary-400">Pro</span></h3>
-                  <p className="text-lg text-gray-300 max-w-2xl leading-relaxed">
+                  <Badge variant="primary" className="mb-4 text-xs font-bold px-3 py-1 bg-apple-blue/10 text-apple-blue border-none dark:bg-apple-blue/20">Step-by-Step Guide</Badge>
+                  <h3 className="text-4xl font-black mb-4 text-primary tracking-tight">Connect Nexora <span className="text-apple-blue">Pro</span></h3>
+                  <p className="text-lg text-secondary max-w-2xl leading-relaxed">
                     Transform your browser into a high-powered LinkedIn automation hub. 
                     Simple, safe, and 100% automated.
                   </p>
                 </div>
               </div>
 
-              <div className="p-8 md:p-12 space-y-12">
+              <div className="p-8 md:p-12 space-y-12" style={{ background: 'var(--dash-surface-2)' }}>
                 {/* Credentials Section */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                   <div className="space-y-6">
                     <div>
-                      <h4 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">1. Your Connection Keys</h4>
+                      <h4 className="text-sm font-bold text-tertiary uppercase tracking-widest mb-4">1. Your Connection Keys</h4>
                       <div className="space-y-4">
                         <div className="group">
-                          <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Dashboard URL</label>
+                          <label className="block text-xs font-bold text-secondary mb-2 uppercase">Dashboard URL</label>
                           <div className="flex gap-2">
                             <input 
                               readOnly 
@@ -645,7 +645,7 @@ export default function Dashboard() {
                           </div>
                         </div>
                         <div className="group">
-                          <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Your Private API Key (User ID)</label>
+                          <label className="block text-xs font-bold text-secondary mb-2 uppercase">Your Private API Key (User ID)</label>
                           <div className="flex gap-2">
                             <input 
                               readOnly 
@@ -660,14 +660,14 @@ export default function Dashboard() {
                   </div>
 
                   <div className="rounded-3xl p-8 dash-recessed flex flex-col justify-center">
-                    <h4 className="text-xl font-bold text-primary-900 mb-4 flex items-center gap-2">
-                       <Sparkles className="w-6 h-6" /> Install Extension
+                    <h4 className="text-xl font-bold text-primary mb-4 flex items-center gap-2">
+                       <Sparkles className="w-6 h-6 text-apple-blue" /> Install Extension
                     </h4>
-                    <p className="text-primary-800 mb-8 text-sm leading-relaxed font-medium">
+                    <p className="text-secondary mb-8 text-sm leading-relaxed font-medium">
                       Download the Nexora Industrial-Strength extension and load it into your Chrome browser to begin automated extraction.
                     </p>
                     <a href="/LinkedInExtension.zip" download className="w-full">
-                      <Button variant="primary" size="lg" className="w-full shadow-xl shadow-primary-500/30 py-6 text-lg">
+                      <Button variant="primary" size="lg" className="w-full shadow-xl shadow-apple-blue/20 py-6 text-lg">
                         Download Extension (.ZIP)
                       </Button>
                     </a>
@@ -675,13 +675,13 @@ export default function Dashboard() {
                 </div>
 
                    {/* Comprehensive Installation Masterclass */}
-                <div className="pt-12 border-t border-gray-100">
+                <div className="pt-12 border-t border-border-subtle">
                   <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-12">
                     <div>
-                      <h4 className="text-sm font-bold text-primary-500 uppercase tracking-widest mb-2">2. Visual Setup Masterclass</h4>
-                      <h3 className="text-3xl font-black text-gray-900">Step-by-Step Implementation</h3>
+                      <h4 className="text-sm font-bold text-tertiary uppercase tracking-widest mb-2">2. Visual Setup Masterclass</h4>
+                      <h3 className="text-3xl font-black text-primary">Step-by-Step Implementation</h3>
                     </div>
-                    <p className="text-sm text-gray-500 font-medium max-w-xs md:text-right">
+                    <p className="text-sm text-secondary font-medium max-w-xs md:text-right">
                       Follow these 4 steps to activate your industrial-scale automation.
                     </p>
                   </div>
@@ -689,63 +689,63 @@ export default function Dashboard() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                     {/* Step 1 */}
                     <div className="dash-recessed overflow-hidden transition-all shadow-sm group hover-lift border border-border-subtle hover:border-section-extension">
-                      <div className="aspect-video bg-gray-50 relative overflow-hidden">
+                      <div className="aspect-video relative overflow-hidden" style={{ background: 'var(--dash-surface-1)' }}>
                         <img src="/img/step1.png" alt="Extracting ZIP" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">01</div>
+                        <div className="absolute top-4 left-4 rounded-full flex items-center justify-center font-black text-lg w-10 h-10" style={{ background: 'var(--text-primary)', color: 'var(--dash-bg)' }}>01</div>
                       </div>
                       <div className="p-8">
-                        <h5 className="text-xl font-black text-gray-900 mb-2">فك الضغط عن الملف (Extract ZIP)</h5>
-                        <p className="text-sm text-gray-600 leading-relaxed font-medium">
+                        <h5 className="text-xl font-black text-primary mb-2">فك الضغط عن الملف (Extract ZIP)</h5>
+                        <p className="text-sm text-secondary leading-relaxed font-medium">
                           بعد تحميل الملف، قم بالضغط عليه بزر الفأرة الأيمن واختر <strong>Extract All</strong>. تأكد من فكه في مجلد واضح على سطح المكتب.
-                          <br /><span className="text-xs text-gray-400 mt-2 block italic">Right-click the ZIP and extract it to your desktop.</span>
+                          <br /><span className="text-xs text-tertiary mt-2 block italic">Right-click the ZIP and extract it to your desktop.</span>
                         </p>
                       </div>
                     </div>
 
                     {/* Step 2 */}
                     <div className="dash-recessed overflow-hidden transition-all shadow-sm group hover-lift border border-border-subtle hover:border-section-extension">
-                      <div className="aspect-video bg-gray-50 relative overflow-hidden">
+                      <div className="aspect-video relative overflow-hidden" style={{ background: 'var(--dash-surface-1)' }}>
                         <img src="/img/step2.png" alt="Developer Mode" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">02</div>
+                        <div className="absolute top-4 left-4 rounded-full flex items-center justify-center font-black text-lg w-10 h-10" style={{ background: 'var(--text-primary)', color: 'var(--dash-bg)' }}>02</div>
                       </div>
                       <div className="p-8">
-                        <h5 className="text-xl font-black text-gray-900 mb-2">تفعيل وضع المطور (Developer Mode)</h5>
-                        <p className="text-sm text-gray-600 leading-relaxed font-medium">
+                        <h5 className="text-xl font-black text-primary mb-2">تفعيل وضع المطور (Developer Mode)</h5>
+                        <p className="text-sm text-secondary leading-relaxed font-medium">
                           اذهب إلى <strong>chrome://extensions</strong> في متصفحك. قم بتفعيل زر <strong>Developer Mode</strong> الموجود في أعلى يمين الصفحة.
-                          <br /><span className="text-xs text-gray-400 mt-2 block italic">Go to extensions settings and toggle the Developer Mode switch ON.</span>
+                          <br /><span className="text-xs text-tertiary mt-2 block italic">Go to extensions settings and toggle the Developer Mode switch ON.</span>
                         </p>
                       </div>
                     </div>
 
                     {/* Step 3 */}
                     <div className="dash-recessed overflow-hidden transition-all shadow-sm group hover-lift border border-border-subtle hover:border-section-extension">
-                      <div className="aspect-video bg-gray-50 relative overflow-hidden">
+                      <div className="aspect-video relative overflow-hidden" style={{ background: 'var(--dash-surface-1)' }}>
                         <img src="/img/step3.png" alt="Load Unpacked" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">03</div>
+                        <div className="absolute top-4 left-4 rounded-full flex items-center justify-center font-black text-lg w-10 h-10" style={{ background: 'var(--text-primary)', color: 'var(--dash-bg)' }}>03</div>
                       </div>
                       <div className="p-8">
-                        <h5 className="text-xl font-black text-gray-900 mb-2">تحميل الإضافة (Load Unpacked)</h5>
-                        <p className="text-sm text-gray-600 leading-relaxed font-medium">
+                        <h5 className="text-xl font-black text-primary mb-2">تحميل الإضافة (Load Unpacked)</h5>
+                        <p className="text-sm text-secondary leading-relaxed font-medium">
                           اضغط على زر <strong>Load Unpacked</strong> واختر المجلد الذي قمت بفك ضغطه في الخطوة الأولى. ستظهر لك إضافة Nexora فوراً.
-                          <br /><span className="text-xs text-gray-400 mt-2 block italic">Click "Load Unpacked" and select the extracted folder.</span>
+                          <br /><span className="text-xs text-tertiary mt-2 block italic">Click "Load Unpacked" and select the extracted folder.</span>
                         </p>
                       </div>
                     </div>
 
                     {/* Step 4 */}
                     <div className="dash-recessed overflow-hidden transition-all shadow-sm group hover-lift border-2" style={{ borderColor: 'var(--section-extension)' }}>
-                      <div className="aspect-video bg-primary-50 relative overflow-hidden">
+                      <div className="aspect-video bg-apple-blue/10 relative overflow-hidden">
                         <img src="/img/step4.png" alt="Sync and Run" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-4 left-4 bg-primary-600 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">04</div>
+                        <div className="absolute top-4 left-4 bg-apple-blue text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">04</div>
                       </div>
                       <div className="p-8">
-                        <h5 className="text-xl font-black text-primary-900 mb-2">المزامنة والتشغيل (Sync & Run)</h5>
+                        <h5 className="text-xl font-black text-primary mb-2">المزامنة والتشغيل (Sync & Run)</h5>
                         <div className="space-y-3">
-                          <p className="text-sm text-gray-700 leading-relaxed font-bold">
+                          <p className="text-sm text-secondary leading-relaxed font-bold">
                             افتح الإضافة، الصق مفاتيح الربط (Keys) المذكورة أعلاه، واضغط على <strong>Sync & Run Now</strong>.
                           </p>
-                          <div className={`px-4 py-2 rounded-xl text-[10px] font-black inline-flex items-center gap-2 ${systemActive ? 'bg-success-500 text-primary' : 'bg-gray-200 text-gray-500'}`}>
-                             <div className={`w-2 h-2 rounded-full ${systemActive ? 'bg-white animate-pulse' : 'bg-gray-400'}`} />
+                          <div className={`px-4 py-2 rounded-xl text-[10px] font-black inline-flex items-center gap-2 ${systemActive ? 'bg-success/20 text-success' : 'bg-surface-elevated text-tertiary border border-subtle'}`}>
+                             <div className={`w-2 h-2 rounded-full ${systemActive ? 'bg-success animate-pulse' : 'bg-tertiary'}`} />
                              AGENT STATUS: {systemActive ? 'READY TO WORK' : 'PAUSED (START PILOT FIRST)'}
                           </div>
                         </div>

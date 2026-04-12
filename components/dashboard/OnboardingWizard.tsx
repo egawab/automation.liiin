@@ -36,8 +36,8 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-      <div className="w-full max-w-2xl bg-surface-elevated shadow-2xl overflow-hidden rounded-xl border border-subtle apple-shadow">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md overflow-hidden">
+      <div className="w-full max-w-2xl max-h-[90vh] bg-surface-elevated shadow-2xl overflow-y-auto rounded-xl border border-subtle apple-shadow flex flex-col">
         
         {/* Header */}
         <div className="p-8 md:p-10 border-b border-subtle bg-surface text-primary relative">
