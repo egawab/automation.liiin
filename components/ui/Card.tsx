@@ -2,16 +2,26 @@ import React from 'react';
 
 export interface CardProps {
   children: React.ReactNode;
-  variant?: 'default' | 'elevated' | 'glass' | 'gradient';
+  variant?: 'default' | 'elevated' | 'glass' | 'gradient' | 'dashboard';
+  accent?: 'analytics' | 'activity' | 'settings' | 'campaigns' | 'extension';
   padding?: 'none' | 'sm' | 'md' | 'lg';
   hover?: boolean;
   className?: string;
   onClick?: () => void;
 }
 
+const accentMap: Record<string, string> = {
+  analytics: 'dash-card-analytics',
+  activity: 'dash-card-activity',
+  settings: 'dash-card-settings',
+  campaigns: 'dash-card-campaigns',
+  extension: 'dash-card-extension',
+};
+
 export default function Card({
   children,
   variant = 'default',
+  accent,
   padding = 'md',
   hover = false,
   className = '',
@@ -23,7 +33,8 @@ export default function Card({
     default: 'bg-surface',
     elevated: 'bg-surface-elevated apple-shadow',
     glass: 'glass-nav',
-    gradient: 'bg-surface-hover'
+    gradient: 'bg-surface-hover',
+    dashboard: 'dash-card',
   };
 
   const paddingStyles = {
@@ -33,9 +44,13 @@ export default function Card({
     lg: 'p-7 md:p-10'
   };
 
-  const hoverStyle = hover ? 'hover:bg-surface-hover' : '';
+  const hoverStyle = hover
+    ? variant === 'dashboard' ? 'dash-glow-hover' : 'hover:bg-surface-hover'
+    : '';
 
-  const combinedStyles = `${baseStyles} ${variantStyles[variant]} ${paddingStyles[padding]} ${hoverStyle} ${onClick ? 'cursor-pointer' : ''} ${className}`;
+  const accentStyle = accent ? accentMap[accent] || '' : '';
+
+  const combinedStyles = `${baseStyles} ${variantStyles[variant]} ${paddingStyles[padding]} ${hoverStyle} ${accentStyle} ${onClick ? 'cursor-pointer' : ''} ${className}`;
 
   return (
     <div className={combinedStyles} onClick={onClick}>

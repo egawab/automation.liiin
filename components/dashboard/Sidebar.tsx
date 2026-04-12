@@ -2,6 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
+import { motion } from 'motion/react';
 import { LayoutDashboard, Search, Settings, Sparkles, Shield, Bookmark } from 'lucide-react';
 
 interface SidebarProps {
@@ -11,26 +12,35 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'saved-posts', label: 'Saved Posts', icon: Bookmark },
-  { id: 'keywords', label: 'Target Campaigns', icon: Search },
-  { id: 'autoposts', label: 'Auto Posts', icon: Sparkles },
-  { id: 'extension-connect', label: 'Connect Extension', icon: Shield },
-  { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, accent: 'var(--section-analytics)' },
+  { id: 'saved-posts', label: 'Saved Posts', icon: Bookmark, accent: 'var(--section-analytics)' },
+  { id: 'keywords', label: 'Target Campaigns', icon: Search, accent: 'var(--section-campaigns)' },
+  { id: 'autoposts', label: 'Auto Posts', icon: Sparkles, accent: 'var(--section-campaigns)' },
+  { id: 'extension-connect', label: 'Connect Extension', icon: Shield, accent: 'var(--section-extension)' },
+  { id: 'settings', label: 'Settings', icon: Settings, accent: 'var(--section-settings)' },
 ];
 
 export default function Sidebar({ activeTab, onTabChange, systemActive }: SidebarProps) {
   return (
-    <div className="w-64 bg-surface border-r border-subtle flex flex-col">
+    <div className="w-64 dash-sidebar flex flex-col">
       {/* Logo */}
-      <div className="p-5 border-b border-subtle">
-        <Link href="/" className="text-primary text-base font-semibold tracking-tight hover:opacity-80 transition-opacity">
-          Nexora
+      <div className="px-5 py-5" style={{ borderBottom: '1px solid var(--dash-border)' }}>
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm"
+               style={{ background: 'linear-gradient(135deg, #0071e3 0%, #2997ff 100%)' }}>
+            N
+          </div>
+          <span className="text-primary text-[15px] font-semibold tracking-tight group-hover:opacity-70 transition-opacity">
+            Nexora
+          </span>
         </Link>
       </div>
 
       {/* Navigation */}
-      <div className="flex-1 py-4 px-3 space-y-0.5">
+      <div className="flex-1 py-3 px-3 space-y-0.5">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-tertiary px-3 mb-2">
+          Workspace
+        </p>
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -38,29 +48,56 @@ export default function Sidebar({ activeTab, onTabChange, systemActive }: Sideba
             <button
               key={item.id}
               onClick={() => onTabChange(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 text-caption rounded-lg transition-all ${
-                isActive
-                  ? 'bg-apple-blue text-white'
-                  : 'text-secondary hover:bg-surface-hover hover:text-primary'
-              }`}
+              className="w-full relative flex items-center gap-3 px-3 py-2.5 text-caption rounded-lg transition-all duration-200"
+              style={{
+                background: isActive ? 'var(--dash-sidebar-active)' : 'transparent',
+                color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) {
+                  (e.currentTarget as HTMLElement).style.background = 'var(--dash-sidebar-hover)';
+                  (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) {
+                  (e.currentTarget as HTMLElement).style.background = 'transparent';
+                  (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)';
+                }
+              }}
             >
-              <Icon className="w-4 h-4 flex-shrink-0" />
-              {item.label}
+              {/* Active indicator bar */}
+              {isActive && (
+                <motion.div
+                  layoutId="sidebar-active-indicator"
+                  className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-r-full"
+                  style={{ background: item.accent }}
+                  transition={{ type: "spring", stiffness: 350, damping: 30 }}
+                />
+              )}
+              <Icon className="w-4 h-4 flex-shrink-0" style={isActive ? { color: item.accent } : {}} />
+              <span className="font-medium">{item.label}</span>
             </button>
           );
         })}
       </div>
 
-      {/* User */}
-      <div className="p-3 border-t border-subtle">
-        <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-hover">
-          <div className="w-8 h-8 rounded-full bg-apple-blue flex items-center justify-center text-white text-micro-bold">
+      {/* User Section */}
+      <div className="p-3" style={{ borderTop: '1px solid var(--dash-border)' }}>
+        <div className="flex items-center gap-3 p-3 rounded-xl" style={{ background: 'var(--dash-surface-2)' }}>
+          <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-micro-bold"
+               style={{ background: 'linear-gradient(135deg, #0071e3 0%, #2997ff 100%)' }}>
             N
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-micro-bold text-primary truncate">Pro Account</p>
             <div className="flex items-center gap-1.5">
-              <div className={`w-1.5 h-1.5 rounded-full ${systemActive ? 'bg-success' : 'bg-secondary opacity-50'}`} />
+              <div className="relative">
+                <div className={`w-1.5 h-1.5 rounded-full ${systemActive ? 'bg-success' : 'bg-secondary opacity-50'}`} />
+                {systemActive && (
+                  <div className="absolute inset-0 w-1.5 h-1.5 rounded-full bg-success animate-ping opacity-40" />
+                )}
+              </div>
               <p className="text-[10px] text-tertiary">
                 Agent: {systemActive ? 'Active' : 'Off'}
               </p>

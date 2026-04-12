@@ -15,9 +15,9 @@ interface ChartProps {
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-surface rounded-lg p-3 apple-shadow border border-subtle">
+      <div className="dash-elevated p-3 text-sm">
         <p className="text-micro-bold text-primary mb-0.5">{label}</p>
-        <p className="text-caption text-apple-blue">{payload[0].value} comments</p>
+        <p className="text-caption" style={{ color: 'var(--section-analytics)' }}>{payload[0].value} comments</p>
       </div>
     );
   }
@@ -26,20 +26,31 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export default function Chart({
   data, title = 'Weekly Activity', description = 'Comments and engagement over time',
-  dataKey = 'value', type = 'area', color = '#0071e3', height = 300
+  dataKey = 'value', type = 'area', color = 'var(--section-analytics)', height = 300
 }: ChartProps) {
+  // Use raw hex for recharts (CSS vars don't work in SVG fill)
+  const chartColor = '#0071e3';
+
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}>
-      <Card>
+      <Card variant="dashboard" accent="analytics">
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-apple-blue" />
+              <TrendingUp className="w-4 h-4" style={{ color: 'var(--section-analytics)' }} />
               <CardTitle>{title}</CardTitle>
             </div>
-            <div className="flex gap-1.5">
-              <button className="px-3 py-1 text-micro-bold rounded-md bg-apple-blue text-white">7 Days</button>
-              <button className="px-3 py-1 text-micro rounded-md text-secondary hover:bg-surface-hover transition-colors">30 Days</button>
+            <div className="flex gap-1">
+              <button className="px-3 py-1 text-micro-bold rounded-md text-white"
+                      style={{ background: 'var(--section-analytics)' }}>
+                7 Days
+              </button>
+              <button className="px-3 py-1 text-micro rounded-md text-secondary transition-all"
+                      style={{ background: 'var(--dash-surface-2)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--dash-surface-3)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--dash-surface-2)'; }}>
+                30 Days
+              </button>
             </div>
           </div>
           <CardDescription>{description}</CardDescription>
@@ -50,23 +61,23 @@ export default function Chart({
               <AreaChart data={data}>
                 <defs>
                   <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={color} stopOpacity={0.2} />
-                    <stop offset="95%" stopColor={color} stopOpacity={0} />
+                    <stop offset="5%" stopColor={chartColor} stopOpacity={0.15} />
+                    <stop offset="95%" stopColor={chartColor} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--dash-border)" />
                 <XAxis dataKey="name" stroke="var(--text-tertiary)" style={{ fontSize: '11px', fontWeight: 400 }} />
                 <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '11px', fontWeight: 400 }} />
                 <Tooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} fill="url(#colorValue)" animationDuration={1000} />
+                <Area type="monotone" dataKey={dataKey} stroke={chartColor} strokeWidth={2} fill="url(#colorValue)" animationDuration={1000} />
               </AreaChart>
             ) : (
               <LineChart data={data}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--dash-border)" />
                 <XAxis dataKey="name" stroke="var(--text-tertiary)" style={{ fontSize: '11px', fontWeight: 400 }} />
                 <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '11px', fontWeight: 400 }} />
                 <Tooltip content={<CustomTooltip />} />
-                <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={{ fill: color, r: 3 }} activeDot={{ r: 5 }} animationDuration={1000} />
+                <Line type="monotone" dataKey={dataKey} stroke={chartColor} strokeWidth={2} dot={{ fill: chartColor, r: 3 }} activeDot={{ r: 5 }} animationDuration={1000} />
               </LineChart>
             )}
           </ResponsiveContainer>

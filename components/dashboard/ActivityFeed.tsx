@@ -27,13 +27,19 @@ const statusVariants = {
   Pending: 'warning'
 } as const;
 
+const statusBorderColor: Record<string, string> = {
+  Success: 'var(--section-activity)',
+  Failed: '#ff3b30',
+  Pending: '#ff9f0a',
+};
+
 export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeedProps) {
   return (
-    <Card>
+    <Card variant="dashboard" accent="activity">
       <CardHeader>
         <div className="flex justify-between items-center mb-1">
           <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-apple-blue" />
+            <Activity className="w-4 h-4" style={{ color: 'var(--section-activity)' }} />
             <CardTitle>Live Activity Feed</CardTitle>
           </div>
           <Badge variant="error" size="sm" dot>Live</Badge>
@@ -46,7 +52,8 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
       <CardContent>
         {logs.length === 0 ? (
           <div className="text-center py-10">
-            <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-surface-hover flex items-center justify-center">
+            <div className="w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center"
+                 style={{ background: 'var(--dash-surface-2)' }}>
               <Activity className="w-5 h-5 text-tertiary" />
             </div>
             <p className="text-caption-bold text-primary mb-1">No Activity Yet</p>
@@ -57,8 +64,8 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
         ) : (
           <motion.div
             initial="hidden" animate="show"
-            variants={{ hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05 } } }}
-            className="space-y-2" style={{ maxHeight, overflowY: 'auto' }}
+            variants={{ hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.04 } } }}
+            className="space-y-2 scrollbar-thin" style={{ maxHeight, overflowY: 'auto' }}
           >
             {logs.map((log) => {
               const StatusIcon = log.action.includes('Commented') ? MessageSquareText : Bot;
@@ -66,8 +73,18 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
               return (
                 <motion.div
                   key={log.id}
-                  variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }}
-                  className="flex items-start gap-3 p-4 rounded-lg bg-surface border border-subtle"
+                  variants={{ hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } }}
+                  className="flex items-start gap-3 p-4 rounded-lg transition-all duration-200"
+                  style={{
+                    background: 'var(--dash-surface-2)',
+                    borderLeft: `3px solid ${statusBorderColor[log.status]}`,
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.background = 'var(--dash-surface-3)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.background = 'var(--dash-surface-2)';
+                  }}
                 >
                   <div className={`p-2 rounded-md flex-shrink-0 ${
                     log.status === 'Success' ? 'bg-success/15 text-success' :
@@ -90,7 +107,7 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
                       {log.commentUrl && (
                         <>
                           <span className="text-tertiary">·</span>
-                          <a href={log.commentUrl} target="_blank" rel="noopener noreferrer" className="text-micro text-apple-blue hover:underline">
+                          <a href={log.commentUrl} target="_blank" rel="noopener noreferrer" className="text-micro hover:underline" style={{ color: 'var(--section-analytics)' }}>
                             View Comment
                           </a>
                         </>
@@ -98,7 +115,7 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
                       {!log.commentUrl && log.postUrl && log.postUrl !== 'N/A' && log.postUrl !== 'unknown' && (
                         <>
                           <span className="text-tertiary">·</span>
-                          <a href={log.postUrl} target="_blank" rel="noopener noreferrer" className="text-micro text-apple-blue hover:underline">
+                          <a href={log.postUrl} target="_blank" rel="noopener noreferrer" className="text-micro hover:underline" style={{ color: 'var(--section-analytics)' }}>
                             View Post
                           </a>
                         </>

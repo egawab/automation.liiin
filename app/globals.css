@@ -126,6 +126,64 @@
     color-scheme: dark;
   }
 
+  /* ===================================
+     DASHBOARD SCOPE — Light Mode
+     Warm editorial: soft shadows, warm neutrals, clear elevation
+     =================================== */
+  .dashboard-scope {
+    --dash-bg: #f0f0f2;
+    --dash-surface-1: #ffffff;
+    --dash-surface-2: #f8f8fa;
+    --dash-surface-3: #f2f2f4;
+    --dash-border: rgba(0, 0, 0, 0.08);
+    --dash-border-strong: rgba(0, 0, 0, 0.14);
+    --dash-glow: rgba(0, 113, 227, 0.06);
+    --dash-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.03);
+    --dash-shadow-md: 0 2px 6px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.04);
+    --dash-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.06), 0 16px 48px rgba(0, 0, 0, 0.05);
+    --dash-sidebar-bg: #fbfbfd;
+    --dash-sidebar-active: rgba(0, 113, 227, 0.08);
+    --dash-sidebar-hover: rgba(0, 0, 0, 0.03);
+    --dash-header-bg: rgba(251, 251, 253, 0.88);
+    --dash-input-bg: #f4f4f6;
+    --dash-hover-glow: 0 0 0 3px rgba(0, 113, 227, 0.08);
+    /* Section Accents */
+    --section-analytics: #0071e3;
+    --section-activity: #34c759;
+    --section-settings: #ff9f0a;
+    --section-campaigns: #af52de;
+    --section-extension: #5ac8fa;
+  }
+
+  /* ===================================
+     DASHBOARD SCOPE — Dark Mode
+     Cinematic: near-black, blue-shifted glows, deep layering
+     =================================== */
+  .dark .dashboard-scope {
+    --dash-bg: #0c0c0e;
+    --dash-surface-1: #1a1a1e;
+    --dash-surface-2: #141416;
+    --dash-surface-3: #222226;
+    --dash-border: rgba(255, 255, 255, 0.07);
+    --dash-border-strong: rgba(255, 255, 255, 0.14);
+    --dash-glow: rgba(0, 113, 227, 0.12);
+    --dash-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 5, 15, 0.25);
+    --dash-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4), 0 8px 28px rgba(0, 5, 20, 0.35);
+    --dash-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5), 0 16px 56px rgba(0, 5, 25, 0.4);
+    --dash-sidebar-bg: #111113;
+    --dash-sidebar-active: rgba(0, 113, 227, 0.15);
+    --dash-sidebar-hover: rgba(255, 255, 255, 0.04);
+    --dash-header-bg: rgba(12, 12, 14, 0.88);
+    --dash-input-bg: #1e1e22;
+    --dash-hover-glow: 0 0 0 3px rgba(0, 113, 227, 0.18);
+    /* Section Accents (brighter for dark bg) */
+    --section-analytics: #2997ff;
+    --section-activity: #30d158;
+    --section-settings: #ffd60a;
+    --section-campaigns: #bf5af2;
+    --section-extension: #64d2ff;
+  }
+
   html {
     scroll-behavior: smooth;
   }
@@ -331,6 +389,104 @@
   }
 
   /* ===================================
+     DASHBOARD — Card System
+     =================================== */
+  .dash-card {
+    background: var(--dash-surface-1);
+    border: 1px solid var(--dash-border);
+    border-radius: 14px;
+    box-shadow: var(--dash-shadow-sm);
+    transition: all 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  .dash-card:hover {
+    box-shadow: var(--dash-shadow-md);
+  }
+
+  /* Section-accent cards — colored top border */
+  .dash-card-analytics {
+    border-top: 2px solid var(--section-analytics);
+  }
+  .dash-card-activity {
+    border-top: 2px solid var(--section-activity);
+  }
+  .dash-card-settings {
+    border-top: 2px solid var(--section-settings);
+  }
+  .dash-card-campaigns {
+    border-top: 2px solid var(--section-campaigns);
+  }
+  .dash-card-extension {
+    border-top: 2px solid var(--section-extension);
+  }
+
+  /* Dashboard sidebar */
+  .dash-sidebar {
+    background: var(--dash-sidebar-bg);
+    border-right: 1px solid var(--dash-border);
+  }
+
+  /* Dashboard header */
+  .dash-header {
+    background: var(--dash-header-bg);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid var(--dash-border);
+  }
+
+  /* Dashboard input fields */
+  .dash-input {
+    background: var(--dash-input-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    transition: all 0.2s ease;
+  }
+  .dash-input:focus {
+    border-color: var(--section-analytics);
+    box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.1);
+    outline: none;
+  }
+
+  /* Dashboard hover glow */
+  .dash-glow-hover {
+    transition: all 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  .dash-glow-hover:hover {
+    box-shadow: var(--dash-hover-glow);
+  }
+
+  /* Recessed surface (for secondary panels) */
+  .dash-recessed {
+    background: var(--dash-surface-2);
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+  }
+
+  /* Elevated surface (for modals, popovers) */
+  .dash-elevated {
+    background: var(--dash-surface-3);
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+    box-shadow: var(--dash-shadow-lg);
+  }
+
+  /* Section entry animation */
+  .dash-section-enter {
+    animation: dash-enter 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+
+  /* Stagger children */
+  .dash-stagger > * {
+    animation: dash-stagger-in 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  }
+  .dash-stagger > *:nth-child(1) { animation-delay: 0.02s; }
+  .dash-stagger > *:nth-child(2) { animation-delay: 0.06s; }
+  .dash-stagger > *:nth-child(3) { animation-delay: 0.10s; }
+  .dash-stagger > *:nth-child(4) { animation-delay: 0.14s; }
+  .dash-stagger > *:nth-child(5) { animation-delay: 0.18s; }
+  .dash-stagger > *:nth-child(6) { animation-delay: 0.22s; }
+
+  /* ===================================
      SCROLL & SELECTION
      =================================== */
   .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -364,4 +520,19 @@
 @keyframes shimmer {
   from { background-position: -200% 0; }
   to { background-position: 200% 0; }
+}
+
+@keyframes dash-enter {
+  from { opacity: 0; transform: scale(0.985) translateY(6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes dash-stagger-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(0, 113, 227, 0.15); }
+  50% { box-shadow: 0 0 16px rgba(0, 113, 227, 0.3); }
 }

@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
 import {
   LayoutDashboard, Search, MessageSquareText, Settings, Activity, Users,
@@ -312,11 +313,11 @@ export default function Dashboard() {
               </div>
 
               <div className="lg:col-span-1">
-                <Card className="h-full">
+                <Card variant="dashboard" accent="extension" className="h-full">
                   <div className="p-6 h-full flex flex-col">
                     <div className="flex justify-between items-start mb-6">
-                      <div className="p-3 bg-surface-hover rounded-xl">
-                        <Shield className="w-6 h-6 text-primary" />
+                      <div className="p-3 rounded-xl" style={{ background: 'var(--dash-surface-2)' }}>
+                        <Shield className="w-6 h-6" style={{ color: 'var(--section-extension)' }} />
                       </div>
                       
                       {(() => {
@@ -351,7 +352,7 @@ export default function Dashboard() {
                         </p>
                       </div>
 
-                      <div className="space-y-4 pt-4 border-t border-border-subtle">
+                      <div className="space-y-4 pt-4" style={{ borderTop: '1px solid var(--dash-border)' }}>
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
                             <p className="text-micro-bold text-secondary uppercase mb-0.5">Pilot</p>
@@ -363,8 +364,9 @@ export default function Dashboard() {
                             className={`px-3 py-1.5 rounded-md text-micro-bold transition-premium ${
                               systemActive 
                                 ? 'bg-success/12 text-success' 
-                                : 'bg-surface-hover text-primary hover:bg-surface-elevated'
+                                : 'text-primary'
                             }`}
+                            style={!systemActive ? { background: 'var(--dash-surface-3)' } : {}}
                           >
                             {systemActive ? '⏸️ PAUSE' : '🚀 START'}
                           </button>
@@ -375,7 +377,8 @@ export default function Dashboard() {
                           <button
                             onClick={() => setActiveTab('extension-connect')}
                             type="button"
-                            className="bg-surface-hover hover:bg-surface-elevated text-primary px-3 py-1.5 rounded-md text-micro-bold transition-premium"
+                            className="text-primary px-3 py-1.5 rounded-md text-micro-bold transition-premium"
+                            style={{ background: 'var(--dash-surface-3)' }}
                           >
                             Manage
                           </button>
@@ -398,11 +401,11 @@ export default function Dashboard() {
         );
       case 'keywords':
         return (
-          <Card>
-            <div className="p-6 md:p-8 border-b border-border-subtle bg-surface-hover flex flex-col gap-6">
+          <Card variant="dashboard" accent="campaigns">
+            <div className="p-6 md:p-8 flex flex-col gap-6" style={{ borderBottom: '1px solid var(--dash-border)', background: 'var(--dash-surface-2)' }}>
                 <div>
                   <h3 className="text-xl font-bold text-primary flex items-center gap-2">
-                    <Search className="w-5 h-5 text-apple-blue" />
+                    <Search className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--section-campaigns)' }} />
                     New Campaign Builder
                   </h3>
                   <p className="text-sm text-secondary mt-1">
@@ -456,7 +459,7 @@ export default function Dashboard() {
 
                 <div className="space-y-4 pt-2">
                   {Array.from({ length: newTargetCycles }).map((_, cycleIndex) => (
-                    <div key={cycleIndex} className="bg-surface border border-border-subtle p-4 rounded-xl apple-shadow">
+                    <div key={cycleIndex} className="dash-recessed p-5">
                       <h4 className="text-sm font-bold text-primary mb-3 uppercase tracking-wider">Cycle {cycleIndex + 1} Comments</h4>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <TextArea
@@ -495,7 +498,7 @@ export default function Dashboard() {
 
             <div className="overflow-x-auto">
               <table className="w-full text-left">
-                <thead className="bg-surface-hover border-b border-border-subtle">
+                <thead style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
                   <tr>
                     <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-secondary">
                       Keyword
@@ -515,9 +518,9 @@ export default function Dashboard() {
                   {keywords.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="p-0">
-                        <div className="bg-surface-hover p-8 md:p-12 text-center border-b border-border-subtle">
-                          <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-surface apple-shadow flex items-center justify-center transform -rotate-6">
-                            <Zap className="w-10 h-10 text-apple-blue" />
+                        <div className="p-8 md:p-12 text-center" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
+                          <div className="w-20 h-20 mx-auto mb-6 rounded-3xl dash-elevated flex items-center justify-center transform -rotate-6">
+                            <Zap className="w-10 h-10" style={{ color: 'var(--section-campaigns)' }} />
                           </div>
                           <h4 className="text-2xl font-black text-primary mb-3 tracking-tight">Zero to Hero in 1-Click</h4>
                           <p className="text-base text-secondary max-w-lg mx-auto mb-10 leading-relaxed">
@@ -526,17 +529,20 @@ export default function Dashboard() {
                           </p>
                           
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-                            {/* Pack 1 */}
                             <button 
                               onClick={() => loadStarterPack('marketing')}
                               disabled={isDeployingPack}
-                              className={`group bg-surface p-6 rounded-2xl text-left border-2 transition-premium ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-border-subtle' : 'border-border-subtle hover:border-apple-blue hover-lift'}`}
+                              className={`group dash-recessed p-6 rounded-2xl text-left border-2 transition-premium ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-transparent' : 'border-transparent dash-glow-hover'}`}
+                              style={isDeployingPack ? {} : { border: '2px solid transparent' }}
+                              onMouseEnter={(e) => { if(!isDeployingPack) (e.currentTarget as HTMLElement).style.borderColor = 'var(--section-campaigns)'; }}
+                              onMouseLeave={(e) => { if(!isDeployingPack) (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; }}
                             >
                               <div className="flex justify-between items-start mb-4">
                                 <Badge variant="primary">B2B Marketing</Badge>
                                 {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
                               </div>
-                              <h5 className="text-lg font-extrabold text-primary mb-2 group-hover:text-apple-blue transition-colors">Growth & Marketing Pack</h5>
+                              <h5 className="text-lg font-extrabold text-primary mb-2 transition-colors"
+                                  style={{ ...(isDeployingPack ? {} : { color: 'var(--text-primary)' }) }}>Growth & Marketing Pack</h5>
                               <p className="text-sm font-bold text-tertiary">+3 Keywords • +9 Comments</p>
                             </button>
 
@@ -544,21 +550,27 @@ export default function Dashboard() {
                             <button 
                               onClick={() => loadStarterPack('tech')}
                               disabled={isDeployingPack}
-                              className={`group bg-surface p-6 rounded-2xl text-left border-2 transition-premium ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-border-subtle' : 'border-border-subtle hover:border-apple-blue hover-lift'}`}
+                              className={`group dash-recessed p-6 rounded-2xl text-left border-2 transition-premium ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-transparent' : 'border-transparent dash-glow-hover'}`}
+                              style={isDeployingPack ? {} : { border: '2px solid transparent' }}
+                              onMouseEnter={(e) => { if(!isDeployingPack) (e.currentTarget as HTMLElement).style.borderColor = 'var(--section-campaigns)'; }}
+                              onMouseLeave={(e) => { if(!isDeployingPack) (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; }}
                             >
                               <div className="flex justify-between items-start mb-4">
                                 <Badge variant="secondary">Tech & SaaS</Badge>
                                 {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
                               </div>
-                              <h5 className="text-lg font-extrabold text-primary mb-2 group-hover:text-apple-blue transition-colors">Software Engineering Pack</h5>
+                              <h5 className="text-lg font-extrabold text-primary mb-2 transition-colors"
+                                  style={{ ...(isDeployingPack ? {} : { color: 'var(--text-primary)' }) }}>Software Engineering Pack</h5>
                               <p className="text-sm font-bold text-tertiary">+3 Keywords • +9 Comments</p>
                             </button>
                           </div>
                         </div>
                       </td>
                     </tr>
-                  ) : keywords.map((kw: any) => (
-                    <tr key={kw.id} className="hover:bg-surface-hover transition-colors">
+                      ) : keywords.map((kw: any) => (
+                    <tr key={kw.id} className="transition-colors"
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--dash-surface-hover)'; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
                       <td className="px-6 py-4">
                         <span className="text-sm font-semibold text-primary">
                           {kw.keyword}
@@ -598,7 +610,7 @@ export default function Dashboard() {
         return (
           <div className="max-w-5xl mx-auto space-y-8">
             {/* Professional Setup Card */}
-            <Card className="overflow-hidden border-2 border-primary-100 shadow-2xl">
+            <Card variant="dashboard" accent="extension" className="overflow-hidden shadow-2xl dash-card">
               <div className="p-8 md:p-12 border-b border-gray-100 bg-gradient-to-br from-gray-900 to-gray-800 text-primary relative">
                 <div className="absolute top-0 right-0 p-12 opacity-10 pointer-events-none">
                   <Shield className="w-48 h-48" />
@@ -627,7 +639,7 @@ export default function Dashboard() {
                             <input 
                               readOnly 
                               value={typeof window !== 'undefined' ? window.location.origin : ''} 
-                              className="flex-1 px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-mono font-bold text-gray-700 outline-none"
+                              className="flex-1 px-4 py-3 dash-input font-mono font-bold outline-none"
                             />
                             <Button variant="secondary" onClick={() => navigator.clipboard.writeText(window.location.origin)}>Copy</Button>
                           </div>
@@ -638,7 +650,7 @@ export default function Dashboard() {
                             <input 
                               readOnly 
                               value={settings.userId || 'Loading...'} 
-                              className="flex-1 px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm font-mono font-bold text-primary-700 outline-none"
+                              className="flex-1 px-4 py-3 dash-input font-mono font-bold outline-none"
                             />
                             <Button variant="secondary" onClick={() => navigator.clipboard.writeText(settings.userId)}>Copy</Button>
                           </div>
@@ -647,7 +659,7 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="bg-primary-50 rounded-3xl p-8 border-2 border-primary-100 flex flex-col justify-center">
+                  <div className="rounded-3xl p-8 dash-recessed flex flex-col justify-center">
                     <h4 className="text-xl font-bold text-primary-900 mb-4 flex items-center gap-2">
                        <Sparkles className="w-6 h-6" /> Install Extension
                     </h4>
@@ -676,7 +688,7 @@ export default function Dashboard() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                     {/* Step 1 */}
-                    <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
+                    <div className="dash-recessed overflow-hidden transition-all shadow-sm group hover-lift border border-border-subtle hover:border-section-extension">
                       <div className="aspect-video bg-gray-50 relative overflow-hidden">
                         <img src="/img/step1.png" alt="Extracting ZIP" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                         <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">01</div>
@@ -691,7 +703,7 @@ export default function Dashboard() {
                     </div>
 
                     {/* Step 2 */}
-                    <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
+                    <div className="dash-recessed overflow-hidden transition-all shadow-sm group hover-lift border border-border-subtle hover:border-section-extension">
                       <div className="aspect-video bg-gray-50 relative overflow-hidden">
                         <img src="/img/step2.png" alt="Developer Mode" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                         <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">02</div>
@@ -706,7 +718,7 @@ export default function Dashboard() {
                     </div>
 
                     {/* Step 3 */}
-                    <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
+                    <div className="dash-recessed overflow-hidden transition-all shadow-sm group hover-lift border border-border-subtle hover:border-section-extension">
                       <div className="aspect-video bg-gray-50 relative overflow-hidden">
                         <img src="/img/step3.png" alt="Load Unpacked" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                         <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">03</div>
@@ -721,7 +733,7 @@ export default function Dashboard() {
                     </div>
 
                     {/* Step 4 */}
-                    <div className="bg-white border-2 border-primary-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group ring-4 ring-primary-50">
+                    <div className="dash-recessed overflow-hidden transition-all shadow-sm group hover-lift border-2" style={{ borderColor: 'var(--section-extension)' }}>
                       <div className="aspect-video bg-primary-50 relative overflow-hidden">
                         <img src="/img/step4.png" alt="Sync and Run" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                         <div className="absolute top-4 left-4 bg-primary-600 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">04</div>
@@ -747,8 +759,8 @@ export default function Dashboard() {
         );
       case 'autoposts':
         return (
-          <Card>
-            <div className="p-6 md:p-8 border-b border-border-subtle bg-surface">
+          <Card variant="dashboard" accent="campaigns">
+            <div className="p-6 md:p-8 flex flex-col gap-4" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
               <div className="flex flex-col gap-4">
                 <div>
                   <h3 className="text-tile-heading text-primary flex items-center gap-2">
@@ -780,8 +792,8 @@ export default function Dashboard() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left bg-surface">
-                <thead className="border-b border-border-subtle bg-surface-hover">
+              <table className="w-full text-left">
+                <thead style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
                   <tr>
                     <th className="px-6 py-4 text-micro-bold uppercase text-secondary">Topic</th>
                     <th className="px-6 py-4 text-micro-bold uppercase text-secondary">Status</th>
@@ -793,13 +805,13 @@ export default function Dashboard() {
                   {autoPosts.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="px-6 py-12 text-center text-secondary">
-                        <Bot className="w-8 h-8 text-tertiary mx-auto mb-3" />
+                        <Bot className="w-8 h-8 mx-auto mb-3" style={{ color: 'var(--section-campaigns)' }} />
                         <p className="text-caption-bold text-primary mb-1">No posts generated yet</p>
                         <p className="text-micro">Enter a topic above to let AI create your first post</p>
                       </td>
                     </tr>
                   ) : autoPosts.map((post) => (
-                    <tr key={post.id} className="hover:bg-surface-hover transition-colors">
+                    <tr key={post.id} className="transition-colors" onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--dash-surface-hover)'; }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
                       <td className="px-6 py-4 max-w-[200px]">
                         <span className="text-caption-bold text-primary line-clamp-2">{post.topic}</span>
                       </td>
@@ -840,10 +852,10 @@ export default function Dashboard() {
             <form onSubmit={saveSettings} className="space-y-6">
 
               {/* Section 1: Mode Selection */}
-              <Card className="overflow-hidden bg-surface border border-border-subtle">
-                <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+              <Card variant="dashboard" accent="settings" className="overflow-hidden">
+                <div className="px-6 py-4" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
                   <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
-                    <Search size={14} className="text-apple-blue" /> Operating Mode
+                    <Search size={14} style={{ color: 'var(--section-settings)' }} /> Operating Mode
                   </h3>
                 </div>
                 <div className="p-6">
@@ -863,10 +875,10 @@ export default function Dashboard() {
               </Card>
 
               {/* Section 2: Search Limits */}
-              <Card className="overflow-hidden bg-surface border border-border-subtle">
-                <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+              <Card variant="dashboard" accent="settings" className="overflow-hidden">
+                <div className="px-6 py-4" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
                   <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
-                    <Shield size={14} className="text-success" /> Search Limits
+                    <Shield size={14} style={{ color: 'var(--section-settings)' }} /> Search Limits
                   </h3>
                 </div>
                 <div className="p-6 space-y-5">
@@ -874,27 +886,27 @@ export default function Dashboard() {
                     <div>
                       <label className="block text-micro-bold text-secondary uppercase mb-1.5">Searches / Hour</label>
                       <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="12"
-                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary focus:border-apple-blue transition-all outline-none" />
+                        className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                     <div>
                       <label className="block text-micro-bold text-secondary uppercase mb-1.5">Searches / Day</label>
                       <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 20} min="1" max="60"
-                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary focus:border-apple-blue transition-all outline-none" />
+                        className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                     <div>
                       <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Delay (min)</label>
                       <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="1" max="30"
-                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary focus:border-apple-blue transition-all outline-none" />
+                        className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                     <div>
                       <label className="block text-micro-bold text-secondary uppercase mb-1.5">Keywords / Cycle</label>
                       <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 3} min="1" max="10"
-                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary focus:border-apple-blue transition-all outline-none" />
+                        className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                   </div>
 
                   {/* Schedule Controls */}
-                  <div className="border-t border-border-subtle pt-5 space-y-4">
+                  <div className="pt-5 space-y-4" style={{ borderTop: '1px solid var(--dash-border)' }}>
                     <div className="flex flex-wrap gap-x-6 gap-y-3">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" name="workHoursOnly" defaultChecked={settings.workHoursOnly ?? true}
@@ -911,13 +923,13 @@ export default function Dashboard() {
                       <div>
                         <label className="block text-micro-bold text-secondary mb-1">Start hour</label>
                         <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
-                          className="w-20 px-3 py-2 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-success" />
+                          className="w-20 px-3 py-2 dash-input outline-none" />
                       </div>
                       <span className="text-tertiary mt-4">&rarr;</span>
                       <div>
                         <label className="block text-micro-bold text-secondary mb-1">End hour</label>
                         <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
-                          className="w-20 px-3 py-2 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-success" />
+                          className="w-20 px-3 py-2 dash-input outline-none" />
                       </div>
                     </div>
                   </div>
@@ -927,10 +939,10 @@ export default function Dashboard() {
               {/* Section 3: Targeting + Delays (side-by-side on desktop) */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Targeting Criteria */}
-                <Card className="overflow-hidden bg-surface border border-border-subtle">
-                  <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+                <Card variant="dashboard" accent="settings" className="overflow-hidden">
+                  <div className="px-6 py-4" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
                     <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
-                      <Search size={14} className="text-warning" /> Targeting Criteria
+                      <Search size={14} style={{ color: 'var(--section-settings)' }} /> Targeting Criteria
                     </h3>
                   </div>
                   <div className="p-6">
@@ -938,32 +950,32 @@ export default function Dashboard() {
                       <div>
                         <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Likes</label>
                         <input type="number" name="minLikes" defaultValue={settings.minLikes ?? 10}
-                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-warning" />
+                          className="w-full px-3 py-2.5 dash-input outline-none" />
                       </div>
                       <div>
                         <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Likes</label>
                         <input type="number" name="maxLikes" defaultValue={settings.maxLikes ?? 10000}
-                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-warning" />
+                          className="w-full px-3 py-2.5 dash-input outline-none" />
                       </div>
                       <div>
                         <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Comments</label>
                         <input type="number" name="minComments" defaultValue={settings.minComments ?? 2}
-                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-warning" />
+                          className="w-full px-3 py-2.5 dash-input outline-none" />
                       </div>
                       <div>
                         <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Comments</label>
                         <input type="number" name="maxComments" defaultValue={settings.maxComments ?? 1000}
-                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-warning" />
+                          className="w-full px-3 py-2.5 dash-input outline-none" />
                       </div>
                     </div>
                   </div>
                 </Card>
 
                 {/* Safety Delays */}
-                <Card className="overflow-hidden bg-surface border border-border-subtle">
-                  <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+                <Card variant="dashboard" accent="settings" className="overflow-hidden">
+                  <div className="px-6 py-4" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
                     <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
-                      <Bot size={14} className="text-error" /> Safety Delays
+                      <Bot size={14} style={{ color: 'var(--section-settings)' }} /> Safety Delays
                     </h3>
                   </div>
                   <div className="p-6 space-y-4">
@@ -971,18 +983,18 @@ export default function Dashboard() {
                       <div>
                         <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Delay (Mins)</label>
                         <input type="number" name="minDelayMins" defaultValue={settings.minDelayMins ?? 15}
-                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-error" />
+                          className="w-full px-3 py-2.5 dash-input outline-none" />
                       </div>
                       <div>
                         <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Delay (Mins)</label>
                         <input type="number" name="maxDelayMins" defaultValue={settings.maxDelayMins ?? 45}
-                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-error" />
+                          className="w-full px-3 py-2.5 dash-input outline-none" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Comments / Day</label>
                       <input type="number" name="maxCommentsPerDay" defaultValue={settings.maxCommentsPerDay ?? 20}
-                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-error" />
+                        className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                     <p className="text-micro text-tertiary">Randomized delays emulate human behavior.</p>
                   </div>
@@ -1098,21 +1110,31 @@ export default function Dashboard() {
   };
 
   return (
-    <>
+    <div className="dashboard-scope flex h-screen">
       <div id="nexora-connect-data" data-user-id={settings.userId || ''} data-dashboard-url={typeof window !== 'undefined' ? window.location.origin : ''} style={{ display: 'none' }} />
       <OnboardingWizard isOpen={showWizard} onClose={() => setShowWizard(false)} loadStarterPack={loadStarterPack} isDeployingPack={isDeployingPack} />
 
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} systemActive={systemActive} />
 
-      <div className="flex-1 flex flex-col overflow-hidden bg-page">
+      <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--dash-bg)' }}>
         <Header title={activeTab} sessionConnected={true} />
-        <main className="flex-1 overflow-y-auto p-6 md:p-8 relative">
+        <main className="flex-1 overflow-y-auto p-6 md:p-8 relative scrollbar-thin">
           <div className="max-w-[1400px] mx-auto pb-20">
-            {renderContent()}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, scale: 0.985, y: 6 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.985, y: -6 }}
+                transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
+              >
+                {renderContent()}
+              </motion.div>
+            </AnimatePresence>
           </div>
         </main>
       </div>
-    </>
+    </div>
   );
 }
 

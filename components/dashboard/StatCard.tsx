@@ -2,7 +2,6 @@
 
 import React from 'react';
 import { motion } from 'motion/react';
-import Card from '@/components/ui/Card';
 
 interface StatCardProps {
   title: string;
@@ -16,22 +15,13 @@ interface StatCardProps {
   delay?: number;
 }
 
-const iconBgMap: Record<string, string> = {
-  primary: 'bg-apple-blue/15 text-apple-blue',
-  secondary: 'bg-surface-elevated text-secondary',
-  accent: 'bg-apple-blue/15 text-apple-blue',
-  success: 'bg-success/15 text-success',
-  warning: 'bg-warning/15 text-warning',
-  gray: 'bg-surface-hover text-tertiary'
-};
-
-const progressColorMap: Record<string, string> = {
-  primary: 'bg-apple-blue',
-  secondary: 'bg-secondary',
-  accent: 'bg-apple-blue',
-  success: 'bg-success',
-  warning: 'bg-warning',
-  gray: 'bg-secondary'
+const iconAccentMap: Record<string, string> = {
+  primary: 'var(--section-analytics)',
+  secondary: 'var(--text-secondary)',
+  accent: 'var(--section-analytics)',
+  success: 'var(--section-activity)',
+  warning: 'var(--section-settings)',
+  gray: 'var(--text-tertiary)',
 };
 
 export default function StatCard({
@@ -39,6 +29,7 @@ export default function StatCard({
   trend, trendUp, maxValue, showProgress = false, delay = 0
 }: StatCardProps) {
   const progressPercentage = maxValue ? Math.min(100, (Number(value) / maxValue) * 100) : 0;
+  const accent = iconAccentMap[iconColor];
 
   return (
     <motion.div
@@ -46,7 +37,7 @@ export default function StatCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay }}
     >
-      <Card className="h-full">
+      <div className="dash-card h-full p-5 md:p-7 dash-glow-hover">
         <div className="flex items-start justify-between mb-3">
           <div className="flex-1">
             <p className="text-micro text-secondary mb-1.5">{title}</p>
@@ -65,22 +56,26 @@ export default function StatCard({
               </div>
             )}
           </div>
-          <div className={`p-2.5 rounded-lg flex-shrink-0 ${iconBgMap[iconColor]}`}>
-            {icon}
+          <div className="p-2.5 rounded-lg flex-shrink-0"
+               style={{ background: `color-mix(in srgb, ${accent} 12%, transparent)` }}>
+            <div style={{ color: accent }}>
+              {icon}
+            </div>
           </div>
         </div>
 
         {showProgress && maxValue && (
-          <div className="w-full bg-surface-hover rounded-full h-1.5 overflow-hidden">
+          <div className="w-full rounded-full h-1.5 overflow-hidden" style={{ background: 'var(--dash-surface-3)' }}>
             <motion.div
               initial={{ width: 0 }}
               animate={{ width: `${progressPercentage}%` }}
               transition={{ duration: 1, delay: delay + 0.2, ease: 'easeOut' }}
-              className={`h-full rounded-full ${progressColorMap[iconColor]}`}
+              className="h-full rounded-full"
+              style={{ background: accent }}
             />
           </div>
         )}
-      </Card>
+      </div>
     </motion.div>
   );
 }
