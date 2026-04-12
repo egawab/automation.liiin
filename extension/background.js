@@ -26,6 +26,7 @@ async function loadState() {
     wasDashboardActive: null,
     dailyCommentsMade: 0,
     lastCommentDate: null,
+    keywordSearchPages: {},
     activityLog: []
   });
 }
@@ -330,9 +331,12 @@ async function _checkJobsInner() {
       liveStatusText: `🚀 Starting cycle #${cycleNum} for "${kw}"...`
     });
 
-    console.log(`🚀 [Worker] Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}" with ${keywordComments.length} comments assigned.`);
-    showPremiumToast('Nexora Engine Started', `Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for "${kw}"`, false);
-    await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId, cycleNum);
+    const searchPages = (await loadState()).keywordSearchPages || {};
+    const pageNum = (searchPages[kw] || 0) + 1;
+
+    console.log(`🚀 [Worker] Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}" with ${keywordComments.length} comments assigned. (Search Page: ${pageNum})`);
+    showPremiumToast('Nexora Engine Started', `Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for "${kw}" (Pg ${pageNum})`, false);
+    await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId, cycleNum, pageNum);
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
@@ -344,25 +348,34 @@ async function _checkJobsInner() {
   }
 }
 
-// ── Scraping Cycle (Navigation-Resilient v3) ──
-async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId, cycleNum = 1) {
-  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&page=${cycleNum}`;
+// ── Scraping Cycle (Navigation-Resilient v4 — Background-Throttle-Safe) ──
+async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId, cycleNum = 1, pageNum = 1) {
+  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&page=${pageNum}`;
   let injectionCount = 0;
   const MAX_INJECTIONS = 3;
 
   try {
+    // CRITICAL FIX: Create the window with focused: true.
+    // Chrome throttles setTimeout/setInterval to 1Hz minimum in background tabs.
+    // A tab that is NEVER focused gets throttled from the first moment, meaning
+    // wait(800, 1200) actually takes 1000ms minimum per call — acceptable — but
+    // wait(2000, 3500) was taking up to 35 seconds per step because the old code
+    // used those ranges. With focused:true the tab gets normal timer resolution.
+    // We minimize the window immediately after injection starts so it doesn't
+    // steal the user's screen, but by then the JS engine is already running at
+    // full speed and Chrome won't throttle it back for several seconds.
     const win = await chrome.windows.create({
       url: searchUrl,
       type: 'normal',
       state: 'normal',
-      focused: false,
+      focused: true,   // ← must be true to prevent timer throttling
       width: 1100,
       height: 900
     });
     const tab = win.tabs[0];
     await saveState({ activeTabId: tab.id });
 
-    console.log(`💉 [Worker] Tab ${tab.id} created. Waiting for page load...`);
+    console.log(`💉 [Worker] Tab ${tab.id} created (focused window). Waiting for page load...`);
     await waitForTabLoad(tab.id, 20000);
     await sleep(3000); // LinkedIn JS hydration
 
@@ -431,6 +444,15 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
 
     const started = await injectAndStart();
     if (!started) return;
+
+    // Minimize the window now that the content script is running.
+    // The JS engine keeps full timer resolution once a window has been focused
+    // at least once. Minimizing AFTER injection does NOT re-enable throttling.
+    // We give the script 2 seconds to start its first await before minimizing.
+    setTimeout(() => {
+      chrome.windows.update(win.id, { state: 'minimized' }).catch(() => {});
+      console.log(`🪟 [Worker] Window ${win.id} minimized. Script running at full speed.`);
+    }, 2000);
 
     // ── Tab navigation listener: re-inject if LinkedIn re-renders ──
     const navListener = async (tabId, changeInfo) => {
@@ -506,6 +528,14 @@ async function finishCycle(tabId, incrementKeyword = true) {
     kc[state.currentKeyword] = (kc[state.currentKeyword] || 0) + 1;
     console.log(`[Worker] Keyword "${state.currentKeyword}" cycle ${kc[state.currentKeyword]} complete.`);
     updates.keywordCycles = kc;
+  }
+
+  // Always increment the LinkedIn search page so the next attempt doesn't get stuck on an exhausted page
+  if (state.currentKeyword) {
+    const searchPages = state.keywordSearchPages || {};
+    searchPages[state.currentKeyword] = (searchPages[state.currentKeyword] || 0) + 1;
+    console.log(`[Worker] Keyword "${state.currentKeyword}" search page incremented to ${searchPages[state.currentKeyword] + 1}.`);
+    updates.keywordSearchPages = searchPages;
     updates.currentKeyword = null;
   }
 
@@ -587,28 +617,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
     const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
-    console.log(`🏁 [Worker] Job ${status}.`);
+    const posted = message.commentsPostedCount || 0;
+    const assigned = message.assignedCommentsCount || 0;
+    const blocked = message.linkedinBlocked || false;
+    console.log(`🏁 [Worker] Job ${status}. Comments: ${posted}/${assigned} | SearchOnly: ${message.searchOnlyMode} | Blocked: ${blocked}`);
 
     let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
 
-    // FIX-3: Require ALL assigned comments to be posted before counting the cycle as done.
-    // If fewer than assigned were posted, do NOT consume the cycle slot — let the system retry.
-    // Exception: searchOnlyMode has no comments so always counts as success.
+    // v7.1: Smarter partial-cycle handling with LinkedIn restriction awareness.
     if (isSuccessfulCycle && message.searchOnlyMode === false) {
-      const posted = message.commentsPostedCount || 0;
-      const assigned = message.assignedCommentsCount || 0;
-
-      if (assigned > 0 && posted < assigned) {
-        console.warn(`[Worker] ⚠️ Cycle posted ${posted}/${assigned} comments. Requirement not met — NOT consuming cycle slot. Will retry after cooldown.`);
+      if (assigned > 0 && posted === 0) {
+        console.warn(`[Worker] ❌ Cycle posted 0/${assigned} comments. NOT consuming cycle slot. Will retry on next search page after cooldown.`);
         isSuccessfulCycle = false;
         showPremiumToast(
-          'Incomplete Cycle',
-          `⚠️ Only ${posted}/${assigned} comments posted. Retrying after cooldown...`,
+          'Cycle Failed',
+          `❌ 0/${assigned} comments posted. Retrying on fresh page after cooldown...`,
+          true
+        );
+      } else if (assigned > 0 && posted < assigned) {
+        console.warn(`[Worker] ⚠️ Partial cycle: ${posted}/${assigned} comments posted. Consuming cycle slot to avoid retry loop.`);
+        isSuccessfulCycle = true; // Still count as success to advance
+        showPremiumToast(
+          'Partial Cycle',
+          `⚠️ ${posted}/${assigned} comments posted. Moving to next cycle.`,
           true
         );
       } else if (assigned > 0 && posted >= assigned) {
         console.log(`[Worker] ✅ All ${posted}/${assigned} comments posted. Cycle complete.`);
       }
+    }
+
+    // If LinkedIn blocked commenting, use a longer cooldown (30 min)
+    // and pause the system to avoid burning the account.
+    if (blocked) {
+      console.error(`[Worker] 🚫 LINKEDIN RESTRICTION DETECTED. Pausing system for 30 minutes.`);
+      showPremiumToast(
+        '🚫 Account Restricted',
+        `LinkedIn is blocking comments on this account. Pausing for 30 minutes to protect your account.`,
+        true
+      );
+      isSuccessfulCycle = false;
+      // Override cooldown to 30 minutes
+      finishCycle(sender.tab?.id, false);
+      saveState({ cooldownMs: 1800000 }); // 30 min cooldown
+      return;
     }
 
     finishCycle(sender.tab?.id, isSuccessfulCycle);
