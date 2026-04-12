@@ -3,140 +3,66 @@
 import toast, { Toaster, ToastOptions } from 'react-hot-toast';
 import { CheckCircle, AlertCircle, Info, AlertTriangle, X } from 'lucide-react';
 
-// Custom toast function with our design system
+const ToastContent = ({ icon, title, message, onClose, accentColor }: {
+  icon: React.ReactNode; title: string; message: string; onClose: () => void; accentColor: string;
+}) => (
+  <div className="flex items-start gap-3">
+    <div className="flex-shrink-0" style={{ color: accentColor }}>{icon}</div>
+    <div className="flex-1 min-w-0">
+      <h4 className="text-caption-bold text-white">{title}</h4>
+      <p className="text-micro text-[rgba(255,255,255,0.56)] mt-0.5">{message}</p>
+    </div>
+    <button onClick={onClose} className="text-[rgba(255,255,255,0.32)] hover:text-white transition-colors flex-shrink-0">
+      <X className="w-4 h-4" />
+    </button>
+  </div>
+);
+
+const toastBase = 'bg-[#1d1d1f] rounded-lg apple-shadow p-4 max-w-sm pointer-events-auto border border-white/5';
+
 export const showToast = {
   success: (message: string, options?: ToastOptions) => {
-    return toast.custom(
-      (t) => (
-        <div
-          className={`${
-            t.visible ? 'animate-in slide-in-from-right' : 'animate-out slide-out-to-right'
-          } bg-white rounded-2xl border border-gray-100 shadow-2xl shadow-gray-900/10 p-4 pr-12 max-w-md pointer-events-auto`}
-        >
-          <div className="flex items-start gap-3">
-            <div className="p-2 bg-success-100 rounded-xl flex-shrink-0">
-              <CheckCircle className="w-5 h-5 text-success-600" />
-            </div>
-            <div className="flex-1 pt-0.5">
-              <h4 className="text-sm font-bold text-gray-900">Success!</h4>
-              <p className="text-sm text-gray-600 mt-0.5">{message}</p>
-            </div>
-            <button
-              onClick={() => toast.dismiss(t.id)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      ),
-      options
-    );
+    return toast.custom((t) => (
+      <div className={`${t.visible ? 'animate-in slide-in-from-right' : 'animate-out slide-out-to-right'} ${toastBase}`}>
+        <ToastContent icon={<CheckCircle className="w-5 h-5" />} title="Success" message={message} onClose={() => toast.dismiss(t.id)} accentColor="#34c759" />
+      </div>
+    ), options);
   },
 
   error: (message: string, options?: ToastOptions) => {
-    return toast.custom(
-      (t) => (
-        <div
-          className={`${
-            t.visible ? 'animate-in slide-in-from-right' : 'animate-out slide-out-to-right'
-          } bg-white rounded-2xl border border-gray-100 shadow-2xl shadow-gray-900/10 p-4 pr-12 max-w-md pointer-events-auto`}
-        >
-          <div className="flex items-start gap-3">
-            <div className="p-2 bg-error-100 rounded-xl flex-shrink-0">
-              <AlertCircle className="w-5 h-5 text-error-600" />
-            </div>
-            <div className="flex-1 pt-0.5">
-              <h4 className="text-sm font-bold text-gray-900">Error</h4>
-              <p className="text-sm text-gray-600 mt-0.5">{message}</p>
-            </div>
-            <button
-              onClick={() => toast.dismiss(t.id)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      ),
-      options
-    );
+    return toast.custom((t) => (
+      <div className={`${t.visible ? 'animate-in slide-in-from-right' : 'animate-out slide-out-to-right'} ${toastBase}`}>
+        <ToastContent icon={<AlertCircle className="w-5 h-5" />} title="Error" message={message} onClose={() => toast.dismiss(t.id)} accentColor="#ff3b30" />
+      </div>
+    ), options);
   },
 
   warning: (message: string, options?: ToastOptions) => {
-    return toast.custom(
-      (t) => (
-        <div
-          className={`${
-            t.visible ? 'animate-in slide-in-from-right' : 'animate-out slide-out-to-right'
-          } bg-white rounded-2xl border border-gray-100 shadow-2xl shadow-gray-900/10 p-4 pr-12 max-w-md pointer-events-auto`}
-        >
-          <div className="flex items-start gap-3">
-            <div className="p-2 bg-warning-100 rounded-xl flex-shrink-0">
-              <AlertTriangle className="w-5 h-5 text-warning-600" />
-            </div>
-            <div className="flex-1 pt-0.5">
-              <h4 className="text-sm font-bold text-gray-900">Warning</h4>
-              <p className="text-sm text-gray-600 mt-0.5">{message}</p>
-            </div>
-            <button
-              onClick={() => toast.dismiss(t.id)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      ),
-      options
-    );
+    return toast.custom((t) => (
+      <div className={`${t.visible ? 'animate-in slide-in-from-right' : 'animate-out slide-out-to-right'} ${toastBase}`}>
+        <ToastContent icon={<AlertTriangle className="w-5 h-5" />} title="Warning" message={message} onClose={() => toast.dismiss(t.id)} accentColor="#ff9f0a" />
+      </div>
+    ), options);
   },
 
   info: (message: string, options?: ToastOptions) => {
-    return toast.custom(
-      (t) => (
-        <div
-          className={`${
-            t.visible ? 'animate-in slide-in-from-right' : 'animate-out slide-out-to-right'
-          } bg-white rounded-2xl border border-gray-100 shadow-2xl shadow-gray-900/10 p-4 pr-12 max-w-md pointer-events-auto`}
-        >
-          <div className="flex items-start gap-3">
-            <div className="p-2 bg-info-100 rounded-xl flex-shrink-0">
-              <Info className="w-5 h-5 text-info-600" />
-            </div>
-            <div className="flex-1 pt-0.5">
-              <h4 className="text-sm font-bold text-gray-900">Info</h4>
-              <p className="text-sm text-gray-600 mt-0.5">{message}</p>
-            </div>
-            <button
-              onClick={() => toast.dismiss(t.id)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      ),
-      options
-    );
+    return toast.custom((t) => (
+      <div className={`${t.visible ? 'animate-in slide-in-from-right' : 'animate-out slide-out-to-right'} ${toastBase}`}>
+        <ToastContent icon={<Info className="w-5 h-5" />} title="Info" message={message} onClose={() => toast.dismiss(t.id)} accentColor="#0071e3" />
+      </div>
+    ), options);
   },
-  
-  // Promise-based toast for async operations
+
   promise: toast.promise
 };
 
-// Toaster component to be added to root layout
 export function ToastProvider() {
   return (
     <Toaster
       position="top-right"
       toastOptions={{
         duration: 4000,
-        style: {
-          background: 'transparent',
-          boxShadow: 'none',
-          padding: 0,
-        },
+        style: { background: 'transparent', boxShadow: 'none', padding: 0 },
       }}
     />
   );

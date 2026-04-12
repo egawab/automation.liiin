@@ -2,174 +2,118 @@
 
 @theme {
   /* ===================================
-     LEGACY COLORS (Backward Compatible)
+     APPLE DESIGN SYSTEM — Color Tokens
+     Source: DESIGN.md
      =================================== */
-  --color-brand-orange-50: #fff0e5;
-  --color-brand-orange-100: #ffdccc;
-  --color-brand-orange-500: #ff6b35;
-  --color-brand-orange-600: #e5531d;
-  --color-brand-zinc-800: #27272a;
-  --color-brand-zinc-900: #18181b;
-  
-  /* ===================================
-     PRIMARY COLORS (Purple - automatio.ai style)
-     =================================== */
-  --color-primary-50: #faf5ff;
-  --color-primary-100: #f3e8ff;
-  --color-primary-200: #e9d5ff;
-  --color-primary-300: #d8b4fe;
-  --color-primary-400: #c084fc;
-  --color-primary-500: #a855f7;      /* Main purple */
-  --color-primary-600: #9333ea;
-  --color-primary-700: #7e22ce;
-  --color-primary-800: #6b21a8;
-  --color-primary-900: #581c87;
-  
-  /* ===================================
-     SECONDARY COLORS (Cyan/Blue - automatio.ai)
-     =================================== */
-  --color-secondary-50: #ecfeff;
-  --color-secondary-100: #cffafe;
-  --color-secondary-200: #a5f3fc;
-  --color-secondary-300: #67e8f9;
-  --color-secondary-400: #22d3ee;
-  --color-secondary-500: #06b6d4;
-  --color-secondary-600: #0891b2;
-  --color-secondary-700: #0e7490;
-  --color-secondary-800: #155e75;
-  --color-secondary-900: #164e63;
-  
-  /* ===================================
-     ACCENT COLORS (Pink/Magenta)
-     =================================== */
-  --color-accent-50: #fdf4ff;
-  --color-accent-100: #fae8ff;
-  --color-accent-200: #f5d0fe;
-  --color-accent-300: #f0abfc;
-  --color-accent-400: #e879f9;
-  --color-accent-500: #d946ef;
-  --color-accent-600: #c026d3;
-  --color-accent-700: #a21caf;
-  --color-accent-800: #86198f;
-  --color-accent-900: #701a75;
-  
-  /* ===================================
-     NEUTRAL COLORS (Dark Theme Base)
-     =================================== */
-  --color-gray-50: #f9fafb;
-  --color-gray-100: #f3f4f6;
-  --color-gray-200: #e5e7eb;
-  --color-gray-300: #d1d5db;
-  --color-gray-400: #9ca3af;
-  --color-gray-500: #6b7280;
-  --color-gray-600: #4b5563;
-  --color-gray-700: #374151;
-  --color-gray-800: #1f2937;
-  --color-gray-900: #111827;
-  --color-gray-950: #030712;
-  
-  /* Dark theme backgrounds */
-  --color-dark-bg: #0a0a0f;
-  --color-dark-surface: #13131a;
-  --color-dark-elevated: #1a1a24;
-  
-  /* ===================================
-     STATUS COLORS
-     =================================== */
-  /* Success */
+
+  /* Primary Surfaces */
+  --color-apple-black: #000000;
+  --color-apple-white: #ffffff;
+  --color-apple-gray: #f5f5f7;
+  --color-apple-nearblack: #1d1d1f;
+
+  /* Interactive — Single accent */
+  --color-apple-blue: #0071e3;
+  --color-apple-link: #0066cc;
+  --color-apple-link-dark: #2997ff;
+
+  /* Dark Surfaces */
+  --color-dark-1: #272729;
+  --color-dark-2: #262628;
+  --color-dark-3: #28282a;
+  --color-dark-4: #2a2a2d;
+  --color-dark-5: #242426;
+
+  /* Button States */
+  --color-btn-active: #ededf2;
+  --color-btn-default: #fafafc;
+
+  /* Status Colors (kept for dashboard functionality) */
   --color-success-50: #ecfdf5;
   --color-success-100: #d1fae5;
-  --color-success-500: #10b981;
-  --color-success-600: #059669;
-  --color-success-700: #047857;
-  
-  /* Warning */
+  --color-success-500: #34c759;
+  --color-success-600: #30b350;
+
   --color-warning-50: #fffbeb;
   --color-warning-100: #fef3c7;
-  --color-warning-200: #fde68a;
-  --color-warning-500: #f59e0b;
-  --color-warning-600: #d97706;
-  --color-warning-700: #b45309;
-  --color-warning-800: #92400e;
-  --color-warning-900: #78350f;
-  
-  /* Error */
+  --color-warning-500: #ff9f0a;
+  --color-warning-600: #e68f09;
+
   --color-error-50: #fef2f2;
   --color-error-100: #fee2e2;
-  --color-error-500: #ef4444;
-  --color-error-600: #dc2626;
-  
-  /* Info */
-  --color-info-50: #eff6ff;
-  --color-info-100: #dbeafe;
-  --color-info-500: #3b82f6;
-  --color-info-600: #2563eb;
-  
+  --color-error-500: #ff3b30;
+  --color-error-600: #e03530;
+
+  /* Gray scale for Tailwind compatibility */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f5f5f7;
+  --color-gray-200: #e8e8ed;
+  --color-gray-300: #d2d2d7;
+  --color-gray-400: #86868b;
+  --color-gray-500: #6e6e73;
+  --color-gray-600: #424245;
+  --color-gray-700: #333336;
+  --color-gray-800: #1d1d1f;
+  --color-gray-900: #000000;
+  --color-gray-950: #000000;
+
   /* ===================================
-     TYPOGRAPHY
+     TYPOGRAPHY — SF Pro Fallback Chain
      =================================== */
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
-  
-  /* Font Sizes */
-  --font-size-xs: 0.75rem;        /* 12px */
-  --font-size-sm: 0.875rem;       /* 14px */
-  --font-size-base: 1rem;         /* 16px */
-  --font-size-lg: 1.125rem;       /* 18px */
-  --font-size-xl: 1.25rem;        /* 20px */
-  --font-size-2xl: 1.5rem;        /* 24px */
-  --font-size-3xl: 1.875rem;      /* 30px */
-  --font-size-4xl: 2.25rem;       /* 36px */
-  --font-size-5xl: 3rem;          /* 48px */
-  --font-size-6xl: 3.75rem;       /* 60px */
-  --font-size-7xl: 4.5rem;        /* 72px */
-  
+  --font-sans: "SF Pro Display", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", ui-sans-serif, sans-serif;
+
+  /* Font Sizes — Apple Scale */
+  --font-size-nano: 0.625rem;    /* 10px */
+  --font-size-xs: 0.75rem;       /* 12px */
+  --font-size-sm: 0.875rem;      /* 14px */
+  --font-size-base: 1.0625rem;   /* 17px — Apple body */
+  --font-size-lg: 1.125rem;      /* 18px */
+  --font-size-xl: 1.3125rem;     /* 21px */
+  --font-size-2xl: 1.5rem;       /* 24px */
+  --font-size-3xl: 1.75rem;      /* 28px */
+  --font-size-4xl: 2.125rem;     /* 34px */
+  --font-size-5xl: 2.5rem;       /* 40px */
+  --font-size-6xl: 3.5rem;       /* 56px — Apple hero */
+
   /* ===================================
      SPACING (8px base system)
      =================================== */
   --spacing-0: 0;
   --spacing-px: 1px;
-  --spacing-0\.5: 0.125rem;       /* 2px */
-  --spacing-1: 0.25rem;           /* 4px */
-  --spacing-2: 0.5rem;            /* 8px */
-  --spacing-3: 0.75rem;           /* 12px */
-  --spacing-4: 1rem;              /* 16px */
-  --spacing-5: 1.25rem;           /* 20px */
-  --spacing-6: 1.5rem;            /* 24px */
-  --spacing-8: 2rem;              /* 32px */
-  --spacing-10: 2.5rem;           /* 40px */
-  --spacing-12: 3rem;             /* 48px */
-  --spacing-16: 4rem;             /* 64px */
-  --spacing-20: 5rem;             /* 80px */
-  --spacing-24: 6rem;             /* 96px */
-  
+  --spacing-0\.5: 0.125rem;
+  --spacing-1: 0.25rem;
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --spacing-5: 1.25rem;
+  --spacing-6: 1.5rem;
+  --spacing-8: 2rem;
+  --spacing-10: 2.5rem;
+  --spacing-12: 3rem;
+  --spacing-16: 4rem;
+  --spacing-20: 5rem;
+  --spacing-24: 6rem;
+
   /* ===================================
-     BORDER RADIUS
+     BORDER RADIUS — Apple Scale
      =================================== */
-  --radius-sm: 0.375rem;          /* 6px */
-  --radius-base: 0.5rem;          /* 8px */
-  --radius-md: 0.75rem;           /* 12px */
-  --radius-lg: 1rem;              /* 16px */
-  --radius-xl: 1.5rem;            /* 24px */
-  --radius-2xl: 2rem;             /* 32px */
-  --radius-3xl: 3rem;             /* 48px */
+  --radius-sm: 5px;
+  --radius-base: 8px;
+  --radius-md: 11px;
+  --radius-lg: 12px;
+  --radius-pill: 980px;
   --radius-full: 9999px;
-  
+
   /* ===================================
-     SHADOWS
+     SHADOWS — Apple (single soft diffused)
      =================================== */
-  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-  --shadow-base: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --shadow-md: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-  --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
-  --shadow-xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
-  --shadow-2xl: 0 50px 100px -20px rgb(0 0 0 / 0.3);
-  
-  /* Colored Shadows */
-  --shadow-primary: 0 10px 25px -5px rgb(255 107 53 / 0.2);
-  --shadow-secondary: 0 10px 25px -5px rgb(122 90 248 / 0.2);
-  --shadow-accent: 0 10px 25px -5px rgb(46 144 250 / 0.2);
-  
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow-base: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
+  --shadow-md: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
+  --shadow-lg: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
+  --shadow-xl: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
+
   /* ===================================
      TRANSITIONS
      =================================== */
@@ -181,340 +125,233 @@
 
 @layer base {
   body {
-    @apply bg-[#0a0a0f] text-white font-sans antialiased;
+    @apply bg-black text-white font-sans antialiased;
+    font-size: 17px;
+    line-height: 1.47;
+    letter-spacing: -0.374px;
   }
 }
 
 @layer utilities {
-  .bg-grid-pattern {
-    background-image: 
-      linear-gradient(to right, rgba(168, 85, 247, 0.05) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(168, 85, 247, 0.05) 1px, transparent 1px);
-    background-size: 40px 40px;
-    background-position: center top;
-  }
-  
+  /* ===================================
+     APPLE NAVIGATION GLASS
+     =================================== */
   .glass-nav {
-    @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-xl;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
   }
-  
-  /* Dark theme mesh gradient background */
-  .dark-mesh-bg {
-    background: 
-      radial-gradient(at 0% 0%, rgba(168, 85, 247, 0.2) 0px, transparent 50%),
-      radial-gradient(at 100% 0%, rgba(6, 182, 212, 0.2) 0px, transparent 50%),
-      radial-gradient(at 100% 100%, rgba(217, 70, 239, 0.2) 0px, transparent 50%),
-      radial-gradient(at 0% 100%, rgba(168, 85, 247, 0.15) 0px, transparent 50%),
-      #0a0a0f;
-  }
-  
-  /* Glowing text effect */
-  .glow-text {
-    text-shadow: 
-      0 0 20px rgba(168, 85, 247, 0.6),
-      0 0 40px rgba(168, 85, 247, 0.4),
-      0 0 60px rgba(168, 85, 247, 0.3);
-  }
-  
-  /* Neon border glow */
-  .neon-border {
-    box-shadow: 
-      0 0 10px rgba(168, 85, 247, 0.6),
-      0 0 20px rgba(168, 85, 247, 0.4),
-      0 0 30px rgba(168, 85, 247, 0.3),
-      inset 0 0 10px rgba(168, 85, 247, 0.2);
-  }
-  
-  /* Glass morphism enhanced for dark theme */
-  .glass-enhanced {
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 
-      0 8px 32px 0 rgba(0, 0, 0, 0.5),
-      inset 0 0 20px rgba(255, 255, 255, 0.05);
-  }
-  
-  /* Animated gradient text */
-  .gradient-text {
-    background: linear-gradient(
-      90deg,
-      #a855f7,
-      #06b6d4,
-      #d946ef,
-      #a855f7
-    );
-    background-size: 200% auto;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: gradient-shift 3s linear infinite;
-  }
-  
-  @keyframes gradient-shift {
-    0% { background-position: 0% center; }
-    100% { background-position: 200% center; }
-  }
-  
-  /* Neon button */
-  .neon-button {
-    position: relative;
-    overflow: hidden;
-  }
-  
-  .neon-button::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
-    transition: left 0.5s;
-  }
-  
-  .neon-button:hover::before {
-    left: 100%;
-  }
-  
-  /* Premium Amber Accent Glow */
-  .amber-glow {
-    box-shadow: 
-      0 0 20px rgba(217, 119, 6, 0.3),
-      0 0 40px rgba(217, 119, 6, 0.2),
-      0 0 60px rgba(217, 119, 6, 0.1);
-  }
-  
-  /* Subtle shimmer effect for premium elements */
-  @keyframes shimmer {
-    0% {
-      background-position: -1000px 0;
-    }
-    100% {
-      background-position: 1000px 0;
-    }
-  }
-  
-  .shimmer {
-    animation: shimmer 8s infinite linear;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(251, 191, 36, 0.05) 50%,
-      transparent 100%
-    );
-    background-size: 1000px 100%;
-  }
-  
-  /* Floating animation for particles */
-  @keyframes float {
-    0%, 100% {
-      transform: translateY(0px) translateX(0px);
-    }
-    25% {
-      transform: translateY(-20px) translateX(10px);
-    }
-    50% {
-      transform: translateY(-40px) translateX(-10px);
-    }
-    75% {
-      transform: translateY(-20px) translateX(5px);
-    }
-  }
-  
-  .float-animation {
-    animation: float 6s ease-in-out infinite;
-  }
-  
-  /* Pulse glow for accent elements */
-  @keyframes pulse-glow {
-    0%, 100% {
-      box-shadow: 0 0 20px rgba(217, 119, 6, 0.4);
-    }
-    50% {
-      box-shadow: 0 0 30px rgba(217, 119, 6, 0.6);
-    }
-  }
-  
-  .pulse-glow {
-    animation: pulse-glow 3s ease-in-out infinite;
-  }
-  
-  /* Smooth gradient for radial backgrounds */
-  .bg-gradient-radial {
-    background: radial-gradient(circle, var(--tw-gradient-stops));
-  }
-  
+
   /* ===================================
-     MINIMAL WHITE EFFECTS ON BLACK
+     APPLE TYPOGRAPHY UTILITIES
      =================================== */
-  
-  /* Animated Network Grid - Subtle white lines */
-  .animated-network-grid {
-    background-image: 
-      linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-    background-size: 100px 100px;
-    animation: network-pulse 20s ease-in-out infinite;
-  }
-  
-  @keyframes network-pulse {
-    0%, 100% {
-      opacity: 0.3;
-    }
-    50% {
-      opacity: 0.5;
-    }
-  }
-  
-  /* Flowing Lines - Minimal white */
-  .flowing-lines {
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(255, 255, 255, 0.015) 50%,
-      transparent 100%
-    );
-    background-size: 200% 100%;
-    animation: flow 30s linear infinite;
-  }
-  
-  @keyframes flow {
-    0% {
-      background-position: 0% 0%;
-    }
-    100% {
-      background-position: 200% 0%;
-    }
-  }
-  
-  /* ===================================
-     PREMIUM NEXORA BRANDING
-     =================================== */
-  
-  /* Premium Nexora brand text - Following AUTOMATIO style */
-  .nexora-brand-text {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  .text-display-hero {
+    font-size: 3.5rem;    /* 56px */
     font-weight: 600;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    position: relative;
-    display: inline-block;
+    line-height: 1.07;
+    letter-spacing: -0.28px;
   }
-  
-  /* Premium text glow */
-  .nexora-brand-text::after {
-    content: 'NEXORA';
-    position: absolute;
-    left: 0;
-    top: 0;
-    z-index: -1;
-    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    filter: blur(8px);
-    opacity: 0.4;
+
+  .text-section-heading {
+    font-size: 2.5rem;    /* 40px */
+    font-weight: 600;
+    line-height: 1.10;
+    letter-spacing: normal;
   }
-  
+
+  .text-tile-heading {
+    font-size: 1.75rem;   /* 28px */
+    font-weight: 400;
+    line-height: 1.14;
+    letter-spacing: 0.196px;
+  }
+
+  .text-card-title {
+    font-size: 1.3125rem; /* 21px */
+    font-weight: 700;
+    line-height: 1.19;
+    letter-spacing: 0.231px;
+  }
+
+  .text-body {
+    font-size: 1.0625rem; /* 17px */
+    font-weight: 400;
+    line-height: 1.47;
+    letter-spacing: -0.374px;
+  }
+
+  .text-body-emphasis {
+    font-size: 1.0625rem;
+    font-weight: 600;
+    line-height: 1.24;
+    letter-spacing: -0.374px;
+  }
+
+  .text-caption {
+    font-size: 0.875rem;  /* 14px */
+    font-weight: 400;
+    line-height: 1.29;
+    letter-spacing: -0.224px;
+  }
+
+  .text-caption-bold {
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.29;
+    letter-spacing: -0.224px;
+  }
+
+  .text-micro {
+    font-size: 0.75rem;   /* 12px */
+    font-weight: 400;
+    line-height: 1.33;
+    letter-spacing: -0.12px;
+  }
+
+  .text-micro-bold {
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.33;
+    letter-spacing: -0.12px;
+  }
+
   /* ===================================
-     PREMIUM 3D PARTICLE EFFECTS
+     APPLE COLOR UTILITIES
      =================================== */
-  
-  /* 3D Floating orbs animation */
-  @keyframes float-3d {
-    0%, 100% {
-      transform: translate3d(0, 0, 0) scale(1);
-    }
-    25% {
-      transform: translate3d(30px, -40px, 20px) scale(1.1);
-    }
-    50% {
-      transform: translate3d(-20px, -60px, -10px) scale(0.9);
-    }
-    75% {
-      transform: translate3d(-40px, -30px, 15px) scale(1.05);
-    }
+  .text-primary-on-light {
+    color: #1d1d1f;
   }
-  
-  .float-3d {
-    animation: float-3d 20s ease-in-out infinite;
+
+  .text-secondary-on-light {
+    color: rgba(0, 0, 0, 0.8);
   }
-  
-  /* Particle drift animation */
-  @keyframes particle-drift {
-    0% {
-      transform: translate(0, 0);
-      opacity: 0;
-    }
-    10% {
-      opacity: 0.6;
-    }
-    90% {
-      opacity: 0.3;
-    }
-    100% {
-      transform: translate(100px, -150px);
-      opacity: 0;
-    }
+
+  .text-tertiary-on-light {
+    color: rgba(0, 0, 0, 0.48);
   }
-  
-  .particle-drift {
-    animation: particle-drift 15s linear infinite;
+
+  .text-primary-on-dark {
+    color: #ffffff;
   }
-  
-  /* Ambient glow pulse */
-  @keyframes ambient-pulse {
-    0%, 100% {
-      opacity: 0.3;
-      transform: scale(1);
-    }
-    50% {
-      opacity: 0.6;
-      transform: scale(1.2);
-    }
+
+  .text-secondary-on-dark {
+    color: rgba(255, 255, 255, 0.8);
   }
-  
-  .ambient-pulse {
-    animation: ambient-pulse 8s ease-in-out infinite;
+
+  .text-tertiary-on-dark {
+    color: rgba(255, 255, 255, 0.48);
   }
-  
-  /* Wave motion */
-  @keyframes wave {
-    0%, 100% {
-      transform: translateY(0) translateX(0);
-    }
-    25% {
-      transform: translateY(-20px) translateX(10px);
-    }
-    50% {
-      transform: translateY(-10px) translateX(-10px);
-    }
-    75% {
-      transform: translateY(-30px) translateX(5px);
-    }
+
+  .bg-section-light {
+    background-color: #f5f5f7;
   }
-  
-  .wave-motion {
-    animation: wave 12s ease-in-out infinite;
+
+  .bg-section-dark {
+    background-color: #000000;
   }
-  
-  /* Slow rotation for 3D elements */
-  @keyframes rotate-3d {
-    from {
-      transform: rotate3d(0.5, 1, 0, 0deg);
-    }
-    to {
-      transform: rotate3d(0.5, 1, 0, 360deg);
-    }
+
+  .bg-surface-dark {
+    background-color: #272729;
   }
-  
-  .rotate-3d {
-    animation: rotate-3d 60s linear infinite;
-    transform-style: preserve-3d;
+
+  /* ===================================
+     APPLE BUTTON UTILITIES
+     =================================== */
+  .btn-apple-primary {
+    background-color: #0071e3;
+    color: #ffffff;
+    padding: 8px 15px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    font-size: 17px;
+    font-weight: 400;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+  .btn-apple-primary:hover {
+    background-color: #0077ed;
+  }
+
+  .btn-apple-dark {
+    background-color: #1d1d1f;
+    color: #ffffff;
+    padding: 8px 15px;
+    border-radius: 8px;
+    font-size: 17px;
+    font-weight: 400;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+
+  .btn-apple-pill {
+    background: transparent;
+    border: 1px solid #0066cc;
+    color: #0066cc;
+    border-radius: 980px;
+    padding: 8px 20px;
+    font-size: 14px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-apple-pill:hover {
+    text-decoration: underline;
+  }
+
+  .btn-apple-pill-dark {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.48);
+    color: #ffffff;
+    border-radius: 980px;
+    padding: 8px 20px;
+    font-size: 14px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-apple-pill-dark:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  /* ===================================
+     APPLE CARD SHADOW
+     =================================== */
+  .apple-shadow {
+    box-shadow: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
+  }
+
+  /* ===================================
+     LINK STYLES
+     =================================== */
+  .link-apple {
+    color: #0066cc;
+    text-decoration: none;
+    font-size: 14px;
+    letter-spacing: -0.224px;
+  }
+  .link-apple:hover {
+    text-decoration: underline;
+  }
+
+  .link-apple-dark {
+    color: #2997ff;
+    text-decoration: none;
+    font-size: 14px;
+    letter-spacing: -0.224px;
+  }
+  .link-apple-dark:hover {
+    text-decoration: underline;
+  }
+
+  /* ===================================
+     NEXORA BRAND (Apple-aligned)
+     =================================== */
+  .nexora-brand-text {
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: #ffffff;
+    display: inline-block;
   }
 }

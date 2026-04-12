@@ -215,7 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
             statusTitle.textContent = 'Engine Paused';
             statusSub.textContent = 'Click Start to resume automation';
             playPauseBtn.className = 'btn btn-success';
-            playPauseBtn.innerHTML = '▶ START ENGINE';
+            playPauseBtn.innerHTML = 'START ENGINE';
             return;
         }
 
@@ -226,7 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
             statusTitle.textContent = 'Engine Active';
             statusSub.textContent = state.liveStatusText || 'Processing...';
             playPauseBtn.className = 'btn btn-danger';
-            playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
+            playPauseBtn.innerHTML = 'PAUSE ENGINE';
             return;
         }
 
@@ -239,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const left = Math.ceil((state.cooldownMs - elapsed) / 60000);
             statusSub.textContent = `Resuming in ${left} minute${left !== 1 ? 's' : ''}...`;
             playPauseBtn.className = 'btn btn-danger';
-            playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
+            playPauseBtn.innerHTML = 'PAUSE ENGINE';
             return;
         }
 
@@ -248,7 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
         statusTitle.textContent = 'Idle';
         statusSub.textContent = 'Waiting for next cycle trigger';
         playPauseBtn.className = 'btn btn-danger';
-        playPauseBtn.innerHTML = '⏸ PAUSE ENGINE';
+        playPauseBtn.innerHTML = 'PAUSE ENGINE';
     }
 
     // ── Activity Log Renderer ──

@@ -77,22 +77,22 @@ function injectToastDOM(title, message, isError) {
   container.appendChild(host);
   const shadow = host.attachShadow({ mode: 'open' });
   
-  const accent = isError ? '#ef4444' : '#06b6d4';
+  const accent = isError ? '#ff3b30' : '#0071e3';
   const icon = isError ? '⚠️' : '✨';
   
   shadow.innerHTML = `
     <style>
       .toast {
         width: 320px;
-        background: rgba(11, 15, 26, 0.85);
+        background: #1d1d1f;
         backdrop-filter: blur(16px);
         -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.05);
         border-radius: 12px;
         padding: 16px 20px;
-        color: #f1f5f9;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
         transform: translateX(120%);
         opacity: 0;
         transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
@@ -106,8 +106,8 @@ function injectToastDOM(title, message, isError) {
       .toast.hiding { transform: translateX(120%); opacity: 0; }
       .icon { font-size: 20px; line-height: 1; filter: drop-shadow(0 0 8px ${accent}60); }
       .content { flex: 1; }
-      .title { font-size: 14px; font-weight: 700; margin: 0 0 4px 0; color: #ffffff; letter-spacing: -0.01em; }
-      .message { font-size: 13px; font-weight: 400; margin: 0; color: #94a3b8; line-height: 1.4; }
+      .title { font-size: 14px; font-weight: 600; margin: 0 0 4px 0; color: #ffffff; letter-spacing: -0.01em; }
+      .message { font-size: 13px; font-weight: 400; margin: 0; color: rgba(255, 255, 255, 0.48); line-height: 1.4; }
       .progress {
         position: absolute; bottom: 0; left: 0; height: 3px; background: ${accent}; width: 100%;
         animation: shrink 4s linear forwards;

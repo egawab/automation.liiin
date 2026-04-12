@@ -17,48 +17,38 @@ export default function Badge({
   icon,
   className = ''
 }: BadgeProps) {
-  // Base styles
-  const baseStyles = 'inline-flex items-center gap-1.5 font-bold rounded-full whitespace-nowrap';
-  
-  // Variant styles (background + text color)
+  const baseStyles = 'inline-flex items-center gap-1.5 font-semibold rounded-full whitespace-nowrap';
+
   const variantStyles = {
-    success: 'bg-success-100 text-success-700',
-    warning: 'bg-warning-200 text-warning-900 border border-warning-500/30',
-    error: 'bg-error-100 text-error-700',
-    info: 'bg-info-100 text-info-700',
-    neutral: 'bg-gray-100 text-gray-700',
-    primary: 'bg-primary-100 text-primary-700',
-    secondary: 'bg-secondary-100 text-secondary-700'
+    success: 'bg-[rgba(52,199,89,0.12)] text-[#34c759]',
+    warning: 'bg-[rgba(255,159,10,0.12)] text-[#ff9f0a]',
+    error: 'bg-[rgba(255,59,48,0.12)] text-[#ff3b30]',
+    info: 'bg-[rgba(0,113,227,0.12)] text-[#0071e3]',
+    neutral: 'bg-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.56)]',
+    primary: 'bg-[rgba(0,113,227,0.12)] text-[#0071e3]',
+    secondary: 'bg-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.48)]'
   };
-  
-  // Size styles
+
   const sizeStyles = {
-    sm: 'px-2 py-0.5 text-xs',
-    md: 'px-3 py-1 text-xs',
-    lg: 'px-4 py-1.5 text-sm'
+    sm: 'px-2 py-0.5 text-[10px]',
+    md: 'px-2.5 py-0.5 text-xs',
+    lg: 'px-3 py-1 text-sm'
   };
-  
-  // Dot color based on variant
+
   const dotColors = {
-    success: 'bg-success-500',
-    warning: 'bg-warning-500',
-    error: 'bg-error-500',
-    info: 'bg-info-500',
-    neutral: 'bg-gray-500',
-    primary: 'bg-primary-500',
-    secondary: 'bg-secondary-500'
+    success: 'bg-[#34c759]',
+    warning: 'bg-[#ff9f0a]',
+    error: 'bg-[#ff3b30]',
+    info: 'bg-[#0071e3]',
+    neutral: 'bg-[rgba(255,255,255,0.32)]',
+    primary: 'bg-[#0071e3]',
+    secondary: 'bg-[rgba(255,255,255,0.32)]'
   };
-  
-  const combinedStyles = `${baseStyles} ${variantStyles[variant]} ${sizeStyles[size]} ${className}`;
-  
+
   return (
-    <span className={combinedStyles}>
-      {dot && (
-        <span className={`w-2 h-2 rounded-full ${dotColors[variant]}`} />
-      )}
-      {icon && (
-        <span className="flex-shrink-0">{icon}</span>
-      )}
+    <span className={`${baseStyles} ${variantStyles[variant]} ${sizeStyles[size]} ${className}`}>
+      {dot && <span className={`w-1.5 h-1.5 rounded-full ${dotColors[variant]}`} />}
+      {icon && <span className="flex-shrink-0">{icon}</span>}
       {children}
     </span>
   );

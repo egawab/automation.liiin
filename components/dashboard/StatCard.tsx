@@ -16,86 +16,67 @@ interface StatCardProps {
   delay?: number;
 }
 
-const iconColorClasses = {
-  primary: 'bg-primary-50 text-primary-600',
-  secondary: 'bg-secondary-50 text-secondary-600',
-  accent: 'bg-accent-50 text-accent-600',
-  success: 'bg-success-50 text-success-600',
-  warning: 'bg-warning-50 text-warning-600',
-  gray: 'bg-gray-50 text-gray-600'
+const iconBgMap: Record<string, string> = {
+  primary: 'bg-[rgba(0,113,227,0.12)] text-[#0071e3]',
+  secondary: 'bg-[rgba(255,255,255,0.06)] text-[rgba(255,255,255,0.56)]',
+  accent: 'bg-[rgba(0,113,227,0.12)] text-[#0071e3]',
+  success: 'bg-[rgba(52,199,89,0.12)] text-[#34c759]',
+  warning: 'bg-[rgba(255,159,10,0.12)] text-[#ff9f0a]',
+  gray: 'bg-[rgba(255,255,255,0.06)] text-[rgba(255,255,255,0.48)]'
 };
 
-const progressColorClasses = {
-  primary: 'bg-primary-500',
-  secondary: 'bg-secondary-500',
-  accent: 'bg-accent-500',
-  success: 'bg-success-500',
-  warning: 'bg-warning-500',
-  gray: 'bg-gray-500'
+const progressColorMap: Record<string, string> = {
+  primary: 'bg-[#0071e3]',
+  secondary: 'bg-[rgba(255,255,255,0.32)]',
+  accent: 'bg-[#0071e3]',
+  success: 'bg-[#34c759]',
+  warning: 'bg-[#ff9f0a]',
+  gray: 'bg-[rgba(255,255,255,0.32)]'
 };
 
 export default function StatCard({
-  title,
-  value,
-  icon,
-  iconColor = 'primary',
-  trend,
-  trendUp,
-  maxValue,
-  showProgress = false,
-  delay = 0
+  title, value, icon, iconColor = 'primary',
+  trend, trendUp, maxValue, showProgress = false, delay = 0
 }: StatCardProps) {
-  const progressPercentage = maxValue 
-    ? Math.min(100, (Number(value) / maxValue) * 100) 
-    : 0;
+  const progressPercentage = maxValue ? Math.min(100, (Number(value) / maxValue) * 100) : 0;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay }}
     >
-      <Card hover className="h-full">
-        <div className="flex items-start justify-between mb-4">
+      <Card className="h-full">
+        <div className="flex items-start justify-between mb-3">
           <div className="flex-1">
-            <p className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">
-              {title}
-            </p>
+            <p className="text-micro text-[rgba(255,255,255,0.48)] mb-1.5">{title}</p>
             <div className="flex items-baseline gap-2">
-              <h3 className="text-3xl font-extrabold text-gray-900">
-                {value}
-              </h3>
+              <h3 className="text-tile-heading text-white">{value}</h3>
               {maxValue && (
-                <span className="text-xl font-medium text-gray-400">
-                  / {maxValue}
-                </span>
+                <span className="text-caption text-[rgba(255,255,255,0.32)]">/ {maxValue}</span>
               )}
             </div>
-            
             {trend && (
-              <div className="flex items-center gap-1 mt-2">
-                <span className={`text-sm font-semibold ${
-                  trendUp ? 'text-success-600' : 'text-error-600'
-                }`}>
+              <div className="flex items-center gap-1 mt-1.5">
+                <span className={`text-micro-bold ${trendUp ? 'text-[#34c759]' : 'text-[#ff3b30]'}`}>
                   {trendUp ? '↑' : '↓'} {trend}
                 </span>
-                <span className="text-xs text-gray-500">from last week</span>
+                <span className="text-micro text-[rgba(255,255,255,0.32)]">from last week</span>
               </div>
             )}
           </div>
-          
-          <div className={`p-3 rounded-2xl flex-shrink-0 ${iconColorClasses[iconColor]}`}>
+          <div className={`p-2.5 rounded-lg flex-shrink-0 ${iconBgMap[iconColor]}`}>
             {icon}
           </div>
         </div>
 
         {showProgress && maxValue && (
-          <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+          <div className="w-full bg-[rgba(255,255,255,0.06)] rounded-full h-1.5 overflow-hidden">
             <motion.div
               initial={{ width: 0 }}
               animate={{ width: `${progressPercentage}%` }}
               transition={{ duration: 1, delay: delay + 0.2, ease: 'easeOut' }}
-              className={`h-full rounded-full ${progressColorClasses[iconColor]}`}
+              className={`h-full rounded-full ${progressColorMap[iconColor]}`}
             />
           </div>
         )}

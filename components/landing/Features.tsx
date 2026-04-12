@@ -39,74 +39,57 @@ const features = [
 
 const container = {
   hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.1
-    }
-  }
+  show: { opacity: 1, transition: { staggerChildren: 0.08 } }
 };
 
 const item = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1 }
+  hidden: { opacity: 0, y: 10 },
+  show: { opacity: 1, y: 0 }
 };
 
 export default function Features() {
   return (
-    <section id="features" className="relative py-32 px-4 overflow-hidden bg-transparent">
-
-      <div className="max-w-7xl mx-auto relative">
-        {/* Refined Section Header */}
+    <section id="features" className="py-24 px-4 bg-[#f5f5f7]">
+      <div className="max-w-[980px] mx-auto">
+        {/* Section Heading — Apple style */}
         <motion.div
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.4 }}
-          className="text-center mb-20"
+          transition={{ duration: 0.5 }}
+          className="text-center mb-16"
         >
-          <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight mb-6 text-white">
-            Everything You Need
+          <h2 className="text-section-heading text-[#1d1d1f] mb-4">
+            Everything you need.
           </h2>
-          
-          <p className="text-xl text-gray-300 max-w-2xl mx-auto leading-relaxed font-light">
-            Professional automation that builds authority, generates leads, 
+          <p className="text-body text-[rgba(0,0,0,0.56)] max-w-xl mx-auto">
+            Professional automation that builds authority, generates leads,
             and grows your network.
           </p>
         </motion.div>
 
-        {/* Refined Features Grid - Minimal & Professional */}
+        {/* Feature Grid */}
         <motion.div
           variants={container}
           initial="hidden"
           whileInView="show"
           viewport={{ once: true }}
-          className="grid md:grid-cols-2 lg:grid-cols-3 gap-6"
+          className="grid md:grid-cols-2 lg:grid-cols-3 gap-5"
         >
           {features.map((feature, index) => {
             const Icon = feature.icon;
             return (
-              <motion.div 
-                key={index} 
-                variants={item}
-                className="group relative"
-              >
-                {/* Clean Card with Minimal Design */}
-                <div className="h-full bg-gray-800/50 border border-gray-700 rounded-2xl p-8 hover:border-gray-600 transition-colors duration-200 backdrop-blur-sm">
-                  
-                  {/* Icon with clean styling */}
-                  <div className="mb-6 relative">
-                    <div className="w-12 h-12 rounded-xl bg-gray-700 border border-gray-600 flex items-center justify-center">
-                      <Icon className="w-6 h-6 text-gray-300" />
+              <motion.div key={index} variants={item}>
+                <div className="h-full bg-white rounded-lg p-7 transition-shadow duration-200 hover:apple-shadow">
+                  <div className="mb-5">
+                    <div className="w-10 h-10 rounded-full bg-[#f5f5f7] flex items-center justify-center">
+                      <Icon className="w-5 h-5 text-[#1d1d1f]" />
                     </div>
                   </div>
-
-                  {/* Content */}
-                  <h3 className="text-xl font-semibold text-white mb-3 relative">
+                  <h3 className="text-card-title text-[#1d1d1f] mb-2">
                     {feature.title}
                   </h3>
-                  
-                  <p className="text-gray-300 leading-relaxed font-light relative">
+                  <p className="text-caption text-[rgba(0,0,0,0.56)] leading-relaxed">
                     {feature.description}
                   </p>
                 </div>

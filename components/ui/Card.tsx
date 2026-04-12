@@ -17,30 +17,26 @@ export default function Card({
   className = '',
   onClick
 }: CardProps) {
-  // Base styles
-  const baseStyles = 'rounded-2xl md:rounded-3xl overflow-hidden transition-all duration-300';
-  
-  // Variant styles
+  const baseStyles = 'rounded-lg overflow-hidden transition-all duration-200';
+
   const variantStyles = {
-    default: 'bg-white border border-gray-100 shadow-sm shadow-gray-200/50',
-    elevated: 'bg-white border border-gray-100 shadow-xl shadow-gray-200/60',
-    glass: 'bg-white/80 backdrop-blur-xl border border-white/20 shadow-2xl shadow-gray-900/10',
-    gradient: 'bg-gradient-to-br from-white to-gray-50 border border-gray-100 shadow-lg shadow-gray-200/50'
+    default: 'bg-[#272729]',
+    elevated: 'bg-[#272729] apple-shadow',
+    glass: 'bg-[rgba(39,39,41,0.8)] backdrop-blur-xl',
+    gradient: 'bg-[#2a2a2d]'
   };
-  
-  // Padding styles
+
   const paddingStyles = {
     none: '',
-    sm: 'p-4 md:p-6',
-    md: 'p-6 md:p-8',
-    lg: 'p-8 md:p-12'
+    sm: 'p-4 md:p-5',
+    md: 'p-5 md:p-7',
+    lg: 'p-7 md:p-10'
   };
-  
-  // Hover effect
-  const hoverStyle = hover ? 'hover:shadow-xl hover:shadow-gray-200/60 hover:-translate-y-1' : '';
-  
+
+  const hoverStyle = hover ? 'hover:bg-[#2a2a2d]' : '';
+
   const combinedStyles = `${baseStyles} ${variantStyles[variant]} ${paddingStyles[padding]} ${hoverStyle} ${onClick ? 'cursor-pointer' : ''} ${className}`;
-  
+
   return (
     <div className={combinedStyles} onClick={onClick}>
       {children}
@@ -48,68 +44,27 @@ export default function Card({
   );
 }
 
-// Card sub-components for better composition
-export interface CardHeaderProps {
-  children: React.ReactNode;
-  className?: string;
-}
-
+export interface CardHeaderProps { children: React.ReactNode; className?: string; }
 export function CardHeader({ children, className = '' }: CardHeaderProps) {
-  return (
-    <div className={`mb-6 ${className}`}>
-      {children}
-    </div>
-  );
+  return <div className={`mb-5 ${className}`}>{children}</div>;
 }
 
-export interface CardTitleProps {
-  children: React.ReactNode;
-  className?: string;
-}
-
+export interface CardTitleProps { children: React.ReactNode; className?: string; }
 export function CardTitle({ children, className = '' }: CardTitleProps) {
-  return (
-    <h3 className={`text-xl md:text-2xl font-bold text-gray-900 ${className}`}>
-      {children}
-    </h3>
-  );
+  return <h3 className={`text-card-title text-white ${className}`}>{children}</h3>;
 }
 
-export interface CardDescriptionProps {
-  children: React.ReactNode;
-  className?: string;
-}
-
+export interface CardDescriptionProps { children: React.ReactNode; className?: string; }
 export function CardDescription({ children, className = '' }: CardDescriptionProps) {
-  return (
-    <p className={`text-sm text-gray-500 mt-1 ${className}`}>
-      {children}
-    </p>
-  );
+  return <p className={`text-caption text-[rgba(255,255,255,0.48)] mt-1 ${className}`}>{children}</p>;
 }
 
-export interface CardContentProps {
-  children: React.ReactNode;
-  className?: string;
-}
-
+export interface CardContentProps { children: React.ReactNode; className?: string; }
 export function CardContent({ children, className = '' }: CardContentProps) {
-  return (
-    <div className={className}>
-      {children}
-    </div>
-  );
+  return <div className={className}>{children}</div>;
 }
 
-export interface CardFooterProps {
-  children: React.ReactNode;
-  className?: string;
-}
-
+export interface CardFooterProps { children: React.ReactNode; className?: string; }
 export function CardFooter({ children, className = '' }: CardFooterProps) {
-  return (
-    <div className={`mt-6 pt-6 border-t border-gray-100 ${className}`}>
-      {children}
-    </div>
-  );
+  return <div className={`mt-5 pt-5 border-t border-white/5 ${className}`}>{children}</div>;
 }

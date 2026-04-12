@@ -300,37 +300,28 @@ export default function Dashboard() {
       case 'dashboard':
         // Mock chart data
         const chartData = [
-          { name: 'Mon', value: 12 },
-          { name: 'Tue', value: 19 },
-          { name: 'Wed', value: 15 },
-          { name: 'Thu', value: 25 },
-          { name: 'Fri', value: 22 },
-          { name: 'Sat', value: 18 },
-          { name: 'Sun', value: 20 },
+          { name: 'Mon', value: 12 }, { name: 'Tue', value: 19 }, { name: 'Wed', value: 15 },
+          { name: 'Thu', value: 25 }, { name: 'Fri', value: 22 }, { name: 'Sat', value: 18 }, { name: 'Sun', value: 20 },
         ];
 
         return (
           <div className="space-y-6">
-            {/* Top Stats & Browser Status */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
               <div className="lg:col-span-2">
                 <DailySummaryCard stats={stats} settings={settings} />
               </div>
 
               <div className="lg:col-span-1">
-                <Card className="h-full bg-gradient-to-br from-primary-600 to-primary-700 border-none shadow-xl shadow-primary-500/20">
-                  <div className="p-6 text-white h-full flex flex-col">
+                <Card className="h-full">
+                  <div className="p-6 h-full flex flex-col">
                     <div className="flex justify-between items-start mb-6">
-                      <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md">
+                      <div className="p-3 bg-[rgba(255,255,255,0.06)] rounded-xl">
                         <Shield className="w-6 h-6 text-white" />
                       </div>
                       
-                      {/* Dynamic Heartbeat Indicator */}
                       {(() => {
-                        const isOnline = settings.lastHeartbeat && 
-                          (new Date().getTime() - new Date(settings.lastHeartbeat).getTime()) < 10 * 60 * 1000;
-                        const statusColor = isOnline ? 'bg-success-500' : 'bg-error-500';
-                        const statusText = isOnline ? 'Online' : 'Offline';
+                        const isOnline = settings.lastHeartbeat && (new Date().getTime() - new Date(settings.lastHeartbeat).getTime()) < 10 * 60 * 1000;
+                        const statusColor = isOnline ? 'bg-[#34c759]' : 'bg-[#ff3b30]';
                         
                         let seenText = 'Never connected';
                         if (settings.lastHeartbeat) {
@@ -343,11 +334,10 @@ export default function Dashboard() {
 
                         return (
                           <div className="flex flex-col items-end">
-                            <Badge variant={isOnline ? "success" : "error"} size="sm" className="bg-white/20 text-white border-white/30 backdrop-blur-md mb-1">
-                              <span className={`w-2 h-2 rounded-full inline-block mr-1.5 ${statusColor} ${isOnline ? 'animate-pulse' : ''}`}></span>
-                              {statusText}
+                            <Badge variant={isOnline ? "success" : "error"} size="sm" dot>
+                              {isOnline ? 'Online' : 'Offline'}
                             </Badge>
-                            <span className="text-[10px] text-white/70 font-medium">Last seen: {seenText}</span>
+                            <span className="text-[10px] text-[rgba(255,255,255,0.48)] mt-1">Last seen: {seenText}</span>
                           </div>
                         );
                       })()}
@@ -355,39 +345,37 @@ export default function Dashboard() {
 
                     <div className="flex flex-col flex-1 justify-between">
                       <div className="mb-6">
-                        <h3 className="text-lg font-extrabold mb-1 truncate">Browser Active</h3>
-                        <p className="text-[11px] text-primary-100 font-medium leading-tight">
+                        <h3 className="text-tile-heading text-white mb-1">Browser Active</h3>
+                        <p className="text-caption text-[rgba(255,255,255,0.56)]">
                           {settings.extensionStatus || "Integrated with Chrome for maximum safety."}
                         </p>
                       </div>
 
-                      <div className="space-y-3 pt-4 border-t border-white/10">
-                        {/* Agent Pilot Row */}
+                      <div className="space-y-4 pt-4 border-t border-[rgba(255,255,255,0.05)]">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <p className="text-[10px] font-bold text-primary-200 uppercase tracking-widest">Pilot</p>
-                            <p className="text-xs font-black truncate">{systemActive ? 'ACTIVE' : 'PAUSED'}</p>
+                            <p className="text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-0.5">Pilot</p>
+                            <p className="text-caption-bold text-white">{systemActive ? 'ACTIVE' : 'PAUSED'}</p>
                           </div>
                           <button
                             onClick={toggleSystem}
                             type="button"
-                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all ${
+                            className={`px-3 py-1.5 rounded-md text-micro-bold transition-all ${
                               systemActive 
-                                ? 'bg-success-400 text-white shadow-md shadow-success-500/30' 
-                                : 'bg-white/10 text-white hover:bg-white/20 border border-white/20'
+                                ? 'bg-[rgba(52,199,89,0.12)] text-[#34c759]' 
+                                : 'bg-[rgba(255,255,255,0.06)] text-white hover:bg-[rgba(255,255,255,0.12)]'
                             }`}
                           >
                             {systemActive ? '⏸️ PAUSE' : '🚀 START'}
                           </button>
                         </div>
 
-                        {/* Manage Row */}
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-[10px] font-bold text-primary-200 uppercase tracking-widest">Extension</p>
+                          <p className="text-micro-bold text-[rgba(255,255,255,0.48)] uppercase">Extension</p>
                           <button
                             onClick={() => setActiveTab('extension-connect')}
                             type="button"
-                            className="bg-white/10 hover:bg-white/20 text-white border border-white/30 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all"
+                            className="bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.12)] text-white px-3 py-1.5 rounded-md text-micro-bold transition-all"
                           >
                             Manage
                           </button>
@@ -399,18 +387,12 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Chart */}
             <Chart data={chartData} />
 
-            {/* Activity Feed */}
             <ActivityFeed logs={logs.map((log: any) => ({
-              id: log.id,
-              action: log.action,
+              id: log.id, action: log.action,
               status: log.action.includes('✅') ? 'Success' : log.action.includes('❌') ? 'Failed' : 'Pending',
-              time: log.timestamp,
-              postUrl: log.postUrl,
-              commentUrl: log.commentUrl,
-              comment: log.comment
+              time: log.timestamp, postUrl: log.postUrl, commentUrl: log.commentUrl, comment: log.comment
             }))} />
           </div>
         );
@@ -766,19 +748,18 @@ export default function Dashboard() {
       case 'autoposts':
         return (
           <Card>
-            <div className="p-6 md:p-8 border-b border-gray-100 bg-gradient-to-r from-secondary-50 via-accent-50 to-transparent">
+            <div className="p-6 md:p-8 border-b border-[rgba(255,255,255,0.05)] bg-[#1d1d1f]">
               <div className="flex flex-col gap-4">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-secondary-600" />
+                  <h3 className="text-tile-heading text-white flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-[#0071e3]" />
                     AI Auto-Posts
                   </h3>
-                  <p className="text-sm text-gray-600 mt-1">
+                  <p className="text-caption text-[rgba(255,255,255,0.48)] mt-1">
                     Generate thought leadership content on autopilot using Gemini
                   </p>
                 </div>
 
-                {/* Generate Form */}
                 <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3">
                   <Input
                     label="Topic or Idea"
@@ -787,80 +768,53 @@ export default function Dashboard() {
                     onChange={e => setNewTopic(e.target.value)}
                     placeholder="E.g. The future of SaaS pricing..."
                     className="flex-1 min-w-[300px]"
-                    leftIcon={<PenTool className="w-4 h-4" />}
                   />
                   <Button
                     onClick={generateAutoPost}
                     variant="secondary"
-                    leftIcon={<Bot className="w-4 h-4" />}
                   >
-                    Generate Post
+                    <Bot className="w-4 h-4 mr-2" /> Generate Post
                   </Button>
                 </div>
               </div>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="bg-gray-50 border-b border-gray-100">
+              <table className="w-full text-left bg-[#1d1d1f]">
+                <thead className="border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
                   <tr>
-                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Topic
-                    </th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Status
-                    </th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Content Preview
-                    </th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-gray-500 text-right">
-                      Actions
-                    </th>
+                    <th className="px-6 py-4 text-micro-bold uppercase text-[rgba(255,255,255,0.48)]">Topic</th>
+                    <th className="px-6 py-4 text-micro-bold uppercase text-[rgba(255,255,255,0.48)]">Status</th>
+                    <th className="px-6 py-4 text-micro-bold uppercase text-[rgba(255,255,255,0.48)]">Content Preview</th>
+                    <th className="px-6 py-4 text-micro-bold uppercase text-[rgba(255,255,255,0.48)] text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
+                <tbody className="divide-y divide-[rgba(255,255,255,0.05)]">
                   {autoPosts.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-6 py-12 text-center">
-                        <div className="flex flex-col items-center">
-                          <div className="w-16 h-16 mb-4 rounded-full bg-gradient-to-br from-secondary-100 to-accent-100 flex items-center justify-center">
-                            <Sparkles className="w-8 h-8 text-secondary-600" />
-                          </div>
-                          <p className="text-sm font-semibold text-gray-900 mb-1">
-                            No posts generated yet
-                          </p>
-                          <p className="text-sm text-gray-500">
-                            Enter a topic above to let AI create your first post
-                          </p>
-                        </div>
+                      <td colSpan={4} className="px-6 py-12 text-center text-[rgba(255,255,255,0.48)]">
+                        <Bot className="w-8 h-8 text-[rgba(255,255,255,0.24)] mx-auto mb-3" />
+                        <p className="text-caption-bold text-white mb-1">No posts generated yet</p>
+                        <p className="text-micro">Enter a topic above to let AI create your first post</p>
                       </td>
                     </tr>
                   ) : autoPosts.map((post) => (
-                    <tr key={post.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={post.id} className="hover:bg-[rgba(255,255,255,0.02)] transition-colors">
                       <td className="px-6 py-4 max-w-[200px]">
-                        <span className="text-sm font-semibold text-gray-900 line-clamp-2">
-                          {post.topic}
-                        </span>
+                        <span className="text-caption-bold text-white line-clamp-2">{post.topic}</span>
                       </td>
                       <td className="px-6 py-4">
-                        <Badge
-                          variant={post.status === 'Published' ? 'success' : 'info'}
-                          size="sm"
-                        >
-                          {post.status}
-                        </Badge>
+                         <Badge variant={post.status === 'Published' ? 'success' : 'neutral'} size="sm">{post.status}</Badge>
                       </td>
                       <td className="px-6 py-4 max-w-md">
-                        <p className="text-sm text-gray-600 line-clamp-2 italic">
-                          "{post.content}"
-                        </p>
+                        <p className="text-caption text-[rgba(255,255,255,0.64)] line-clamp-2 italic">"{post.content}"</p>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <button
                           onClick={() => deleteAutoPost(post.id)}
-                          className="text-gray-400 hover:text-error-600 hover:bg-error-50 p-2 rounded-lg transition-all"
+                          className="text-[rgba(255,255,255,0.32)] hover:text-[#ff3b30] p-2 rounded-lg transition-all"
                         >
-                          <Trash2 className="w-4 h-4" />
+                           <Trash2 className="w-4 h-4" />
                         </button>
                       </td>
                     </tr>
@@ -876,20 +830,20 @@ export default function Dashboard() {
 
             {/* Page Header */}
             <div>
-              <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                <Settings className="w-6 h-6 text-primary-500" />
+              <h2 className="text-tile-heading text-white flex items-center gap-2">
+                <Settings className="w-5 h-5 text-[#0071e3]" />
                 Agent Configuration
               </h2>
-              <p className="text-sm text-gray-500 mt-1">Fine-tune your autopilot&apos;s parameters and safety thresholds</p>
+              <p className="text-caption text-[rgba(255,255,255,0.48)] mt-1">Fine-tune your autopilot&apos;s parameters and safety thresholds</p>
             </div>
 
             <form onSubmit={saveSettings} className="space-y-6">
 
               {/* Section 1: Mode Selection */}
-              <Card className="overflow-hidden">
-                <div className="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4">
-                  <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
-                    <Search size={16} /> Operating Mode
+              <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
+                <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
+                  <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
+                    <Search size={14} className="text-[#0071e3]" /> Operating Mode
                   </h3>
                 </div>
                 <div className="p-6">
@@ -898,72 +852,72 @@ export default function Dashboard() {
                       type="checkbox"
                       name="searchOnlyMode"
                       defaultChecked={settings.searchOnlyMode ?? true}
-                      className="w-5 h-5 mt-0.5 rounded border-2 border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500"
+                      className="w-5 h-5 mt-0.5 rounded border-2 border-[rgba(255,255,255,0.2)] bg-[#272729] text-[#0071e3] focus:ring-1 focus:ring-[#0071e3] focus:ring-offset-0 transition-all cursor-pointer"
                     />
                     <div>
-                      <span className="text-sm font-bold text-gray-900 group-hover:text-primary-600 transition-colors">Search-Only Mode (Recommended)</span>
-                      <p className="text-xs text-gray-500 mt-1">Search and save posts WITHOUT auto-commenting. Safer and avoids CAPTCHA triggers.</p>
+                      <span className="text-caption-bold text-white group-hover:text-[#0071e3] transition-colors">Search-Only Mode (Recommended)</span>
+                      <p className="text-micro text-[rgba(255,255,255,0.48)] mt-1">Search and save posts WITHOUT auto-commenting. Safer and avoids CAPTCHA triggers.</p>
                     </div>
                   </label>
                 </div>
               </Card>
 
               {/* Section 2: Search Limits */}
-              <Card className="overflow-hidden">
-                <div className="bg-gradient-to-r from-green-600 to-emerald-600 px-6 py-4">
-                  <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
-                    <Shield size={16} /> Search Limits
+              <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
+                <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
+                  <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
+                    <Shield size={14} className="text-[#34c759]" /> Search Limits
                   </h3>
                 </div>
                 <div className="p-6 space-y-5">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Searches / Hour</label>
+                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Searches / Hour</label>
                       <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="12"
-                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white focus:border-[#0071e3] transition-all outline-none" />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Searches / Day</label>
+                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Searches / Day</label>
                       <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 20} min="1" max="60"
-                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white focus:border-[#0071e3] transition-all outline-none" />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Delay (min)</label>
+                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Min Delay (min)</label>
                       <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="1" max="30"
-                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white focus:border-[#0071e3] transition-all outline-none" />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Keywords / Cycle</label>
+                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Keywords / Cycle</label>
                       <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 3} min="1" max="10"
-                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white focus:border-[#0071e3] transition-all outline-none" />
                     </div>
                   </div>
 
                   {/* Schedule Controls */}
-                  <div className="border-t border-gray-100 pt-5 space-y-4">
+                  <div className="border-t border-[rgba(255,255,255,0.05)] pt-5 space-y-4">
                     <div className="flex flex-wrap gap-x-6 gap-y-3">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" name="workHoursOnly" defaultChecked={settings.workHoursOnly ?? true}
-                          className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500" />
-                        <span className="text-sm font-medium text-gray-700">Work hours only</span>
+                          className="w-4 h-4 rounded border-2 border-[rgba(255,255,255,0.2)] bg-[#272729] text-[#34c759] focus:ring-0 focus:ring-offset-0 cursor-pointer" />
+                        <span className="text-caption text-white">Work hours only</span>
                       </label>
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" name="skipWeekends" defaultChecked={settings.skipWeekends ?? true}
-                          className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500" />
-                        <span className="text-sm font-medium text-gray-700">Skip weekends</span>
+                          className="w-4 h-4 rounded border-2 border-[rgba(255,255,255,0.2)] bg-[#272729] text-[#34c759] focus:ring-0 focus:ring-offset-0 cursor-pointer" />
+                        <span className="text-caption text-white">Skip weekends</span>
                       </label>
                     </div>
                     <div className="flex items-center gap-4">
                       <div>
-                        <label className="block text-xs text-gray-500 mb-1">Start hour</label>
+                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] mb-1">Start hour</label>
                         <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
-                          className="w-20 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-bold text-gray-900" />
+                          className="w-20 px-3 py-2 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#34c759]" />
                       </div>
-                      <span className="text-gray-300 mt-4">&rarr;</span>
+                      <span className="text-[rgba(255,255,255,0.24)] mt-4">&rarr;</span>
                       <div>
-                        <label className="block text-xs text-gray-500 mb-1">End hour</label>
+                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] mb-1">End hour</label>
                         <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
-                          className="w-20 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-bold text-gray-900" />
+                          className="w-20 px-3 py-2 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#34c759]" />
                       </div>
                     </div>
                   </div>
@@ -973,100 +927,100 @@ export default function Dashboard() {
               {/* Section 3: Targeting + Delays (side-by-side on desktop) */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Targeting Criteria */}
-                <Card className="overflow-hidden">
-                  <div className="bg-gray-800 px-6 py-4">
-                    <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
-                      <Search size={16} /> Targeting Criteria
+                <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
+                  <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
+                    <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
+                      <Search size={14} className="text-[#ff9f0a]" /> Targeting Criteria
                     </h3>
                   </div>
                   <div className="p-6">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Likes</label>
+                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Min Likes</label>
                         <input type="number" name="minLikes" defaultValue={settings.minLikes ?? 10}
-                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
+                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff9f0a]" />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Likes</label>
+                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Likes</label>
                         <input type="number" name="maxLikes" defaultValue={settings.maxLikes ?? 10000}
-                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
+                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff9f0a]" />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Comments</label>
+                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Min Comments</label>
                         <input type="number" name="minComments" defaultValue={settings.minComments ?? 2}
-                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
+                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff9f0a]" />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Comments</label>
+                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Comments</label>
                         <input type="number" name="maxComments" defaultValue={settings.maxComments ?? 1000}
-                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
+                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff9f0a]" />
                       </div>
                     </div>
                   </div>
                 </Card>
 
                 {/* Safety Delays */}
-                <Card className="overflow-hidden">
-                  <div className="bg-gray-800 px-6 py-4">
-                    <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
-                      <Bot size={16} /> Safety Delays
+                <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
+                  <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
+                    <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
+                      <Bot size={14} className="text-[#ff3b30]" /> Safety Delays
                     </h3>
                   </div>
                   <div className="p-6 space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Min Delay (Mins)</label>
+                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Min Delay (Mins)</label>
                         <input type="number" name="minDelayMins" defaultValue={settings.minDelayMins ?? 15}
-                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
+                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff3b30]" />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Delay (Mins)</label>
+                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Delay (Mins)</label>
                         <input type="number" name="maxDelayMins" defaultValue={settings.maxDelayMins ?? 45}
-                          className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
+                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff3b30]" />
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Comments / Day</label>
+                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Comments / Day</label>
                       <input type="number" name="maxCommentsPerDay" defaultValue={settings.maxCommentsPerDay ?? 20}
-                        className="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm font-bold text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent -mt-1" />
+                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff3b30]" />
                     </div>
-                    <p className="text-[10px] text-gray-400 italic">Randomized delays emulate human behavior.</p>
+                    <p className="text-micro text-[rgba(255,255,255,0.32)]">Randomized delays emulate human behavior.</p>
                   </div>
                 </Card>
               </div>
 
               {/* Section 4: Connection Profile */}
-              <Card className="overflow-hidden">
-                <div className="bg-gray-900 px-6 py-4">
-                  <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
-                    <Shield size={16} className="text-primary-400" /> Connection Profile
+              <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
+                <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
+                  <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
+                    <Shield size={14} className="text-[#0071e3]" /> Connection Profile
                   </h3>
                 </div>
-                <div className="p-6 bg-gray-50 space-y-4">
+                <div className="p-6 space-y-4">
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1.5">LinkedIn Session Cookie (li_at)</label>
+                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">LinkedIn Session (li_at)</label>
                       <input
                         type="text"
                         name="linkedinSessionCookie"
                         defaultValue={settings.linkedinSessionCookie || ''}
                         placeholder="Paste your li_at cookie"
-                        className="w-full px-3 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-mono font-bold text-gray-700 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm font-mono text-white outline-none focus:border-[#0071e3]"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Profile Views / Day</label>
+                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Profile Views / Day</label>
                       <input type="number" name="maxProfileViewsPerDay" defaultValue={settings.maxProfileViewsPerDay ?? 100}
-                        className="w-full px-3 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary-500 focus:border-transparent" />
+                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#0071e3]" />
                     </div>
                   </div>
-                  <p className="text-[10px] text-gray-400 italic">Session cookie is used for server-side authentication. Do not share.</p>
+                  <p className="text-micro text-[rgba(255,255,255,0.32)]">Session cookie is used for server-side auth. Do not share.</p>
                 </div>
               </Card>
 
               {/* Submit */}
               <div className="flex justify-end">
-                <Button type="submit" variant="primary" size="lg" className="px-12 shadow-xl shadow-primary-500/20">
+                <Button type="submit" variant="primary">
                   Save Settings
                 </Button>
               </div>
@@ -1077,72 +1031,61 @@ export default function Dashboard() {
       case 'extension-connect':
         return (
           <div className="space-y-6">
-            <Card>
+            <Card className="bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
               <div className="p-8">
                 <div className="flex items-center gap-3 mb-6">
-                  <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
-                    <Bot className="w-6 h-6 text-primary-600" />
+                  <div className="w-10 h-10 bg-[rgba(255,255,255,0.06)] rounded-lg flex items-center justify-center">
+                    <Bot className="w-5 h-5 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-xl font-extrabold text-gray-900">Connect Extension</h3>
-                    <p className="text-xs text-gray-500 font-medium">Link your Chrome extension in one click</p>
+                    <h3 className="text-tile-heading text-white">Connect Extension</h3>
+                    <p className="text-caption text-[rgba(255,255,255,0.48)]">Link your Chrome extension</p>
                   </div>
                 </div>
 
-                {/* Step 1: Install */}
-                <div className="bg-gray-50 border-2 border-gray-100 rounded-2xl p-6 mb-4">
-                  <h4 className="text-sm font-extrabold text-gray-800 mb-2 flex items-center gap-2">
-                    <span className="w-6 h-6 bg-primary-500 text-white rounded-full flex items-center justify-center text-xs font-black">1</span>
+                <div className="bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-lg p-5 mb-4">
+                  <h4 className="text-caption-bold text-white mb-2 flex items-center gap-2">
+                    <span className="w-5 h-5 bg-[rgba(255,255,255,0.12)] text-white rounded-full flex items-center justify-center text-micro-bold">1</span>
                     Install Extension
                   </h4>
-                  <p className="text-xs text-gray-500 mb-3">Download and install the Chrome extension first.</p>
-                  <a href="/LinkedInExtension.zip" download className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-xl text-xs font-bold hover:bg-primary-600 transition-all">
-                    ⬇️ Download Extension ZIP
+                  <p className="text-micro text-[rgba(255,255,255,0.48)] mb-3">Download and install the Chrome extension.</p>
+                  <a href="/LinkedInExtension.zip" download className="inline-flex items-center gap-2 px-3 py-2 bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.12)] text-white rounded-md text-micro-bold transition-all">
+                    Download Extension ZIP
                   </a>
                 </div>
 
-                {/* Step 2: Auto-Connect */}
-                <div className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-6 mb-4">
-                  <h4 className="text-sm font-extrabold text-gray-800 mb-2 flex items-center gap-2">
-                    <span className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-black">2</span>
+                <div className="bg-[rgba(0,113,227,0.08)] border border-[rgba(0,113,227,0.16)] rounded-lg p-5 mb-4">
+                  <h4 className="text-caption-bold text-[#0071e3] mb-2 flex items-center gap-2">
+                    <span className="w-5 h-5 bg-[#0071e3] text-white rounded-full flex items-center justify-center text-micro-bold">2</span>
                     One-Click Connect
                   </h4>
-                  <p className="text-xs text-gray-500 mb-3">Open the extension popup while on this page, then click <strong>"🔗 Auto-Connect"</strong>. It will link automatically!</p>
-                  <div className="bg-white rounded-xl p-4 border border-blue-100">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Your Connection Code</p>
+                  <p className="text-micro text-[rgba(255,255,255,0.64)] mb-3">Open the extension popup while on this page, then click Auto-Connect.</p>
+                  <div className="bg-[#1d1d1f] rounded-lg p-3 border border-[rgba(255,255,255,0.05)]">
+                    <p className="text-[10px] font-bold text-[rgba(255,255,255,0.32)] uppercase mb-1">Your Connection Code</p>
                     <div className="flex items-center gap-2">
-                      <code className="flex-1 bg-gray-50 text-sm font-mono font-bold text-gray-800 p-2 rounded-lg border">{settings.userId || 'Loading...'}</code>
+                      <code className="flex-1 bg-[rgba(255,255,255,0.04)] text-micro font-mono text-[rgba(255,255,255,0.8)] p-2 rounded-md">{settings.userId || 'Loading...'}</code>
                       <button
                         type="button"
                         onClick={() => {
                           navigator.clipboard.writeText(settings.userId || '');
                           const btn = document.getElementById('copy-uid-btn');
-                          if (btn) { btn.textContent = '✅ Copied!'; setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000); }
+                          if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy Code'; }, 2000); }
                         }}
                         id="copy-uid-btn"
-                        className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-bold transition-all"
+                        className="px-3 py-2 bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.12)] rounded-md text-micro-bold text-white transition-all"
                       >
-                        📋 Copy
+                        Copy Code
                       </button>
                     </div>
                   </div>
                 </div>
 
-                {/* Hidden DOM element for extension auto-detection */}
-                <div
-                  id="nexora-connect-data"
-                  data-user-id={settings.userId || ''}
-                  data-dashboard-url={typeof window !== 'undefined' ? window.location.origin : ''}
-                  style={{ display: 'none' }}
-                />
-
-                {/* Step 3: Activate */}
-                <div className="bg-green-50 border-2 border-green-200 rounded-2xl p-6">
-                  <h4 className="text-sm font-extrabold text-gray-800 mb-2 flex items-center gap-2">
-                    <span className="w-6 h-6 bg-green-500 text-white rounded-full flex items-center justify-center text-xs font-black">3</span>
+                <div className="bg-[rgba(52,199,89,0.08)] border border-[rgba(52,199,89,0.16)] rounded-lg p-5">
+                  <h4 className="text-caption-bold text-[#34c759] mb-2 flex items-center gap-2">
+                    <span className="w-5 h-5 bg-[#34c759] text-white rounded-full flex items-center justify-center text-micro-bold">3</span>
                     Activate
                   </h4>
-                  <p className="text-xs text-gray-500">Once connected, go back to the Dashboard and click <strong>🚀 START</strong> to begin automated engagement!</p>
+                  <p className="text-micro text-[rgba(255,255,255,0.64)]">Once connected, click START on the Dashboard to begin automated engagement!</p>
                 </div>
               </div>
             </Card>
@@ -1156,41 +1099,14 @@ export default function Dashboard() {
 
   return (
     <>
-      {/* Hidden element for extension Auto-Connect (Strategy A: DOM Injection) */}
-      <div
-        id="nexora-connect-data"
-        data-user-id={settings.userId || ''}
-        data-dashboard-url={typeof window !== 'undefined' ? window.location.origin : ''}
-        style={{ display: 'none' }}
-      />
-      {/* Onboarding Wizard Modal */}
-      <OnboardingWizard 
-        isOpen={showWizard} 
-        onClose={() => setShowWizard(false)} 
-        loadStarterPack={loadStarterPack}
-        isDeployingPack={isDeployingPack}
-      />
+      <div id="nexora-connect-data" data-user-id={settings.userId || ''} data-dashboard-url={typeof window !== 'undefined' ? window.location.origin : ''} style={{ display: 'none' }} />
+      <OnboardingWizard isOpen={showWizard} onClose={() => setShowWizard(false)} loadStarterPack={loadStarterPack} isDeployingPack={isDeployingPack} />
 
-      {/* Sidebar */}
-      <Sidebar 
-        activeTab={activeTab} 
-        onTabChange={setActiveTab} 
-        systemActive={systemActive} 
-      />
+      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} systemActive={systemActive} />
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
-        <Header 
-          title={activeTab} 
-          sessionConnected={true} 
-        />
-
-        {/* Main Content */}
-        <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-gray-50 relative">
-          {/* Background pattern for depth */}
-          <div className="absolute inset-0 bg-grid-pattern opacity-30 pointer-events-none -z-10"></div>
-
+      <div className="flex-1 flex flex-col overflow-hidden bg-black">
+        <Header title={activeTab} sessionConnected={true} />
+        <main className="flex-1 overflow-y-auto p-6 md:p-8 relative">
           <div className="max-w-[1400px] mx-auto pb-20">
             {renderContent()}
           </div>
