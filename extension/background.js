@@ -358,7 +358,7 @@ async function _checkJobsInner() {
 
     console.log(`🚀 [Worker] Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}"`);
     showPremiumToast('Nexora Engine Started', `Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for "${kw}"`, false);
-    await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId);
+    await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId, cycleNum);
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
@@ -366,8 +366,10 @@ async function _checkJobsInner() {
 }
 
 // ── Scraping Cycle (Navigation-Resilient v2) ──
-async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId) {
-  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId, cycleNum = 1) {
+  // Use cycleNum to naturally paginate through LinkedIn search results! 
+  // This guarantees each cycle gets completely fresh posts and bypasses the 0/X skip bug.
+  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&page=${cycleNum}`;
   let injectionCount = 0;
   const MAX_INJECTIONS = 3;
 
