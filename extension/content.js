@@ -1,8 +1,22 @@
 // ═══════════════════════════════════════════════════════════
-// LinkedIn Precision Extraction Engine v4 (Re-Injectable)
+// LinkedIn Precision Extraction Engine v5 (Re-Injectable)
 // Injected by background.js via chrome.scripting.executeScript
 // ═══════════════════════════════════════════════════════════
-
+// Fixes applied:
+// FIX-A: DOM virtualization — never store element references across phases.
+//        At comment time, re-query by URL (data-urn / link) so the element
+//        is always live, not a detached stale reference.
+// FIX-B: Per-comment retry loop — if a post fails (no button, no editor,
+//        detached element) we try the NEXT post for THE SAME comment before
+//        giving up. commentIdx only advances on confirmed success.
+// FIX-C: Incomplete-cycle signal — if we exhaust all candidate posts and
+//        still haven't placed all comments, we send JOB_COMPLETED with the
+//        real counts so background.js (FIX-3) can decide not to consume the
+//        cycle slot.
+// FIX-D: Scroll-to-post re-query — instead of scrollIntoView on a stale
+//        element reference, we scroll to position by re-finding the element
+//        right before clicking, giving LinkedIn time to mount it.
+// ═══════════════════════════════════════════════════════════
 
 // Clean up any previous injection's listener before registering fresh
 if (window.__linkedInExtractorCleanup) {
@@ -21,7 +35,7 @@ window.__linkedInExtractorReady = true;
     }
   }
   chrome.runtime.onMessage.addListener(messageHandler);
-  
+
   // Expose global for direct injection (bypasses message race conditions)
   window.__startExtraction = function(keyword, settings, comments, dashboardUrl, userId) {
     console.log(`[Ext] ✅ Direct injection start for: "${keyword}"`);
@@ -38,13 +52,13 @@ window.__linkedInExtractorReady = true;
     if (isExtracting) { console.log("[Ext] ⏭️ Already running, skip."); return; }
     isExtracting = true;
     try { await extractPipeline(keyword, settings, comments, dashboardUrl, userId); }
-    catch (e) { 
-      console.error("[Ext] ❌ Fatal:", e); 
-      try { 
+    catch (e) {
+      console.error("[Ext] ❌ Fatal:", e);
+      try {
         chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }, () => {
           if (chrome.runtime.lastError) { /* ignore */ }
-        }); 
-      } catch(x){} 
+        });
+      } catch(x){}
     }
     finally { isExtracting = false; }
   }
@@ -65,6 +79,59 @@ window.__linkedInExtractorReady = true;
     return Math.round(n);
   }
 
+  // ─── FIX-A: Live element lookup by URL ───
+  // Instead of storing a stale DOM reference, call this right before interacting
+  // with a post. It re-queries the live DOM using the post's URL/URN.
+  function findLivePostElement(postUrl) {
+    if (!postUrl) return null;
+
+    // Extract the URN from the URL (handles both activity: and ugcPost: forms)
+    const urnMatch = postUrl.match(/urn:li:(activity|ugcPost):\d+/);
+    const urn = urnMatch ? urnMatch[0] : null;
+
+    // Strategy 1: data-urn attribute on a container
+    if (urn) {
+      const byUrn = document.querySelector(`[data-urn="${urn}"]`);
+      if (byUrn) return byUrn;
+
+      // Strategy 2: parent of any element with matching data-urn
+      const inner = document.querySelector(`[data-urn*="${urn}"]`);
+      if (inner) {
+        const parent = inner.closest('li, div.artdeco-card, .reusable-search__result-container, .entity-result, article, [data-view-name="feed-full-update"]');
+        if (parent) return parent;
+        return inner;
+      }
+    }
+
+    // Strategy 3: find the anchor with this href, then walk up to the post card
+    const encodedUrn = urn ? encodeURIComponent(urn) : null;
+    const selectors = encodedUrn
+      ? [`a[href*="${urn}"]`, `a[href*="${encodedUrn}"]`]
+      : [`a[href*="${postUrl}"]`];
+
+    for (const sel of selectors) {
+      try {
+        const link = document.querySelector(sel);
+        if (link) {
+          const card = link.closest('li, div.artdeco-card, .reusable-search__result-container, .entity-result, article, [data-view-name="feed-full-update"]');
+          if (card) return card;
+        }
+      } catch(e) {}
+    }
+
+    // Strategy 4: scan all containers for a link containing this URL's path
+    const path = postUrl.replace('https://www.linkedin.com', '');
+    const allLinks = document.querySelectorAll('a[href]');
+    for (const a of allLinks) {
+      if (a.href && a.href.includes(path.split('?')[0])) {
+        const card = a.closest('li, div.artdeco-card, .reusable-search__result-container, .entity-result, article');
+        if (card) return card;
+      }
+    }
+
+    return null;
+  }
+
   // ─── Main Pipeline ───
 
   async function extractPipeline(keyword, settings, comments, dashboardUrl, userId) {
@@ -74,9 +141,10 @@ window.__linkedInExtractorReady = true;
 
     console.log(`[Ext] ═══ PIPELINE START ═══`);
     console.log(`[Ext] Keyword: "${keyword}" | Reach: minLikes=${minL}, minComments=${minC}`);
+    console.log(`[Ext] Assigned comments: ${comments ? comments.length : 0}`);
     console.log(`[Ext] Current URL: ${window.location.href}`);
 
-    // ── Safe message sender (prevents 'Receiving end does not exist' crash) ──
+    // ── Safe message sender ──
     function safeSend(msg) {
       try {
         chrome.runtime.sendMessage(msg, () => {
@@ -112,9 +180,7 @@ window.__linkedInExtractorReady = true;
     console.log(`[Ext] 📜 Phase 2: Scrolling 25 cycles...`);
     heartbeat('Phase2-Scrolling', '📜 Initializing scrolling bypass...');
 
-    // Smart Scroll: Find LinkedIn's ACTUAL scrollable container
     function findScrollContainer() {
-      // LinkedIn nests search results inside these containers with their own overflow
       const candidates = [
         '.scaffold-layout__main',
         '.scaffold-layout__list',
@@ -129,11 +195,10 @@ window.__linkedInExtractorReady = true;
           return el;
         }
       }
-      // Fallback: search for any large scrollable div
       const allDivs = document.querySelectorAll('div[class*="scaffold"], div[class*="search"], main');
       for (const div of allDivs) {
         if (div.scrollHeight > div.clientHeight + 200) {
-          console.log(`[Ext]    🎯 Found scrollable fallback: ${div.className.substring(0, 60)} (scrollH=${div.scrollHeight})`);
+          console.log(`[Ext]    🎯 Found scrollable fallback: ${div.className.substring(0, 60)}`);
           return div;
         }
       }
@@ -144,25 +209,16 @@ window.__linkedInExtractorReady = true;
     const scrollTarget = findScrollContainer();
 
     for (let i = 0; i < 25; i++) {
-      // Use 'auto' (instant) instead of 'smooth' to bypass Chrome's background-tab animation throttling
       if (typeof scrollTarget.scrollBy === 'function') {
         scrollTarget.scrollBy({ top: 1200, behavior: 'auto' });
       } else {
         scrollTarget.scrollTop += 1200;
       }
-      
-      // Force trigger scroll events so LinkedIn's lazy-loader triggers even if the tab is hidden
       window.dispatchEvent(new Event('scroll'));
       scrollTarget.dispatchEvent(new Event('scroll'));
-      
       await wait(2000, 3500);
-
-      // Send heartbeat every 5 scrolls to keep the monitor alive
       if (i % 5 === 4) heartbeat(`Phase2-Scroll-${i+1}/25`, `📜 Scrolling feed: ${i+1}/25...`);
 
-
-
-      // Click "Show more results" if it appears
       const more = Array.from(document.querySelectorAll('button')).find(b =>
         b.innerText.toLowerCase().includes('show more') ||
         b.innerText.toLowerCase().includes('see more') ||
@@ -170,8 +226,7 @@ window.__linkedInExtractorReady = true;
       );
       if (more && more.offsetParent !== null) { more.click(); await wait(2000, 3000); }
     }
-    // Scroll back to top smoothly
-    scrollTarget.scroll({ top: 0, behavior: 'smooth' });
+    scrollTarget.scroll({ top: 0, behavior: 'auto' });
     await wait(2000, 3000);
 
     // ── PHASE 3: Discover post containers ──
@@ -197,7 +252,6 @@ window.__linkedInExtractorReady = true;
     }
     console.log(`[Ext]    Strategy A (CSS selectors): ${containers.length}`);
 
-    // Strategy B: Actor component parents
     const actors = document.querySelectorAll('.update-components-actor, .update-components-actor__container');
     let stratBCount = 0;
     actors.forEach(actor => {
@@ -206,7 +260,6 @@ window.__linkedInExtractorReady = true;
     });
     console.log(`[Ext]    Strategy B (Actor parents): +${stratBCount}`);
 
-    // Strategy C: Link-based discovery
     const activityLinks = document.querySelectorAll('a[href*="activity"], a[href*="ugcPost"]');
     let stratCCount = 0;
     activityLinks.forEach(link => {
@@ -215,7 +268,6 @@ window.__linkedInExtractorReady = true;
     });
     console.log(`[Ext]    Strategy C (Link parents): +${stratCCount}`);
 
-    // Strategy D: Semantic fallback
     let stratDCount = 0;
     document.querySelectorAll('div, li, article').forEach(el => {
       if (containers.includes(el) || containers.length >= 150) return;
@@ -234,11 +286,9 @@ window.__linkedInExtractorReady = true;
       console.log(`[Ext]    Title: ${document.title}`);
       console.log(`[Ext]    URL: ${window.location.href}`);
       console.log(`[Ext]    Body length: ${document.body.innerText.length}`);
-      console.log(`[Ext]    All links: ${document.links.length}`);
-      console.log(`[Ext]    Sample text: ${document.body.innerText.substring(0, 500)}`);
       await syncToDashboard([], "DEBUG_ZERO_CONTAINERS", dashboardUrl, userId,
         `TITLE:${document.title}|URL:${window.location.href}|BODY_LEN:${document.body.innerText.length}|LINKS:${document.links.length}|SAMPLE:${document.body.innerText.substring(0, 300)}`);
-      chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
+      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: comments ? comments.length : 0, searchOnlyMode: settings.searchOnlyMode || false });
       return;
     }
 
@@ -252,23 +302,17 @@ window.__linkedInExtractorReady = true;
 
     for (let i = 0; i < containers.length && allPosts.length < 100; i++) {
       const c = containers[i];
-
-      // ── URL extraction: 6 strategies, NO fake URLs ──
       let url = null;
 
-      // Strategy 1: Direct link selectors (most common)
+      // URL extraction strategies (unchanged — proven to work)
       if (!url) {
         const link = c.querySelector('a[href*="/feed/update/"], a[href*="urn:li:activity:"], a[href*="urn:li:ugcPost:"]');
         if (link) url = link.href.split('?')[0];
       }
-
-      // Strategy 2: app-aware-link with activity reference
       if (!url) {
         const link = c.querySelector('a.app-aware-link[href*="activity"]');
         if (link) url = link.href.split('?')[0];
       }
-
-      // Strategy 3: data-urn attribute on container or child
       if (!url) {
         const urnEl = c.closest('[data-urn]') || c.querySelector('[data-urn]');
         const urn = urnEl?.getAttribute('data-urn');
@@ -276,26 +320,19 @@ window.__linkedInExtractorReady = true;
           url = 'https://www.linkedin.com/feed/update/' + urn;
         }
       }
-
-      // Strategy 4: Scan ALL links for any containing activity/ugcPost URN
       if (!url) {
         const allLinks = c.querySelectorAll('a[href]');
         for (const a of allLinks) {
           const h = a.href;
           if (h.includes('activity:') || h.includes('ugcPost:') || h.includes('/feed/update/')) {
-            url = h.split('?')[0];
-            break;
+            url = h.split('?')[0]; break;
           }
         }
       }
-
-      // Strategy 5: LinkedIn /posts/ style URLs
       if (!url) {
         const postLink = c.querySelector('a[href*="/posts/"]');
         if (postLink) url = postLink.href.split('?')[0];
       }
-
-      // Strategy 6: Decode tracking scope data for embedded URN
       if (!url) {
         try {
           const trackingEl = c.querySelector('[data-view-tracking-scope]') || (c.hasAttribute('data-view-tracking-scope') ? c : null);
@@ -315,69 +352,64 @@ window.__linkedInExtractorReady = true;
           }
         } catch (e) {}
       }
-
-      // Strategy 7: Bulletproof HTML Regex Fallback
       if (!url) {
         const html = c.innerHTML;
         let match = html.match(/urn:li:activity:\d+/);
         if (!match) match = html.match(/urn:li:ugcPost:\d+/);
-        if (match) {
-          url = 'https://www.linkedin.com/feed/update/' + match[0];
-        }
+        if (match) url = 'https://www.linkedin.com/feed/update/' + match[0];
       }
 
-      // ── SKIP posts without a real LinkedIn URL ──
       if (!url) { noUrlCount++; continue; }
       if (seenUrls[url]) { dupCount++; continue; }
       seenUrls[url] = true;
 
       // Engagement extraction
-      let likes = 0, comments = 0;
+      let likes = 0, commentsCount = 0;
       try {
         const labels = Array.from(c.querySelectorAll('[aria-label]')).map(e => e.getAttribute('aria-label').toLowerCase());
         for (const l of labels) {
           const n = num(l.match(/(\d[\d,]*k?m?)/)?.[0]);
           if (!likes && (l.includes('reaction') || l.includes('like') || l.includes('إعجاب'))) likes = n;
-          if (!comments && (l.includes('comment') || l.includes('تعليق'))) comments = n;
+          if (!commentsCount && (l.includes('comment') || l.includes('تعليق'))) commentsCount = n;
         }
-        if (!likes || !comments) {
+        if (!likes || !commentsCount) {
           const texts = Array.from(c.querySelectorAll('button, span.social-details-social-counts__reactions-count, span')).map(e => e.innerText.toLowerCase().trim());
           for (const t of texts) {
             const n = num(t.match(/(\d[\d,]*k?m?)/)?.[0]);
             if (n > 0) {
               if (!likes && (t.includes('like') || t.includes('إعجاب') || t.includes('reaction'))) likes = n;
-              if (!comments && (t.includes('comment') || t.includes('تعليق'))) comments = n;
+              if (!commentsCount && (t.includes('comment') || t.includes('تعليق'))) commentsCount = n;
             }
           }
         }
-        // Fallback: try to find raw numbers near engagement buttons
         if (!likes) {
           const reactionCountEl = c.querySelector('.social-details-social-counts__reactions-count, [data-test-id="social-actions__reaction-count"]');
           if (reactionCountEl) likes = num(reactionCountEl.innerText);
         }
-        if (!comments) {
+        if (!commentsCount) {
           const commentCountEl = c.querySelector('.social-details-social-counts__comments, [data-test-id="social-actions__comments"]');
-          if (commentCountEl) comments = num(commentCountEl.innerText);
+          if (commentCountEl) commentsCount = num(commentCountEl.innerText);
         }
       } catch (e) {}
 
-      // Author
       let author = 'Unknown';
       const authorEl = c.querySelector('.update-components-actor__name, .entity-result__title-text, .update-components-actor__title, .update-components-actor__meta a');
       if (authorEl) author = authorEl.innerText.split('\n')[0].trim().substring(0, 80);
 
       const preview = (c.innerText || '').replace(/[\n\r]+/g, ' ').substring(0, 400).trim();
 
-      allPosts.push({ url, likes, commentsCount: comments, author, preview, element: c });
+      // FIX-A: Store only the URL (and metadata) — NOT the element reference.
+      // The element will be re-queried live at comment time via findLivePostElement().
+      allPosts.push({ url, likes, commentsCount, author, preview });
     }
 
-    console.log(`[Ext]    Extracted: ${allPosts.length} unique posts (${noUrlCount} without original URL, ${dupCount} duplicates skipped)`);
+    console.log(`[Ext]    Extracted: ${allPosts.length} unique posts (${noUrlCount} without URL, ${dupCount} duplicates skipped)`);
 
     if (allPosts.length === 0) {
       console.error("[Ext] ❌ Extraction produced 0 posts from containers! Sending debug.");
       await syncToDashboard([], "DEBUG_ZERO_EXTRACTED", dashboardUrl, userId,
         `CONTAINERS:${containers.length}|NO_URL:${noUrlCount}|DUP:${dupCount}`);
-      chrome.runtime.sendMessage({ action: 'JOB_COMPLETED' });
+      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: comments ? comments.length : 0, searchOnlyMode: settings.searchOnlyMode || false });
       return;
     }
 
@@ -385,32 +417,19 @@ window.__linkedInExtractorReady = true;
     heartbeat('Phase5-Filtering');
     console.log(`[Ext] 🎯 Phase 5: Applying high-reach filter...`);
 
-    // Tier 1: EXACT match — sorted by HIGHEST REACH (NaN-safe)
     const tier1 = allPosts
       .filter(p => (p.likes || 0) >= minL && (p.commentsCount || 0) >= minC)
-      .sort((a, b) => {
-        const rA = (a.likes || 0) + (a.commentsCount || 0);
-        const rB = (b.likes || 0) + (b.commentsCount || 0);
-        return rB - rA; // highest reach first
-      });
+      .sort((a, b) => ((b.likes || 0) + (b.commentsCount || 0)) - ((a.likes || 0) + (a.commentsCount || 0)));
     console.log(`[Ext]    Tier 1 (Exact Reach): ${tier1.length} posts`);
 
-    // Tier 2: BEST AVAILABLE fallback (ranked strictly by highest reach, ignoring distance)
     const tier1Set = new Set(tier1.map(p => p.url));
     const tier2 = allPosts
       .filter(p => !tier1Set.has(p.url))
-      // Strictly avoid 0-engagement trash in the fallback
       .filter(p => (p.likes || 0) > 0 || (p.commentsCount || 0) > 0)
-      .sort((a, b) => {
-        const rA = (a.likes || 0) + (a.commentsCount || 0);
-        const rB = (b.likes || 0) + (b.commentsCount || 0);
-        return rB - rA; 
-      });
+      .sort((a, b) => ((b.likes || 0) + (b.commentsCount || 0)) - ((a.likes || 0) + (a.commentsCount || 0)));
     console.log(`[Ext]    Tier 2 (Best Available Fallback): ${tier2.length} posts`);
 
-    // Assemble final — ALL Tier 1, pad with Tier 2 if under MIN_POSTS
-    const final = [];
-    for (const p of tier1) { final.push(p); }
+    const final = [...tier1];
     if (final.length < MIN_POSTS) {
       for (const p of tier2) { if (final.length >= MIN_POSTS) break; final.push(p); }
     }
@@ -419,12 +438,12 @@ window.__linkedInExtractorReady = true;
     let commentsPostedThisCycle = 0;
     let availableComments = comments || [];
 
-    // ── PHASE 5b: Autonomous Safe Commenting (Hybrid Relayer) ──
+    // ── PHASE 5b: Autonomous Safe Commenting ──
     if (!settings.searchOnlyMode && comments && comments.length > 0 && final.length > 0) {
       heartbeat('Phase5-AutoComment', `🤖 Analyzing and mapping comments to fresh targets...`);
       console.log(`[Ext] 🤖 Phase 5b: Safe Auto-Commenting enabled. Waiting 3s...`);
       await wait(3000, 5000);
-      
+
       // ── NO-REPETITION: Load history of already-commented post URLs ──
       let commentedHistory = [];
       let usedCommentHistory = [];
@@ -436,226 +455,280 @@ window.__linkedInExtractorReady = true;
       const commentedSet = new Set(commentedHistory);
       const usedCommentSet = new Set(usedCommentHistory);
 
-      // Filter out posts we've already commented on in previous runs
       const freshPosts = final.filter(p => p.url && !commentedSet.has(p.url));
       console.log(`[Ext]    ${final.length} total → ${freshPosts.length} fresh (${commentedSet.size} in history)`);
 
-      // ── STRICT COMMENT MAPPING (Filter out completely posted ones) ──
-      // This prevents the same cycle's comment from being posted twice if the cycle partially failed earlier
-      if (usedCommentSet) {
-         availableComments = comments.filter(c => !usedCommentSet.has(c.id));
-      } else {
-         availableComments = comments;
-      }
+      availableComments = comments.filter(c => !usedCommentSet.has(c.id));
 
       if (availableComments.length === 0) {
         console.log(`[Ext] ✅ All assigned comments for this cycle are already posted.`);
-        safeSend({ 
-          action: 'JOB_COMPLETED', 
-          commentsPostedCount: comments.length, 
+        safeSend({
+          action: 'JOB_COMPLETED',
+          commentsPostedCount: comments.length,
           assignedCommentsCount: comments.length,
-          searchOnlyMode: settings.searchOnlyMode || false
+          searchOnlyMode: false
         });
         return;
       }
 
       if (freshPosts.length === 0) {
-        console.warn(`[Ext] ⚠️ Zero fresh posts remain! Skipping commenting phase for this cycle.`);
-      } else {
-        // Use ALL fresh posts as candidates, not just slice(0, N).
-        // If post X fails (no comment button, no editor, etc.), we try post X+1 with the same comment.
-        let commentIdx = 0;
-        let successfulTargetPosts = [];
-        let commentsNeeded = availableComments.length;
-        console.log(`[Ext]    Attempting ${commentsNeeded} comments across ${freshPosts.length} candidate posts...`);
+        console.warn(`[Ext] ⚠️ Zero fresh posts remain! Cannot place comments this cycle.`);
+        // FIX-C: Report accurately so background.js doesn't consume the cycle slot
+        safeSend({
+          action: 'JOB_COMPLETED',
+          commentsPostedCount: 0,
+          assignedCommentsCount: availableComments.length,
+          searchOnlyMode: false
+        });
+        return;
+      }
 
-        for (let postIdx = 0; postIdx < freshPosts.length && commentIdx < commentsNeeded; postIdx++) {
-          const p = freshPosts[postIdx];
-          if (!p.element) continue;
+      const commentsNeeded = availableComments.length;
+      const successfulTargetPosts = [];
+      console.log(`[Ext]    Attempting ${commentsNeeded} comments across ${freshPosts.length} candidate posts...`);
 
-          // Current comment to place
-          let commentObj = availableComments[commentIdx];
-          p.commentId = commentObj.id;
-          const textToType = commentObj.text;
-          
+      // ── FIX-B + FIX-A: Per-comment outer loop, per-post inner loop ──
+      // Outer loop: iterate over COMMENTS (commentIdx). Each comment must be placed.
+      // Inner loop: iterate over POSTS until one accepts the comment.
+      // commentIdx only advances after a CONFIRMED post (button clicked or Ctrl+Enter sent).
+      // FIX-A: element is re-queried live (findLivePostElement) right before each interaction.
+
+      let postCursor = 0; // tracks which post to try next across all comment attempts
+
+      for (let commentIdx = 0; commentIdx < commentsNeeded; commentIdx++) {
+        const commentObj = availableComments[commentIdx];
+        const textToType = commentObj.text;
+        let commentPlaced = false;
+
+        console.log(`[Ext] 📝 Attempting to place comment ${commentIdx + 1}/${commentsNeeded}: "${textToType.substring(0, 40)}..."`);
+
+        // Try each remaining candidate post for this comment
+        while (postCursor < freshPosts.length && !commentPlaced) {
+          const p = freshPosts[postCursor];
+          postCursor++;
+
+          console.log(`[Ext] 🎯 Trying post ${postCursor}/${freshPosts.length} by ${p.author} for comment ${commentIdx + 1}...`);
+
           try {
-          heartbeat('Phase5-Typing', `⌨️ Comment ${commentIdx+1}/${commentsNeeded}: Scrolling to target post by ${p.author}...`);
-          console.log(`[Ext] 🎯 Engaging with post by ${p.author}...`);
-          // Use 'auto' instead of 'smooth' to prevent infinite blocking on background tabs in Chrome M110+
-          p.element.scrollIntoView({ behavior: 'auto', block: 'center' });
-          window.dispatchEvent(new Event('scroll'));
-          
-          // Also dispatch on all possible scroll containers to force LinkedIn's lazy loader
-          document.querySelectorAll('.scaffold-layout__main, .search-results-container').forEach(sc => {
-            sc.dispatchEvent(new Event('scroll'));
-          });
-          
-          await wait(2000, 4000); // Give React time to re-mount virtualized elements
-          
-          // 1. Click Comment Button (broad selectors)
-          let commentBtn = p.element.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
-          if (!commentBtn) {
-            commentBtn = Array.from(p.element.querySelectorAll('button')).find(b => {
-              const label = (b.getAttribute('aria-label') || '').toLowerCase();
-              const text = (b.innerText || '').toLowerCase();
-              return label.includes('comment') || text.includes('comment') || label.includes('تعليق') || text.includes('تعليق');
-            });
-          }
-          if (!commentBtn) { console.log("[Ext] ⏭️ No comment button found, skipping."); continue; }
-          commentBtn.click();
-          heartbeat('Phase5-Editor', `💬 Comment ${commentIdx+1}/${commentsNeeded}: Opening editor...`);
-          console.log("[Ext]    Comment button clicked. Waiting for editor...");
-          await wait(2000, 3500); // Wait for editor to expand
-          
-          // 2. Find Editor Box (search post element first, then broader DOM)
-          let editor = p.element.querySelector('div.ql-editor, div[role="textbox"], div[contenteditable="true"]');
-          if (!editor) {
-            // LinkedIn sometimes renders comment forms outside the post card
-            const allEditors = document.querySelectorAll('div.ql-editor, div[role="textbox"], div[contenteditable="true"].comments-comment-texteditor__content');
-            for (const e of allEditors) {
-              if (e.offsetParent !== null && e.innerHTML.trim().length < 50) { editor = e; break; }
+            heartbeat('Phase5-Typing', `⌨️ Comment ${commentIdx+1}/${commentsNeeded}: Scrolling to post by ${p.author}...`);
+
+            // FIX-A + FIX-D: Re-query the live element right now (not a stored reference)
+            let liveEl = findLivePostElement(p.url);
+
+            if (!liveEl) {
+              // Element not in DOM yet — try scrolling to approximate position to trigger lazy load
+              console.log(`[Ext]    ⚠️ Post element not in live DOM. Triggering scroll to load it...`);
+              scrollTarget.scrollBy({ top: 800, behavior: 'auto' });
+              window.dispatchEvent(new Event('scroll'));
+              await wait(2000, 3000);
+              liveEl = findLivePostElement(p.url);
             }
-          }
-          if (!editor) { console.log("[Ext] ⏭️ No text editor found, skipping."); continue; }
-          heartbeat('Phase5-Typing', `⌨️ Comment ${commentIdx+1}/${commentsNeeded}: Human-typing ${textToType.length} characters...`);
-          console.log("[Ext]    Editor found. Starting human typing...");
-          
-          // 3. Human Typewriter + Fallback React Injection
-          editor.focus();
-          await wait(300, 600);
-          document.execCommand('selectAll', false, null);
-          document.execCommand('delete', false, null);
-          await wait(300, 600);
-          
-          for (let i = 0; i < textToType.length; i++) {
-            editor.focus(); 
-            document.execCommand('insertText', false, textToType[i]);
-            await wait(40, 150);
-          }
-          
-          // Background tab fallback: if execCommand failed because standard OS focus was lost
-          if (!editor.innerText || editor.innerText.trim().length === 0 || editor.innerText.trim() !== textToType.trim()) {
-            console.warn("[Ext] ⚠️ ExecCommand missed characters (tab unfocused). Injecting manually...");
-            editor.innerHTML = `<p>${textToType}</p>`;
-          }
-          
-          // Force React to recognize the input regardless of how it was injected
-          const inputEvent = new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: textToType });
-          editor.dispatchEvent(inputEvent);
-          
-          console.log(`[Ext]    Typed ${textToType.length} chars. Wait for review...`);
-          heartbeat('Phase5-Submit', `✅ Comment ${commentIdx+1}/${commentsNeeded}: Submitting comment...`);
-          await wait(2000, 4000); // Pause to "review" the comment
-          
-          // 4. Find & Click Submit Button (5-layer detection)
-          let submitBtn = null;
-          
-          // Layer 1: LinkedIn's known class on the post element
-          submitBtn = p.element.querySelector('button.comments-comment-box__submit-button');
-          
-          // Layer 2: Traverse UP from editor to find enclosing form/container
-          if (!submitBtn) {
-            let parent = editor.parentElement;
-            for (let depth = 0; depth < 10 && parent && !submitBtn; depth++) {
-              submitBtn = parent.querySelector('button.comments-comment-box__submit-button');
-              if (!submitBtn) submitBtn = parent.querySelector('button[type="submit"]');
-              // Look for blue "Comment" button specifically
-              if (!submitBtn) {
-                submitBtn = Array.from(parent.querySelectorAll('button')).find(b => {
-                  const txt = (b.innerText || '').trim().toLowerCase();
-                  return (txt === 'comment' || txt === 'post' || txt === 'نشر' || txt === 'تعليق') && b.offsetParent !== null;
-                });
+
+            if (!liveEl) {
+              console.log(`[Ext]    ⏭️ Post by ${p.author} still not in live DOM after scroll. Trying next post.`);
+              continue;
+            }
+
+            // Scroll to the live element
+            liveEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+            window.dispatchEvent(new Event('scroll'));
+            document.querySelectorAll('.scaffold-layout__main, .search-results-container').forEach(sc => {
+              sc.dispatchEvent(new Event('scroll'));
+            });
+            await wait(2000, 4000); // Give React time to re-mount virtualized children
+
+            // Re-query element AGAIN after scroll (LinkedIn may have re-rendered it)
+            liveEl = findLivePostElement(p.url) || liveEl;
+
+            // 1. Click Comment Button
+            let commentBtn = liveEl.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
+            if (!commentBtn) {
+              commentBtn = Array.from(liveEl.querySelectorAll('button')).find(b => {
+                const label = (b.getAttribute('aria-label') || '').toLowerCase();
+                const text = (b.innerText || '').toLowerCase();
+                return label.includes('comment') || text.includes('comment') || label.includes('تعليق') || text.includes('تعليق');
+              });
+            }
+            if (!commentBtn) {
+              console.log(`[Ext]    ⏭️ No comment button on post by ${p.author}. Trying next post.`);
+              continue;
+            }
+
+            commentBtn.click();
+            heartbeat('Phase5-Editor', `💬 Comment ${commentIdx+1}/${commentsNeeded}: Opening editor...`);
+            console.log("[Ext]    Comment button clicked. Waiting for editor...");
+            await wait(2000, 3500);
+
+            // 2. Find Editor Box — re-query liveEl after click (LinkedIn may remount)
+            liveEl = findLivePostElement(p.url) || liveEl;
+            let editor = liveEl.querySelector('div.ql-editor, div[role="textbox"], div[contenteditable="true"]');
+            if (!editor) {
+              const allEditors = document.querySelectorAll('div.ql-editor, div[role="textbox"], div[contenteditable="true"].comments-comment-texteditor__content');
+              for (const e of allEditors) {
+                if (e.offsetParent !== null && e.innerHTML.trim().length < 50) { editor = e; break; }
               }
-              parent = parent.parentElement;
             }
-          }
-          
-          // Layer 3: Find any submit button using document-wide search
-          if (!submitBtn) {
-            const allBtns = document.querySelectorAll('button.comments-comment-box__submit-button');
-            for (const btn of allBtns) {
-              if (btn.offsetParent !== null) { submitBtn = btn; break; }
+            if (!editor) {
+              console.log(`[Ext]    ⏭️ No text editor on post by ${p.author}. Trying next post.`);
+              // Try to close the comment box we may have opened
+              try { commentBtn.click(); } catch(e) {}
+              continue;
             }
-          }
-          
-          // Layer 4: Any visible blue button labeled "Comment" on the entire page
-          if (!submitBtn) {
-            const allBtns = Array.from(document.querySelectorAll('button'));
-            submitBtn = allBtns.find(b => {
-              if (b.offsetParent === null) return false;
-              const txt = (b.innerText || '').trim().toLowerCase();
-              const label = (b.getAttribute('aria-label') || '').toLowerCase();
-              const isBlue = b.className.includes('primary') || getComputedStyle(b).backgroundColor.includes('0, 119, 181') || getComputedStyle(b).backgroundColor.includes('10, 102, 194');
-              return (txt === 'comment' && isBlue) || txt === 'post' || txt === 'نشر' ||
-                      label.includes('post comment') || label.includes('submit comment');
-            });
-          }
-          
-          // Layer 5: Nuclear option — simulate Enter key on editor
-          if (!submitBtn) {
-            console.warn("[Ext] ⚠️ No submit button found via any selector. Trying Ctrl+Enter...");
+
+            heartbeat('Phase5-Typing', `⌨️ Comment ${commentIdx+1}/${commentsNeeded}: Typing ${textToType.length} chars...`);
+            console.log("[Ext]    Editor found. Starting human typing...");
+
+            // 3. Human Typewriter + Fallback React Injection
             editor.focus();
-            editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', ctrlKey: true, bubbles: true }));
-            await wait(1000, 2000);
-            console.log(`[Ext] ✅ Comment submitted via Ctrl+Enter: "${textToType.substring(0, 30)}..."`);
-            safeSend({ action: 'COMMENT_POSTED', url: p.url });
-            commentsPostedThisCycle++;
-            commentIdx++;
-            successfulTargetPosts.push(p);
-          }
-          
-          if (submitBtn) {
-            if (submitBtn.disabled) {
-              console.warn(`[Ext] ⚠️ Submit button is disabled. Force-enabling...`);
-              submitBtn.removeAttribute('disabled');
-              submitBtn.classList.remove('artdeco-button--disabled');
-              await wait(200, 500);
+            await wait(300, 600);
+
+            // Clear any existing content
+            document.execCommand('selectAll', false, null);
+            document.execCommand('delete', false, null);
+            await wait(300, 600);
+
+            for (let i = 0; i < textToType.length; i++) {
+              editor.focus();
+              document.execCommand('insertText', false, textToType[i]);
+              await wait(40, 150);
             }
-            submitBtn.click();
-            console.log(`[Ext] ✅ Comment Posted: "${textToType.substring(0, 30)}..."`);
-            safeSend({ action: 'COMMENT_POSTED', url: p.url });
-            commentsPostedThisCycle++;
-            commentIdx++;
-            successfulTargetPosts.push(p);
-          }
-          
-          await wait(4000, 7000); // Rest before next action
-          heartbeat('Phase5-Done', `✅ Comment ${commentIdx}/${commentsNeeded} posted successfully!`);
 
-          // 5. CLEANUP: Collapse this post's comment section so the next post's
-          //    editor detection doesn't accidentally re-target this one.
-          try {
-            // Click the comment button again to toggle/collapse the editor
-            const closeBtn = p.element.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
-            if (closeBtn) {
-              closeBtn.click();
-              console.log(`[Ext]    🧹 Collapsed comment section for post by ${p.author}.`);
-              await wait(1000, 2000);
+            // Background tab fallback: execCommand may miss characters when tab is unfocused
+            if (!editor.innerText || editor.innerText.trim().length === 0 || editor.innerText.trim() !== textToType.trim()) {
+              console.warn("[Ext] ⚠️ ExecCommand missed characters (tab unfocused). Injecting via innerHTML...");
+              editor.innerHTML = `<p>${textToType}</p>`;
             }
-          } catch (cleanupErr) { /* silently ignore cleanup failures */ }
 
-        } catch (e) {
-          console.error(`[Ext] ❌ Error Auto-Commenting:`, e);
-        }
-        } // closes for loop
+            // Force React to recognize the input
+            const inputEvent = new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: textToType });
+            editor.dispatchEvent(inputEvent);
 
-        // ── Save newly commented URLs and used IDs to history ──
-        const newlyCommented = successfulTargetPosts.map(p => p.url).filter(Boolean);
-        if (newlyCommented.length > 0) {
-          const updatedPosts = [...commentedHistory, ...newlyCommented].slice(-200);
-          const usedIds = successfulTargetPosts.map(p => p.commentId); 
-          const updatedComments = [...usedCommentHistory, ...usedIds].slice(-100);
-          try { 
-            await chrome.storage.local.set({ 
-              commentedPosts: updatedPosts,
-              usedCommentIds: updatedComments 
-            }); 
-          } catch(e) {}
-          console.log(`[Ext]    📝 Saved ${newlyCommented.length} URLs to history (total URLs: ${updatedPosts.length}, total Comments: ${updatedComments.length})`);
+            console.log(`[Ext]    Typed ${textToType.length} chars. Reviewing...`);
+            heartbeat('Phase5-Submit', `✅ Comment ${commentIdx+1}/${commentsNeeded}: Submitting...`);
+            await wait(2000, 4000);
+
+            // 4. Find & Click Submit Button (5-layer detection)
+            // Re-query liveEl one final time before hunting for submit button
+            liveEl = findLivePostElement(p.url) || liveEl;
+            let submitBtn = null;
+
+            submitBtn = liveEl.querySelector('button.comments-comment-box__submit-button');
+
+            if (!submitBtn) {
+              let parent = editor.parentElement;
+              for (let depth = 0; depth < 10 && parent && !submitBtn; depth++) {
+                submitBtn = parent.querySelector('button.comments-comment-box__submit-button');
+                if (!submitBtn) submitBtn = parent.querySelector('button[type="submit"]');
+                if (!submitBtn) {
+                  submitBtn = Array.from(parent.querySelectorAll('button')).find(b => {
+                    const txt = (b.innerText || '').trim().toLowerCase();
+                    return (txt === 'comment' || txt === 'post' || txt === 'نشر' || txt === 'تعليق') && b.offsetParent !== null;
+                  });
+                }
+                parent = parent.parentElement;
+              }
+            }
+
+            if (!submitBtn) {
+              const allBtns = document.querySelectorAll('button.comments-comment-box__submit-button');
+              for (const btn of allBtns) {
+                if (btn.offsetParent !== null) { submitBtn = btn; break; }
+              }
+            }
+
+            if (!submitBtn) {
+              const allBtns = Array.from(document.querySelectorAll('button'));
+              submitBtn = allBtns.find(b => {
+                if (b.offsetParent === null) return false;
+                const txt = (b.innerText || '').trim().toLowerCase();
+                const label = (b.getAttribute('aria-label') || '').toLowerCase();
+                const isBlue = b.className.includes('primary') || getComputedStyle(b).backgroundColor.includes('0, 119, 181') || getComputedStyle(b).backgroundColor.includes('10, 102, 194');
+                return (txt === 'comment' && isBlue) || txt === 'post' || txt === 'نشر' ||
+                  label.includes('post comment') || label.includes('submit comment');
+              });
+            }
+
+            // Layer 5: Nuclear — Ctrl+Enter
+            if (!submitBtn) {
+              console.warn("[Ext] ⚠️ No submit button found. Trying Ctrl+Enter...");
+              editor.focus();
+              editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', ctrlKey: true, bubbles: true }));
+              await wait(1500, 2500);
+              console.log(`[Ext] ✅ Comment submitted via Ctrl+Enter: "${textToType.substring(0, 30)}..."`);
+              safeSend({ action: 'COMMENT_POSTED', url: p.url });
+              commentsPostedThisCycle++;
+              p.commentId = commentObj.id;
+              successfulTargetPosts.push(p);
+              commentPlaced = true;
+            }
+
+            if (submitBtn) {
+              if (submitBtn.disabled) {
+                console.warn(`[Ext] ⚠️ Submit button is disabled. Force-enabling...`);
+                submitBtn.removeAttribute('disabled');
+                submitBtn.classList.remove('artdeco-button--disabled');
+                await wait(200, 500);
+              }
+              submitBtn.click();
+              console.log(`[Ext] ✅ Comment ${commentIdx+1} Posted on post by ${p.author}: "${textToType.substring(0, 30)}..."`);
+              safeSend({ action: 'COMMENT_POSTED', url: p.url });
+              commentsPostedThisCycle++;
+              p.commentId = commentObj.id;
+              successfulTargetPosts.push(p);
+              commentPlaced = true;
+            }
+
+            if (commentPlaced) {
+              await wait(4000, 7000); // Rest before next comment
+              heartbeat('Phase5-Done', `✅ Comment ${commentIdx+1}/${commentsNeeded} posted successfully!`);
+
+              // Collapse this post's comment section
+              try {
+                liveEl = findLivePostElement(p.url) || liveEl;
+                const closeBtn = liveEl.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
+                if (closeBtn) {
+                  closeBtn.click();
+                  console.log(`[Ext]    🧹 Collapsed comment section for post by ${p.author}.`);
+                  await wait(1000, 2000);
+                }
+              } catch (cleanupErr) { /* silently ignore */ }
+            }
+
+          } catch (e) {
+            console.error(`[Ext] ❌ Error on post by ${p.author}:`, e.message || e);
+            // Don't increment commentIdx — this post failed, try the next one
+          }
+        } // end while (postCursor < freshPosts.length && !commentPlaced)
+
+        if (!commentPlaced) {
+          // FIX-C: We exhausted all candidate posts for this comment
+          console.warn(`[Ext] ⚠️ Could not place comment ${commentIdx+1}/${commentsNeeded} — no suitable post found after trying ${postCursor} candidates.`);
+          // Break: no point trying remaining comments if we're out of posts
+          break;
         }
-      } // closes else block
+      } // end for (commentIdx)
+
+      // ── Save history ──
+      const newlyCommented = successfulTargetPosts.map(p => p.url).filter(Boolean);
+      if (newlyCommented.length > 0) {
+        const updatedPosts = [...commentedHistory, ...newlyCommented].slice(-200);
+        const usedIds = successfulTargetPosts.map(p => p.commentId).filter(Boolean);
+        const updatedComments = [...usedCommentHistory, ...usedIds].slice(-100);
+        try {
+          await chrome.storage.local.set({
+            commentedPosts: updatedPosts,
+            usedCommentIds: updatedComments
+          });
+        } catch(e) {}
+        console.log(`[Ext]    📝 Saved ${newlyCommented.length} URLs to history.`);
+      }
+
+      // FIX-C: Report exact counts to background.js so it can decide whether to
+      // consume the cycle slot (it will only do so if posted >= assigned).
+      console.log(`[Ext] 📊 Comment result: ${commentsPostedThisCycle}/${availableComments.length} placed.`);
+
     } else {
-      console.log(`[Ext] 🛡️ Search-Only Mode Active OR No Comments found. Skipping engagement.`);
+      console.log(`[Ext] 🛡️ Search-Only Mode OR no comments assigned. Skipping engagement.`);
     }
 
     // ── PHASE 6: Sync to dashboard ──
@@ -669,17 +742,15 @@ window.__linkedInExtractorReady = true;
         `ALL:${allPosts.length}|T1:${tier1.length}|T2:${tier2.length}|minL:${minL}|minC:${minC}`);
     }
 
-    // Calculate actual total posted against the cycle strictly
-    const previouslyPosted = (comments && comments.length) ? (comments.length - availableComments.length) : 0;
-    const totalPosted = previouslyPosted + commentsPostedThisCycle;
-
-    safeSend({ 
-      action: 'JOB_COMPLETED', 
-      commentsPostedCount: totalPosted,
-      assignedCommentsCount: comments ? comments.length : 0,
+    // FIX-C: Send accurate counts. background.js v5 requires posted >= assigned
+    // before it counts this as a successful cycle.
+    safeSend({
+      action: 'JOB_COMPLETED',
+      commentsPostedCount: commentsPostedThisCycle,
+      assignedCommentsCount: availableComments.length,
       searchOnlyMode: settings.searchOnlyMode || false
     });
-    console.log(`[Ext] ═══ PIPELINE COMPLETE ═══`);
+    console.log(`[Ext] ═══ PIPELINE COMPLETE: ${commentsPostedThisCycle}/${availableComments.length} comments posted ═══`);
   }
 
   async function syncToDashboard(posts, keyword, dashboardUrl, userId, debug = null) {
@@ -690,7 +761,7 @@ window.__linkedInExtractorReady = true;
           posts, keyword, dashboardUrl, userId, debugInfo: debug
         }, () => {
           if (chrome.runtime.lastError) {
-             console.warn("[Ext] Sync message failed safely:", chrome.runtime.lastError.message);
+            console.warn("[Ext] Sync message failed safely:", chrome.runtime.lastError.message);
           }
           resolve();
         });
