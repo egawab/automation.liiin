@@ -76,6 +76,7 @@ export async function POST(req: Request) {
                 data: {
                   likes: Number(post.likes || 0),
                   comments: Number(post.comments || 0),
+                  postPreview: post.preview ? String(post.preview).substring(0, 1000) : undefined,
                   savedAt: new Date() // Refresh timestamp to show it was recently seen
                 }
               });
