@@ -4,13 +4,14 @@ import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'motion/react';
-import { MessageSquare, PenTool, Sparkles, Mail, Lock, ArrowRight, Shield } from 'lucide-react';
+import { MessageSquare, PenTool, Sparkles, Mail, Lock, ArrowRight, Shield, Sun, Moon } from 'lucide-react';
 import { showToast } from '@/components/ui/Toast';
+import { useTheme } from '@/components/theme-provider';
 
 function LoginFormFallback() {
     return (
-        <div className="min-h-screen flex items-center justify-center p-4 bg-black">
-            <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+        <div className="min-h-screen flex items-center justify-center p-4 bg-page">
+            <div className="w-5 h-5 border-2 border-border-subtle border-t-apple-blue rounded-full animate-spin" />
         </div>
     );
 }
@@ -24,6 +25,7 @@ function LoginForm() {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const { theme, toggleTheme } = useTheme();
 
     useEffect(() => {
         setIsLogin(searchParams.get('mode') !== 'register');
@@ -76,31 +78,40 @@ function LoginForm() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center p-4 bg-black">
+        <div className="min-h-screen flex items-center justify-center p-4 bg-page relative">
+            {/* Theme toggle - top right */}
+            <button
+                onClick={toggleTheme}
+                className="absolute top-4 right-4 p-2 rounded-full bg-surface-hover hover:bg-surface-elevated transition-premium text-secondary hover:text-primary z-10"
+                aria-label="Toggle theme"
+            >
+                {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
+
             <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
                 className="w-full max-w-5xl"
             >
-                <div className="flex flex-col md:flex-row overflow-hidden rounded-lg bg-[#272729]">
+                <div className="flex flex-col md:flex-row overflow-hidden rounded-xl bg-surface-elevated border border-border-subtle apple-shadow-lg">
                     {/* Left Side: Value Prop */}
                     <motion.div
                         initial={{ opacity: 0, x: -20 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ duration: 0.6, delay: 0.2 }}
-                        className="w-full md:w-1/2 p-10 lg:p-14 bg-[#1d1d1f] hidden md:flex flex-col justify-center"
+                        className="w-full md:w-1/2 p-10 lg:p-14 bg-surface hidden md:flex flex-col justify-center border-r border-border-subtle"
                     >
                         <Link href="/" className="inline-block mb-12">
-                            <span className="text-white text-xl font-semibold tracking-tight">Nexora</span>
+                            <span className="text-primary text-xl font-semibold tracking-tight">Nexora</span>
                         </Link>
 
-                        <h1 className="text-section-heading text-white mb-4">
+                        <h1 className="text-section-heading text-primary mb-4">
                             Your AI Agent
                             <br />
-                            <span className="text-[rgba(255,255,255,0.48)]">is waiting.</span>
+                            <span className="text-secondary">is waiting.</span>
                         </h1>
-                        <p className="text-body text-[rgba(255,255,255,0.56)] mb-12">
+                        <p className="text-body text-secondary mb-12">
                             Start growing your LinkedIn presence on autopilot in just 2 minutes.
                         </p>
 
@@ -111,12 +122,12 @@ function LoginForm() {
                                 { icon: Sparkles, title: 'Full Autopilot', desc: 'Set it once and let AI handle your LinkedIn engagement 24/7' },
                             ].map((f, idx) => (
                                 <div key={idx} className="flex gap-3">
-                                    <div className="w-9 h-9 rounded-full bg-[#272729] flex items-center justify-center flex-shrink-0">
-                                        <f.icon className="text-[rgba(255,255,255,0.56)] w-4 h-4" />
+                                    <div className="w-9 h-9 rounded-full bg-surface-hover flex items-center justify-center flex-shrink-0">
+                                        <f.icon className="text-secondary w-4 h-4" />
                                     </div>
                                     <div>
-                                        <h3 className="text-caption-bold text-white mb-0.5">{f.title}</h3>
-                                        <p className="text-micro text-[rgba(255,255,255,0.48)]">{f.desc}</p>
+                                        <h3 className="text-caption-bold text-primary mb-0.5">{f.title}</h3>
+                                        <p className="text-micro text-tertiary">{f.desc}</p>
                                     </div>
                                 </div>
                             ))}
@@ -132,14 +143,14 @@ function LoginForm() {
                     >
                         {/* Mobile Logo */}
                         <Link href="/" className="inline-block md:hidden mb-8">
-                            <span className="text-white text-lg font-semibold tracking-tight">Nexora</span>
+                            <span className="text-primary text-lg font-semibold tracking-tight">Nexora</span>
                         </Link>
 
                         <div className="mb-8">
-                            <h2 className="text-tile-heading text-white mb-2">
+                            <h2 className="text-tile-heading text-primary mb-2">
                                 {isLogin ? 'Welcome back' : 'Get started'}
                             </h2>
-                            <p className="text-caption text-[rgba(255,255,255,0.48)]">
+                            <p className="text-caption text-secondary">
                                 {isLogin
                                     ? 'Sign in to check on your agent and LinkedIn growth'
                                     : 'Create your account and start growing today'}
@@ -149,9 +160,9 @@ function LoginForm() {
                         <form onSubmit={handleSubmit} className="space-y-5">
                             {/* Email */}
                             <div className="space-y-1.5">
-                                <label className="text-micro-bold text-[rgba(255,255,255,0.56)]">Email Address</label>
+                                <label className="text-micro-bold text-secondary">Email Address</label>
                                 <div className="relative">
-                                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgba(255,255,255,0.32)]">
+                                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-tertiary">
                                         <Mail className="w-4 h-4" />
                                     </div>
                                     <input
@@ -160,24 +171,24 @@ function LoginForm() {
                                         value={email}
                                         onChange={(e) => setEmail(e.target.value)}
                                         placeholder="name@company.com"
-                                        className="w-full pl-10 pr-4 py-3 bg-[#1d1d1f] rounded-lg text-white text-caption placeholder:text-[rgba(255,255,255,0.24)] focus:outline-none focus:ring-2 focus:ring-[#0071e3] transition-all"
+                                        className="w-full pl-10 pr-4 py-3 bg-surface-hover rounded-lg text-primary text-caption placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-apple-blue/40 border border-border-subtle hover:border-border-default transition-all"
                                     />
                                 </div>
                                 {error && error.toLowerCase().includes('email') && (
-                                    <p className="text-micro text-[#ff3b30]">{error}</p>
+                                    <p className="text-micro text-error">{error}</p>
                                 )}
                             </div>
 
                             {/* Password */}
                             <div className="space-y-1.5">
                                 <div className="flex items-center justify-between">
-                                    <label className="text-micro-bold text-[rgba(255,255,255,0.56)]">Password</label>
+                                    <label className="text-micro-bold text-secondary">Password</label>
                                     {isLogin && (
-                                        <a href="#" className="text-micro text-[#2997ff] hover:underline">Forgot password?</a>
+                                        <a href="#" className="text-micro text-apple-blue hover:underline">Forgot password?</a>
                                     )}
                                 </div>
                                 <div className="relative">
-                                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgba(255,255,255,0.32)]">
+                                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-tertiary">
                                         <Lock className="w-4 h-4" />
                                     </div>
                                     <input
@@ -186,24 +197,24 @@ function LoginForm() {
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
                                         placeholder="••••••••"
-                                        className="w-full pl-10 pr-4 py-3 bg-[#1d1d1f] rounded-lg text-white text-caption placeholder:text-[rgba(255,255,255,0.24)] focus:outline-none focus:ring-2 focus:ring-[#0071e3] transition-all"
+                                        className="w-full pl-10 pr-4 py-3 bg-surface-hover rounded-lg text-primary text-caption placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-apple-blue/40 border border-border-subtle hover:border-border-default transition-all"
                                     />
                                 </div>
                                 {error && error.toLowerCase().includes('password') && (
-                                    <p className="text-micro text-[#ff3b30]">{error}</p>
+                                    <p className="text-micro text-error">{error}</p>
                                 )}
                             </div>
 
                             {/* General Error */}
                             {error && !error.toLowerCase().includes('email') && !error.toLowerCase().includes('password') && (
-                                <p className="text-micro text-[#ff3b30]">{error}</p>
+                                <p className="text-micro text-error">{error}</p>
                             )}
 
                             {/* Submit — Apple Blue */}
                             <button
                                 type="submit"
                                 disabled={loading}
-                                className="w-full py-3 bg-[#0071e3] hover:bg-[#0077ed] text-white text-body-emphasis rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full py-3 bg-apple-blue hover:opacity-90 text-white text-body-emphasis rounded-lg transition-premium press-effect flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {loading ? (
                                     <div className="flex items-center gap-2">
@@ -221,12 +232,12 @@ function LoginForm() {
 
                         {/* Toggle */}
                         <div className="mt-6 text-center">
-                            <p className="text-micro text-[rgba(255,255,255,0.48)]">
+                            <p className="text-micro text-secondary">
                                 {isLogin ? "Don't have an account? " : 'Already have an account? '}
                                 <button
                                     type="button"
                                     onClick={() => { setIsLogin(!isLogin); setError(''); }}
-                                    className="text-[#2997ff] hover:underline font-medium"
+                                    className="text-apple-blue hover:underline font-medium"
                                 >
                                     {isLogin ? 'Sign up' : 'Sign in'}
                                 </button>
@@ -235,14 +246,14 @@ function LoginForm() {
 
                         {/* Terms */}
                         {!isLogin && (
-                            <div className="mt-6 pt-5 border-t border-white/5">
+                            <div className="mt-6 pt-5 border-t border-border-subtle">
                                 <div className="flex items-start gap-2">
-                                    <Shield className="w-3.5 h-3.5 text-[rgba(255,255,255,0.32)] mt-0.5 flex-shrink-0" />
-                                    <p className="text-micro text-[rgba(255,255,255,0.32)]">
+                                    <Shield className="w-3.5 h-3.5 text-tertiary mt-0.5 flex-shrink-0" />
+                                    <p className="text-micro text-tertiary">
                                         By creating an account, you agree to our{' '}
-                                        <a href="#" className="text-[#2997ff] hover:underline">Terms of Service</a>{' '}
+                                        <a href="#" className="text-apple-blue hover:underline">Terms of Service</a>{' '}
                                         and{' '}
-                                        <a href="#" className="text-[#2997ff] hover:underline">Privacy Policy</a>
+                                        <a href="#" className="text-apple-blue hover:underline">Privacy Policy</a>
                                     </p>
                                 </div>
                             </div>

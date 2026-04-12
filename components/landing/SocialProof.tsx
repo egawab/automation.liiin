@@ -26,20 +26,20 @@ const testimonials = [
 
 export default function SocialProof() {
   return (
-    <section className="py-24 px-4 bg-black">
+    <section className="py-24 px-4 bg-section-alt">
       <div className="max-w-[980px] mx-auto">
         {/* Section Header */}
         <motion.div
-          initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
+          initial={{ opacity: 0, y: 8 }}
+          whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.5 }}
+          transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
           className="text-center mb-16"
         >
-          <h2 className="text-section-heading text-white mb-4">
+          <h2 className="text-section-heading text-primary mb-4">
             Trusted by professionals.
           </h2>
-          <p className="text-body text-[rgba(255,255,255,0.56)] max-w-xl mx-auto">
+          <p className="text-body text-secondary max-w-xl mx-auto">
             Join thousands growing their LinkedIn presence on autopilot.
           </p>
         </motion.div>
@@ -49,22 +49,22 @@ export default function SocialProof() {
           {testimonials.map((t, index) => (
             <motion.div
               key={index}
-              initial={{ opacity: 0 }}
-              whileInView={{ opacity: 1 }}
+              initial={{ opacity: 0, y: 8 }}
+              whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
-              transition={{ duration: 0.4, delay: index * 0.08 }}
+              transition={{ duration: 0.5, delay: index * 0.08, ease: [0.25, 0.46, 0.45, 0.94] }}
             >
-              <div className="h-full bg-[#272729] rounded-lg p-7">
-                <p className="text-body text-[rgba(255,255,255,0.8)] mb-6 leading-relaxed">
+              <div className="h-full bg-surface rounded-xl p-7 border border-border-subtle hover-lift apple-shadow">
+                <p className="text-body text-primary mb-6 leading-relaxed">
                   &ldquo;{t.content}&rdquo;
                 </p>
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-[#1d1d1f] flex items-center justify-center">
-                    <span className="text-white font-semibold text-sm">{t.name.charAt(0)}</span>
+                  <div className="w-10 h-10 rounded-full bg-surface-hover flex items-center justify-center">
+                    <span className="text-primary font-semibold text-sm">{t.name.charAt(0)}</span>
                   </div>
                   <div>
-                    <div className="text-caption-bold text-white">{t.name}</div>
-                    <div className="text-micro text-[rgba(255,255,255,0.48)]">
+                    <div className="text-caption-bold text-primary">{t.name}</div>
+                    <div className="text-micro text-tertiary">
                       {t.role} at {t.company}
                     </div>
                   </div>
@@ -79,14 +79,14 @@ export default function SocialProof() {
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.4, delay: 0.3 }}
+          transition={{ duration: 0.5, delay: 0.3 }}
           className="mt-14 text-center"
         >
-          <div className="inline-flex flex-wrap items-center justify-center gap-8 text-caption text-[rgba(255,255,255,0.48)]">
+          <div className="inline-flex flex-wrap items-center justify-center gap-8 text-caption text-tertiary">
             <span>10,000+ happy users</span>
-            <span className="text-[rgba(255,255,255,0.16)]">·</span>
+            <span className="text-border-subtle">·</span>
             <span>4.9/5 average rating</span>
-            <span className="text-[rgba(255,255,255,0.16)]">·</span>
+            <span className="text-border-subtle">·</span>
             <span>2M+ comments posted</span>
           </div>
         </motion.div>

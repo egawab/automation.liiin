@@ -315,13 +315,13 @@ export default function Dashboard() {
                 <Card className="h-full">
                   <div className="p-6 h-full flex flex-col">
                     <div className="flex justify-between items-start mb-6">
-                      <div className="p-3 bg-[rgba(255,255,255,0.06)] rounded-xl">
-                        <Shield className="w-6 h-6 text-white" />
+                      <div className="p-3 bg-surface-hover rounded-xl">
+                        <Shield className="w-6 h-6 text-primary" />
                       </div>
                       
                       {(() => {
                         const isOnline = settings.lastHeartbeat && (new Date().getTime() - new Date(settings.lastHeartbeat).getTime()) < 10 * 60 * 1000;
-                        const statusColor = isOnline ? 'bg-[#34c759]' : 'bg-[#ff3b30]';
+                        const statusColor = isOnline ? 'bg-success' : 'bg-[#ff3b30]';
                         
                         let seenText = 'Never connected';
                         if (settings.lastHeartbeat) {
@@ -337,7 +337,7 @@ export default function Dashboard() {
                             <Badge variant={isOnline ? "success" : "error"} size="sm" dot>
                               {isOnline ? 'Online' : 'Offline'}
                             </Badge>
-                            <span className="text-[10px] text-[rgba(255,255,255,0.48)] mt-1">Last seen: {seenText}</span>
+                            <span className="text-[10px] text-secondary mt-1">Last seen: {seenText}</span>
                           </div>
                         );
                       })()}
@@ -345,25 +345,25 @@ export default function Dashboard() {
 
                     <div className="flex flex-col flex-1 justify-between">
                       <div className="mb-6">
-                        <h3 className="text-tile-heading text-white mb-1">Browser Active</h3>
-                        <p className="text-caption text-[rgba(255,255,255,0.56)]">
+                        <h3 className="text-tile-heading text-primary mb-1">Browser Active</h3>
+                        <p className="text-caption text-secondary">
                           {settings.extensionStatus || "Integrated with Chrome for maximum safety."}
                         </p>
                       </div>
 
-                      <div className="space-y-4 pt-4 border-t border-[rgba(255,255,255,0.05)]">
+                      <div className="space-y-4 pt-4 border-t border-border-subtle">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <p className="text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-0.5">Pilot</p>
-                            <p className="text-caption-bold text-white">{systemActive ? 'ACTIVE' : 'PAUSED'}</p>
+                            <p className="text-micro-bold text-secondary uppercase mb-0.5">Pilot</p>
+                            <p className="text-caption-bold text-primary">{systemActive ? 'ACTIVE' : 'PAUSED'}</p>
                           </div>
                           <button
                             onClick={toggleSystem}
                             type="button"
-                            className={`px-3 py-1.5 rounded-md text-micro-bold transition-all ${
+                            className={`px-3 py-1.5 rounded-md text-micro-bold transition-premium ${
                               systemActive 
-                                ? 'bg-[rgba(52,199,89,0.12)] text-[#34c759]' 
-                                : 'bg-[rgba(255,255,255,0.06)] text-white hover:bg-[rgba(255,255,255,0.12)]'
+                                ? 'bg-success/12 text-success' 
+                                : 'bg-surface-hover text-primary hover:bg-surface-elevated'
                             }`}
                           >
                             {systemActive ? '⏸️ PAUSE' : '🚀 START'}
@@ -371,11 +371,11 @@ export default function Dashboard() {
                         </div>
 
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-micro-bold text-[rgba(255,255,255,0.48)] uppercase">Extension</p>
+                          <p className="text-micro-bold text-secondary uppercase">Extension</p>
                           <button
                             onClick={() => setActiveTab('extension-connect')}
                             type="button"
-                            className="bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.12)] text-white px-3 py-1.5 rounded-md text-micro-bold transition-all"
+                            className="bg-surface-hover hover:bg-surface-elevated text-primary px-3 py-1.5 rounded-md text-micro-bold transition-premium"
                           >
                             Manage
                           </button>
@@ -399,13 +399,13 @@ export default function Dashboard() {
       case 'keywords':
         return (
           <Card>
-            <div className="p-6 md:p-8 border-b border-gray-100 bg-gray-50 flex flex-col gap-6">
+            <div className="p-6 md:p-8 border-b border-border-subtle bg-surface-hover flex flex-col gap-6">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                    <Search className="w-5 h-5 text-primary-500" />
+                  <h3 className="text-xl font-bold text-primary flex items-center gap-2">
+                    <Search className="w-5 h-5 text-apple-blue" />
                     New Campaign Builder
                   </h3>
-                  <p className="text-sm text-gray-600 mt-1">
+                  <p className="text-sm text-secondary mt-1">
                     Setup a keyword and strictly map exact comments for each of its cycles.
                   </p>
                 </div>
@@ -419,11 +419,11 @@ export default function Dashboard() {
                     placeholder="E.g. SaaS growth"
                   />
                   <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2">Target Reach</label>
+                    <label className="block text-sm font-bold text-secondary mb-2">Target Reach</label>
                     <select
                       value={newKeywordReach}
                       onChange={e => setNewKeywordReach(parseInt(e.target.value))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-primary-500"
+                      className="w-full px-3 py-2 border border-border-subtle rounded-lg text-sm text-primary bg-surface-hover focus:ring-2 focus:ring-apple-blue/30"
                     >
                       <option value={100}>100-500 (Small)</option>
                       <option value={500}>500-1K (Medium)</option>
@@ -433,7 +433,7 @@ export default function Dashboard() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2">Cycles to Run</label>
+                    <label className="block text-sm font-bold text-secondary mb-2">Cycles to Run</label>
                     <select
                       value={newTargetCycles}
                       onChange={e => {
@@ -445,7 +445,7 @@ export default function Dashboard() {
                           return newArr;
                         });
                       }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-primary-500"
+                      className="w-full px-3 py-2 border border-border-subtle rounded-lg text-sm text-primary bg-surface-hover focus:ring-2 focus:ring-apple-blue/30"
                     >
                       <option value={1}>1 Cycle (2 actions)</option>
                       <option value={2}>2 Cycles (4 actions)</option>
@@ -456,8 +456,8 @@ export default function Dashboard() {
 
                 <div className="space-y-4 pt-2">
                   {Array.from({ length: newTargetCycles }).map((_, cycleIndex) => (
-                    <div key={cycleIndex} className="bg-white border border-gray-200 p-4 rounded-xl shadow-sm">
-                      <h4 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">Cycle {cycleIndex + 1} Comments</h4>
+                    <div key={cycleIndex} className="bg-surface border border-border-subtle p-4 rounded-xl apple-shadow">
+                      <h4 className="text-sm font-bold text-primary mb-3 uppercase tracking-wider">Cycle {cycleIndex + 1} Comments</h4>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <TextArea
                           label="Comment 1"
@@ -495,34 +495,34 @@ export default function Dashboard() {
 
             <div className="overflow-x-auto">
               <table className="w-full text-left">
-                <thead className="bg-gray-50 border-b border-gray-100">
+                <thead className="bg-surface-hover border-b border-border-subtle">
                   <tr>
-                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
+                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-secondary">
                       Keyword
                     </th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
+                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-secondary">
                       Target Reach
                     </th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
+                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-secondary">
                       Matches
                     </th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-gray-500 text-right">
+                    <th className="px-6 py-4 text-xs font-bold uppercase tracking-wide text-secondary text-right">
                       Actions
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
+                <tbody className="divide-y divide-border-subtle">
                   {keywords.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="p-0">
-                        <div className="bg-gradient-to-br from-primary-50 to-primary-100/30 p-8 md:p-12 text-center border-b border-gray-100">
-                          <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-white shadow-xl shadow-primary-500/10 flex items-center justify-center transform -rotate-6">
-                            <Zap className="w-10 h-10 text-primary-500" />
+                        <div className="bg-surface-hover p-8 md:p-12 text-center border-b border-border-subtle">
+                          <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-surface apple-shadow flex items-center justify-center transform -rotate-6">
+                            <Zap className="w-10 h-10 text-apple-blue" />
                           </div>
-                          <h4 className="text-2xl font-black text-gray-900 mb-3 tracking-tight">Zero to Hero in 1-Click</h4>
-                          <p className="text-base text-gray-600 max-w-lg mx-auto mb-10 leading-relaxed">
+                          <h4 className="text-2xl font-black text-primary mb-3 tracking-tight">Zero to Hero in 1-Click</h4>
+                          <p className="text-base text-secondary max-w-lg mx-auto mb-10 leading-relaxed">
                             Don't know what to target? Load a curated Starter Pack. 
-                            We'll instantly set up high-converting <strong className="text-primary-700">keywords</strong> and AI-crafted <strong className="text-primary-700">comments</strong> for you.
+                            We'll instantly set up high-converting <strong className="text-apple-blue">keywords</strong> and AI-crafted <strong className="text-apple-blue">comments</strong> for you.
                           </p>
                           
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
@@ -530,37 +530,37 @@ export default function Dashboard() {
                             <button 
                               onClick={() => loadStarterPack('marketing')}
                               disabled={isDeployingPack}
-                              className={`group bg-white p-6 rounded-2xl text-left border-2 transition-all ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-100 hover:border-primary-400 hover:shadow-2xl hover:shadow-primary-500/20 hover:-translate-y-1'}`}
+                              className={`group bg-surface p-6 rounded-2xl text-left border-2 transition-premium ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-border-subtle' : 'border-border-subtle hover:border-apple-blue hover-lift'}`}
                             >
                               <div className="flex justify-between items-start mb-4">
-                                <Badge variant="primary" className="bg-primary-100 text-primary-700">B2B Marketing</Badge>
+                                <Badge variant="primary">B2B Marketing</Badge>
                                 {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
                               </div>
-                              <h5 className="text-lg font-extrabold text-gray-900 mb-2 group-hover:text-primary-600 transition-colors">Growth & Marketing Pack</h5>
-                              <p className="text-sm font-bold text-gray-400">+3 Keywords • +9 Comments</p>
+                              <h5 className="text-lg font-extrabold text-primary mb-2 group-hover:text-apple-blue transition-colors">Growth & Marketing Pack</h5>
+                              <p className="text-sm font-bold text-tertiary">+3 Keywords • +9 Comments</p>
                             </button>
 
                             {/* Pack 2 */}
                             <button 
                               onClick={() => loadStarterPack('tech')}
                               disabled={isDeployingPack}
-                              className={`group bg-white p-6 rounded-2xl text-left border-2 transition-all ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-gray-100 hover:border-blue-400 hover:shadow-2xl hover:shadow-blue-500/20 hover:-translate-y-1'}`}
+                              className={`group bg-surface p-6 rounded-2xl text-left border-2 transition-premium ${isDeployingPack ? 'opacity-50 cursor-not-allowed border-border-subtle' : 'border-border-subtle hover:border-apple-blue hover-lift'}`}
                             >
                               <div className="flex justify-between items-start mb-4">
-                                <Badge variant="secondary" className="bg-blue-100 text-blue-700">Tech & SaaS</Badge>
+                                <Badge variant="secondary">Tech & SaaS</Badge>
                                 {isDeployingPack && <span className="animate-spin text-xl">⏳</span>}
                               </div>
-                              <h5 className="text-lg font-extrabold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">Software Engineering Pack</h5>
-                              <p className="text-sm font-bold text-gray-400">+3 Keywords • +9 Comments</p>
+                              <h5 className="text-lg font-extrabold text-primary mb-2 group-hover:text-apple-blue transition-colors">Software Engineering Pack</h5>
+                              <p className="text-sm font-bold text-tertiary">+3 Keywords • +9 Comments</p>
                             </button>
                           </div>
                         </div>
                       </td>
                     </tr>
                   ) : keywords.map((kw: any) => (
-                    <tr key={kw.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={kw.id} className="hover:bg-surface-hover transition-colors">
                       <td className="px-6 py-4">
-                        <span className="text-sm font-semibold text-gray-900">
+                        <span className="text-sm font-semibold text-primary">
                           {kw.keyword}
                         </span>
                       </td>
@@ -580,7 +580,7 @@ export default function Dashboard() {
                       <td className="px-6 py-4 text-right">
                         <button
                           onClick={() => deleteKeyword(kw.id)}
-                          className="text-gray-400 hover:text-error-600 hover:bg-error-50 p-2 rounded-lg transition-all"
+                          className="text-tertiary hover:text-error p-2 rounded-lg transition-premium"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -599,13 +599,13 @@ export default function Dashboard() {
           <div className="max-w-5xl mx-auto space-y-8">
             {/* Professional Setup Card */}
             <Card className="overflow-hidden border-2 border-primary-100 shadow-2xl">
-              <div className="p-8 md:p-12 border-b border-gray-100 bg-gradient-to-br from-gray-900 to-gray-800 text-white relative">
+              <div className="p-8 md:p-12 border-b border-gray-100 bg-gradient-to-br from-gray-900 to-gray-800 text-primary relative">
                 <div className="absolute top-0 right-0 p-12 opacity-10 pointer-events-none">
                   <Shield className="w-48 h-48" />
                 </div>
                 
                 <div className="relative z-10">
-                  <Badge variant="primary" className="mb-4 bg-primary-500 text-white border-none">Step-by-Step Guide</Badge>
+                  <Badge variant="primary" className="mb-4 bg-primary-500 text-primary border-none">Step-by-Step Guide</Badge>
                   <h3 className="text-4xl font-black mb-4">Connect Nexora <span className="text-primary-400">Pro</span></h3>
                   <p className="text-lg text-gray-300 max-w-2xl leading-relaxed">
                     Transform your browser into a high-powered LinkedIn automation hub. 
@@ -679,7 +679,7 @@ export default function Dashboard() {
                     <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
                       <div className="aspect-video bg-gray-50 relative overflow-hidden">
                         <img src="/img/step1.png" alt="Extracting ZIP" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-4 left-4 bg-gray-900 text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">01</div>
+                        <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">01</div>
                       </div>
                       <div className="p-8">
                         <h5 className="text-xl font-black text-gray-900 mb-2">فك الضغط عن الملف (Extract ZIP)</h5>
@@ -694,7 +694,7 @@ export default function Dashboard() {
                     <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
                       <div className="aspect-video bg-gray-50 relative overflow-hidden">
                         <img src="/img/step2.png" alt="Developer Mode" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-4 left-4 bg-gray-900 text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">02</div>
+                        <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">02</div>
                       </div>
                       <div className="p-8">
                         <h5 className="text-xl font-black text-gray-900 mb-2">تفعيل وضع المطور (Developer Mode)</h5>
@@ -709,7 +709,7 @@ export default function Dashboard() {
                     <div className="bg-white border-2 border-gray-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group">
                       <div className="aspect-video bg-gray-50 relative overflow-hidden">
                         <img src="/img/step3.png" alt="Load Unpacked" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-4 left-4 bg-gray-900 text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">03</div>
+                        <div className="absolute top-4 left-4 bg-gray-900 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">03</div>
                       </div>
                       <div className="p-8">
                         <h5 className="text-xl font-black text-gray-900 mb-2">تحميل الإضافة (Load Unpacked)</h5>
@@ -724,7 +724,7 @@ export default function Dashboard() {
                     <div className="bg-white border-2 border-primary-100 rounded-[2.5rem] overflow-hidden hover:border-primary-300 transition-all shadow-sm hover:shadow-xl group ring-4 ring-primary-50">
                       <div className="aspect-video bg-primary-50 relative overflow-hidden">
                         <img src="/img/step4.png" alt="Sync and Run" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-4 left-4 bg-primary-600 text-white w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">04</div>
+                        <div className="absolute top-4 left-4 bg-primary-600 text-primary w-10 h-10 rounded-full flex items-center justify-center font-black text-lg">04</div>
                       </div>
                       <div className="p-8">
                         <h5 className="text-xl font-black text-primary-900 mb-2">المزامنة والتشغيل (Sync & Run)</h5>
@@ -732,7 +732,7 @@ export default function Dashboard() {
                           <p className="text-sm text-gray-700 leading-relaxed font-bold">
                             افتح الإضافة، الصق مفاتيح الربط (Keys) المذكورة أعلاه، واضغط على <strong>Sync & Run Now</strong>.
                           </p>
-                          <div className={`px-4 py-2 rounded-xl text-[10px] font-black inline-flex items-center gap-2 ${systemActive ? 'bg-success-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                          <div className={`px-4 py-2 rounded-xl text-[10px] font-black inline-flex items-center gap-2 ${systemActive ? 'bg-success-500 text-primary' : 'bg-gray-200 text-gray-500'}`}>
                              <div className={`w-2 h-2 rounded-full ${systemActive ? 'bg-white animate-pulse' : 'bg-gray-400'}`} />
                              AGENT STATUS: {systemActive ? 'READY TO WORK' : 'PAUSED (START PILOT FIRST)'}
                           </div>
@@ -748,14 +748,14 @@ export default function Dashboard() {
       case 'autoposts':
         return (
           <Card>
-            <div className="p-6 md:p-8 border-b border-[rgba(255,255,255,0.05)] bg-[#1d1d1f]">
+            <div className="p-6 md:p-8 border-b border-border-subtle bg-surface">
               <div className="flex flex-col gap-4">
                 <div>
-                  <h3 className="text-tile-heading text-white flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-[#0071e3]" />
+                  <h3 className="text-tile-heading text-primary flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-apple-blue" />
                     AI Auto-Posts
                   </h3>
-                  <p className="text-caption text-[rgba(255,255,255,0.48)] mt-1">
+                  <p className="text-caption text-secondary mt-1">
                     Generate thought leadership content on autopilot using Gemini
                   </p>
                 </div>
@@ -780,39 +780,39 @@ export default function Dashboard() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left bg-[#1d1d1f]">
-                <thead className="border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
+              <table className="w-full text-left bg-surface">
+                <thead className="border-b border-border-subtle bg-surface-hover">
                   <tr>
-                    <th className="px-6 py-4 text-micro-bold uppercase text-[rgba(255,255,255,0.48)]">Topic</th>
-                    <th className="px-6 py-4 text-micro-bold uppercase text-[rgba(255,255,255,0.48)]">Status</th>
-                    <th className="px-6 py-4 text-micro-bold uppercase text-[rgba(255,255,255,0.48)]">Content Preview</th>
-                    <th className="px-6 py-4 text-micro-bold uppercase text-[rgba(255,255,255,0.48)] text-right">Actions</th>
+                    <th className="px-6 py-4 text-micro-bold uppercase text-secondary">Topic</th>
+                    <th className="px-6 py-4 text-micro-bold uppercase text-secondary">Status</th>
+                    <th className="px-6 py-4 text-micro-bold uppercase text-secondary">Content Preview</th>
+                    <th className="px-6 py-4 text-micro-bold uppercase text-secondary text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[rgba(255,255,255,0.05)]">
                   {autoPosts.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-6 py-12 text-center text-[rgba(255,255,255,0.48)]">
-                        <Bot className="w-8 h-8 text-[rgba(255,255,255,0.24)] mx-auto mb-3" />
-                        <p className="text-caption-bold text-white mb-1">No posts generated yet</p>
+                      <td colSpan={4} className="px-6 py-12 text-center text-secondary">
+                        <Bot className="w-8 h-8 text-tertiary mx-auto mb-3" />
+                        <p className="text-caption-bold text-primary mb-1">No posts generated yet</p>
                         <p className="text-micro">Enter a topic above to let AI create your first post</p>
                       </td>
                     </tr>
                   ) : autoPosts.map((post) => (
-                    <tr key={post.id} className="hover:bg-[rgba(255,255,255,0.02)] transition-colors">
+                    <tr key={post.id} className="hover:bg-surface-hover transition-colors">
                       <td className="px-6 py-4 max-w-[200px]">
-                        <span className="text-caption-bold text-white line-clamp-2">{post.topic}</span>
+                        <span className="text-caption-bold text-primary line-clamp-2">{post.topic}</span>
                       </td>
                       <td className="px-6 py-4">
                          <Badge variant={post.status === 'Published' ? 'success' : 'neutral'} size="sm">{post.status}</Badge>
                       </td>
                       <td className="px-6 py-4 max-w-md">
-                        <p className="text-caption text-[rgba(255,255,255,0.64)] line-clamp-2 italic">"{post.content}"</p>
+                        <p className="text-caption text-secondary line-clamp-2 italic">"{post.content}"</p>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <button
                           onClick={() => deleteAutoPost(post.id)}
-                          className="text-[rgba(255,255,255,0.32)] hover:text-[#ff3b30] p-2 rounded-lg transition-all"
+                          className="text-tertiary hover:text-error p-2 rounded-lg transition-all"
                         >
                            <Trash2 className="w-4 h-4" />
                         </button>
@@ -830,20 +830,20 @@ export default function Dashboard() {
 
             {/* Page Header */}
             <div>
-              <h2 className="text-tile-heading text-white flex items-center gap-2">
-                <Settings className="w-5 h-5 text-[#0071e3]" />
+              <h2 className="text-tile-heading text-primary flex items-center gap-2">
+                <Settings className="w-5 h-5 text-apple-blue" />
                 Agent Configuration
               </h2>
-              <p className="text-caption text-[rgba(255,255,255,0.48)] mt-1">Fine-tune your autopilot&apos;s parameters and safety thresholds</p>
+              <p className="text-caption text-secondary mt-1">Fine-tune your autopilot&apos;s parameters and safety thresholds</p>
             </div>
 
             <form onSubmit={saveSettings} className="space-y-6">
 
               {/* Section 1: Mode Selection */}
-              <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
-                <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
-                  <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
-                    <Search size={14} className="text-[#0071e3]" /> Operating Mode
+              <Card className="overflow-hidden bg-surface border border-border-subtle">
+                <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+                  <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
+                    <Search size={14} className="text-apple-blue" /> Operating Mode
                   </h3>
                 </div>
                 <div className="p-6">
@@ -852,72 +852,72 @@ export default function Dashboard() {
                       type="checkbox"
                       name="searchOnlyMode"
                       defaultChecked={settings.searchOnlyMode ?? true}
-                      className="w-5 h-5 mt-0.5 rounded border-2 border-[rgba(255,255,255,0.2)] bg-[#272729] text-[#0071e3] focus:ring-1 focus:ring-[#0071e3] focus:ring-offset-0 transition-all cursor-pointer"
+                      className="w-5 h-5 mt-0.5 rounded border-2 border-border-default bg-surface-elevated text-apple-blue focus:ring-1 focus:ring-apple-blue focus:ring-offset-0 transition-all cursor-pointer"
                     />
                     <div>
-                      <span className="text-caption-bold text-white group-hover:text-[#0071e3] transition-colors">Search-Only Mode (Recommended)</span>
-                      <p className="text-micro text-[rgba(255,255,255,0.48)] mt-1">Search and save posts WITHOUT auto-commenting. Safer and avoids CAPTCHA triggers.</p>
+                      <span className="text-caption-bold text-primary group-hover:text-apple-blue transition-colors">Search-Only Mode (Recommended)</span>
+                      <p className="text-micro text-secondary mt-1">Search and save posts WITHOUT auto-commenting. Safer and avoids CAPTCHA triggers.</p>
                     </div>
                   </label>
                 </div>
               </Card>
 
               {/* Section 2: Search Limits */}
-              <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
-                <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
-                  <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
-                    <Shield size={14} className="text-[#34c759]" /> Search Limits
+              <Card className="overflow-hidden bg-surface border border-border-subtle">
+                <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+                  <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
+                    <Shield size={14} className="text-success" /> Search Limits
                   </h3>
                 </div>
                 <div className="p-6 space-y-5">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Searches / Hour</label>
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Searches / Hour</label>
                       <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="12"
-                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white focus:border-[#0071e3] transition-all outline-none" />
+                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary focus:border-apple-blue transition-all outline-none" />
                     </div>
                     <div>
-                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Searches / Day</label>
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Searches / Day</label>
                       <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 20} min="1" max="60"
-                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white focus:border-[#0071e3] transition-all outline-none" />
+                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary focus:border-apple-blue transition-all outline-none" />
                     </div>
                     <div>
-                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Min Delay (min)</label>
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Delay (min)</label>
                       <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="1" max="30"
-                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white focus:border-[#0071e3] transition-all outline-none" />
+                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary focus:border-apple-blue transition-all outline-none" />
                     </div>
                     <div>
-                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Keywords / Cycle</label>
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Keywords / Cycle</label>
                       <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 3} min="1" max="10"
-                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white focus:border-[#0071e3] transition-all outline-none" />
+                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary focus:border-apple-blue transition-all outline-none" />
                     </div>
                   </div>
 
                   {/* Schedule Controls */}
-                  <div className="border-t border-[rgba(255,255,255,0.05)] pt-5 space-y-4">
+                  <div className="border-t border-border-subtle pt-5 space-y-4">
                     <div className="flex flex-wrap gap-x-6 gap-y-3">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" name="workHoursOnly" defaultChecked={settings.workHoursOnly ?? true}
-                          className="w-4 h-4 rounded border-2 border-[rgba(255,255,255,0.2)] bg-[#272729] text-[#34c759] focus:ring-0 focus:ring-offset-0 cursor-pointer" />
-                        <span className="text-caption text-white">Work hours only</span>
+                          className="w-4 h-4 rounded border-2 border-border-default bg-surface-elevated text-success focus:ring-0 focus:ring-offset-0 cursor-pointer" />
+                        <span className="text-caption text-primary">Work hours only</span>
                       </label>
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" name="skipWeekends" defaultChecked={settings.skipWeekends ?? true}
-                          className="w-4 h-4 rounded border-2 border-[rgba(255,255,255,0.2)] bg-[#272729] text-[#34c759] focus:ring-0 focus:ring-offset-0 cursor-pointer" />
-                        <span className="text-caption text-white">Skip weekends</span>
+                          className="w-4 h-4 rounded border-2 border-border-default bg-surface-elevated text-success focus:ring-0 focus:ring-offset-0 cursor-pointer" />
+                        <span className="text-caption text-primary">Skip weekends</span>
                       </label>
                     </div>
                     <div className="flex items-center gap-4">
                       <div>
-                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] mb-1">Start hour</label>
+                        <label className="block text-micro-bold text-secondary mb-1">Start hour</label>
                         <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
-                          className="w-20 px-3 py-2 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#34c759]" />
+                          className="w-20 px-3 py-2 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-success" />
                       </div>
-                      <span className="text-[rgba(255,255,255,0.24)] mt-4">&rarr;</span>
+                      <span className="text-tertiary mt-4">&rarr;</span>
                       <div>
-                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] mb-1">End hour</label>
+                        <label className="block text-micro-bold text-secondary mb-1">End hour</label>
                         <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
-                          className="w-20 px-3 py-2 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#34c759]" />
+                          className="w-20 px-3 py-2 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-success" />
                       </div>
                     </div>
                   </div>
@@ -927,94 +927,94 @@ export default function Dashboard() {
               {/* Section 3: Targeting + Delays (side-by-side on desktop) */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Targeting Criteria */}
-                <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
-                  <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
-                    <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
-                      <Search size={14} className="text-[#ff9f0a]" /> Targeting Criteria
+                <Card className="overflow-hidden bg-surface border border-border-subtle">
+                  <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+                    <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
+                      <Search size={14} className="text-warning" /> Targeting Criteria
                     </h3>
                   </div>
                   <div className="p-6">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Min Likes</label>
+                        <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Likes</label>
                         <input type="number" name="minLikes" defaultValue={settings.minLikes ?? 10}
-                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff9f0a]" />
+                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-warning" />
                       </div>
                       <div>
-                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Likes</label>
+                        <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Likes</label>
                         <input type="number" name="maxLikes" defaultValue={settings.maxLikes ?? 10000}
-                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff9f0a]" />
+                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-warning" />
                       </div>
                       <div>
-                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Min Comments</label>
+                        <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Comments</label>
                         <input type="number" name="minComments" defaultValue={settings.minComments ?? 2}
-                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff9f0a]" />
+                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-warning" />
                       </div>
                       <div>
-                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Comments</label>
+                        <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Comments</label>
                         <input type="number" name="maxComments" defaultValue={settings.maxComments ?? 1000}
-                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff9f0a]" />
+                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-warning" />
                       </div>
                     </div>
                   </div>
                 </Card>
 
                 {/* Safety Delays */}
-                <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
-                  <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
-                    <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
-                      <Bot size={14} className="text-[#ff3b30]" /> Safety Delays
+                <Card className="overflow-hidden bg-surface border border-border-subtle">
+                  <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+                    <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
+                      <Bot size={14} className="text-error" /> Safety Delays
                     </h3>
                   </div>
                   <div className="p-6 space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Min Delay (Mins)</label>
+                        <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Delay (Mins)</label>
                         <input type="number" name="minDelayMins" defaultValue={settings.minDelayMins ?? 15}
-                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff3b30]" />
+                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-error" />
                       </div>
                       <div>
-                        <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Delay (Mins)</label>
+                        <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Delay (Mins)</label>
                         <input type="number" name="maxDelayMins" defaultValue={settings.maxDelayMins ?? 45}
-                          className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff3b30]" />
+                          className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-error" />
                       </div>
                     </div>
                     <div>
-                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Comments / Day</label>
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Comments / Day</label>
                       <input type="number" name="maxCommentsPerDay" defaultValue={settings.maxCommentsPerDay ?? 20}
-                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#ff3b30]" />
+                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-error" />
                     </div>
-                    <p className="text-micro text-[rgba(255,255,255,0.32)]">Randomized delays emulate human behavior.</p>
+                    <p className="text-micro text-tertiary">Randomized delays emulate human behavior.</p>
                   </div>
                 </Card>
               </div>
 
               {/* Section 4: Connection Profile */}
-              <Card className="overflow-hidden bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
-                <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)]">
-                  <h3 className="text-micro-bold text-white uppercase tracking-widest flex items-center gap-2">
-                    <Shield size={14} className="text-[#0071e3]" /> Connection Profile
+              <Card className="overflow-hidden bg-surface border border-border-subtle">
+                <div className="px-6 py-4 border-b border-border-subtle bg-surface-hover">
+                  <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
+                    <Shield size={14} className="text-apple-blue" /> Connection Profile
                   </h3>
                 </div>
                 <div className="p-6 space-y-4">
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">LinkedIn Session (li_at)</label>
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">LinkedIn Session (li_at)</label>
                       <input
                         type="text"
                         name="linkedinSessionCookie"
                         defaultValue={settings.linkedinSessionCookie || ''}
                         placeholder="Paste your li_at cookie"
-                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm font-mono text-white outline-none focus:border-[#0071e3]"
+                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm font-mono text-primary outline-none focus:border-apple-blue"
                       />
                     </div>
                     <div>
-                      <label className="block text-micro-bold text-[rgba(255,255,255,0.48)] uppercase mb-1.5">Max Profile Views / Day</label>
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Max Profile Views / Day</label>
                       <input type="number" name="maxProfileViewsPerDay" defaultValue={settings.maxProfileViewsPerDay ?? 100}
-                        className="w-full px-3 py-2.5 bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-md text-sm text-white outline-none focus:border-[#0071e3]" />
+                        className="w-full px-3 py-2.5 bg-surface-elevated border border-border-subtle rounded-md text-sm text-primary outline-none focus:border-apple-blue" />
                     </div>
                   </div>
-                  <p className="text-micro text-[rgba(255,255,255,0.32)]">Session cookie is used for server-side auth. Do not share.</p>
+                  <p className="text-micro text-tertiary">Session cookie is used for server-side auth. Do not share.</p>
                 </div>
               </Card>
 
@@ -1031,39 +1031,39 @@ export default function Dashboard() {
       case 'extension-connect':
         return (
           <div className="space-y-6">
-            <Card className="bg-[#1d1d1f] border border-[rgba(255,255,255,0.05)]">
+            <Card className="bg-surface border border-border-subtle">
               <div className="p-8">
                 <div className="flex items-center gap-3 mb-6">
-                  <div className="w-10 h-10 bg-[rgba(255,255,255,0.06)] rounded-lg flex items-center justify-center">
-                    <Bot className="w-5 h-5 text-white" />
+                  <div className="w-10 h-10 bg-surface-hover rounded-lg flex items-center justify-center">
+                    <Bot className="w-5 h-5 text-primary" />
                   </div>
                   <div>
-                    <h3 className="text-tile-heading text-white">Connect Extension</h3>
-                    <p className="text-caption text-[rgba(255,255,255,0.48)]">Link your Chrome extension</p>
+                    <h3 className="text-tile-heading text-primary">Connect Extension</h3>
+                    <p className="text-caption text-secondary">Link your Chrome extension</p>
                   </div>
                 </div>
 
-                <div className="bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-lg p-5 mb-4">
-                  <h4 className="text-caption-bold text-white mb-2 flex items-center gap-2">
-                    <span className="w-5 h-5 bg-[rgba(255,255,255,0.12)] text-white rounded-full flex items-center justify-center text-micro-bold">1</span>
+                <div className="bg-surface-elevated border border-border-subtle rounded-lg p-5 mb-4">
+                  <h4 className="text-caption-bold text-primary mb-2 flex items-center gap-2">
+                    <span className="w-5 h-5 bg-surface-elevated text-primary rounded-full flex items-center justify-center text-micro-bold">1</span>
                     Install Extension
                   </h4>
-                  <p className="text-micro text-[rgba(255,255,255,0.48)] mb-3">Download and install the Chrome extension.</p>
-                  <a href="/LinkedInExtension.zip" download className="inline-flex items-center gap-2 px-3 py-2 bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.12)] text-white rounded-md text-micro-bold transition-all">
+                  <p className="text-micro text-secondary mb-3">Download and install the Chrome extension.</p>
+                  <a href="/LinkedInExtension.zip" download className="inline-flex items-center gap-2 px-3 py-2 bg-surface-hover hover:bg-surface-elevated text-primary rounded-md text-micro-bold transition-all">
                     Download Extension ZIP
                   </a>
                 </div>
 
-                <div className="bg-[rgba(0,113,227,0.08)] border border-[rgba(0,113,227,0.16)] rounded-lg p-5 mb-4">
-                  <h4 className="text-caption-bold text-[#0071e3] mb-2 flex items-center gap-2">
-                    <span className="w-5 h-5 bg-[#0071e3] text-white rounded-full flex items-center justify-center text-micro-bold">2</span>
+                <div className="bg-apple-blue/8 border border-apple-blue/16 rounded-lg p-5 mb-4">
+                  <h4 className="text-caption-bold text-apple-blue mb-2 flex items-center gap-2">
+                    <span className="w-5 h-5 bg-apple-blue text-primary rounded-full flex items-center justify-center text-micro-bold">2</span>
                     One-Click Connect
                   </h4>
-                  <p className="text-micro text-[rgba(255,255,255,0.64)] mb-3">Open the extension popup while on this page, then click Auto-Connect.</p>
-                  <div className="bg-[#1d1d1f] rounded-lg p-3 border border-[rgba(255,255,255,0.05)]">
-                    <p className="text-[10px] font-bold text-[rgba(255,255,255,0.32)] uppercase mb-1">Your Connection Code</p>
+                  <p className="text-micro text-secondary mb-3">Open the extension popup while on this page, then click Auto-Connect.</p>
+                  <div className="bg-surface rounded-lg p-3 border border-border-subtle">
+                    <p className="text-[10px] font-bold text-tertiary uppercase mb-1">Your Connection Code</p>
                     <div className="flex items-center gap-2">
-                      <code className="flex-1 bg-[rgba(255,255,255,0.04)] text-micro font-mono text-[rgba(255,255,255,0.8)] p-2 rounded-md">{settings.userId || 'Loading...'}</code>
+                      <code className="flex-1 bg-surface-hover text-micro font-mono text-primary p-2 rounded-md">{settings.userId || 'Loading...'}</code>
                       <button
                         type="button"
                         onClick={() => {
@@ -1072,7 +1072,7 @@ export default function Dashboard() {
                           if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy Code'; }, 2000); }
                         }}
                         id="copy-uid-btn"
-                        className="px-3 py-2 bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.12)] rounded-md text-micro-bold text-white transition-all"
+                        className="px-3 py-2 bg-surface-hover hover:bg-surface-elevated rounded-md text-micro-bold text-primary transition-all"
                       >
                         Copy Code
                       </button>
@@ -1080,12 +1080,12 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <div className="bg-[rgba(52,199,89,0.08)] border border-[rgba(52,199,89,0.16)] rounded-lg p-5">
-                  <h4 className="text-caption-bold text-[#34c759] mb-2 flex items-center gap-2">
-                    <span className="w-5 h-5 bg-[#34c759] text-white rounded-full flex items-center justify-center text-micro-bold">3</span>
+                <div className="bg-success/8 border border-success/16 rounded-lg p-5">
+                  <h4 className="text-caption-bold text-success mb-2 flex items-center gap-2">
+                    <span className="w-5 h-5 bg-success text-primary rounded-full flex items-center justify-center text-micro-bold">3</span>
                     Activate
                   </h4>
-                  <p className="text-micro text-[rgba(255,255,255,0.64)]">Once connected, click START on the Dashboard to begin automated engagement!</p>
+                  <p className="text-micro text-secondary">Once connected, click START on the Dashboard to begin automated engagement!</p>
                 </div>
               </div>
             </Card>
@@ -1104,7 +1104,7 @@ export default function Dashboard() {
 
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} systemActive={systemActive} />
 
-      <div className="flex-1 flex flex-col overflow-hidden bg-black">
+      <div className="flex-1 flex flex-col overflow-hidden bg-page">
         <Header title={activeTab} sessionConnected={true} />
         <main className="flex-1 overflow-y-auto p-6 md:p-8 relative">
           <div className="max-w-[1400px] mx-auto pb-20">

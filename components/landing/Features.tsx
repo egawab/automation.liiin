@@ -44,25 +44,25 @@ const container = {
 
 const item = {
   hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0 }
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: 'easeOut' as const } }
 };
 
 export default function Features() {
   return (
-    <section id="features" className="py-24 px-4 bg-[#f5f5f7]">
+    <section id="features" className="py-24 px-4 bg-page">
       <div className="max-w-[980px] mx-auto">
         {/* Section Heading — Apple style */}
         <motion.div
-          initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
+          initial={{ opacity: 0, y: 8 }}
+          whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.5 }}
+          transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
           className="text-center mb-16"
         >
-          <h2 className="text-section-heading text-[#1d1d1f] mb-4">
+          <h2 className="text-section-heading text-primary mb-4">
             Everything you need.
           </h2>
-          <p className="text-body text-[rgba(0,0,0,0.56)] max-w-xl mx-auto">
+          <p className="text-body text-secondary max-w-xl mx-auto">
             Professional automation that builds authority, generates leads,
             and grows your network.
           </p>
@@ -80,16 +80,16 @@ export default function Features() {
             const Icon = feature.icon;
             return (
               <motion.div key={index} variants={item}>
-                <div className="h-full bg-white rounded-lg p-7 transition-shadow duration-200 hover:apple-shadow">
+                <div className="h-full bg-surface rounded-xl p-7 border border-border-subtle hover-lift transition-premium">
                   <div className="mb-5">
-                    <div className="w-10 h-10 rounded-full bg-[#f5f5f7] flex items-center justify-center">
-                      <Icon className="w-5 h-5 text-[#1d1d1f]" />
+                    <div className="w-10 h-10 rounded-full bg-section-alt flex items-center justify-center">
+                      <Icon className="w-5 h-5 text-primary" />
                     </div>
                   </div>
-                  <h3 className="text-card-title text-[#1d1d1f] mb-2">
+                  <h3 className="text-card-title text-primary mb-2">
                     {feature.title}
                   </h3>
-                  <p className="text-caption text-[rgba(0,0,0,0.56)] leading-relaxed">
+                  <p className="text-caption text-secondary leading-relaxed">
                     {feature.description}
                   </p>
                 </div>

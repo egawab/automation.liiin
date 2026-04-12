@@ -1,3 +1,5 @@
+'use client';
+
 import Navigation from '@/components/landing/Navigation';
 import Hero from '@/components/landing/Hero';
 import Features from '@/components/landing/Features';
@@ -8,7 +10,7 @@ import CTA from '@/components/landing/CTA';
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-black">
+    <div className="min-h-screen bg-hero">
       <Navigation />
       <Hero />
       <SocialProof />

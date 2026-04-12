@@ -9,16 +9,16 @@ const ToastContent = ({ icon, title, message, onClose, accentColor }: {
   <div className="flex items-start gap-3">
     <div className="flex-shrink-0" style={{ color: accentColor }}>{icon}</div>
     <div className="flex-1 min-w-0">
-      <h4 className="text-caption-bold text-white">{title}</h4>
-      <p className="text-micro text-[rgba(255,255,255,0.56)] mt-0.5">{message}</p>
+      <h4 className="text-caption-bold text-primary">{title}</h4>
+      <p className="text-micro text-secondary mt-0.5">{message}</p>
     </div>
-    <button onClick={onClose} className="text-[rgba(255,255,255,0.32)] hover:text-white transition-colors flex-shrink-0">
+    <button onClick={onClose} className="text-tertiary hover:text-primary transition-colors flex-shrink-0">
       <X className="w-4 h-4" />
     </button>
   </div>
 );
 
-const toastBase = 'bg-[#1d1d1f] rounded-lg apple-shadow p-4 max-w-sm pointer-events-auto border border-white/5';
+const toastBase = 'bg-surface rounded-xl apple-shadow-lg p-4 max-w-sm pointer-events-auto border border-border-subtle';
 
 export const showToast = {
   success: (message: string, options?: ToastOptions) => {

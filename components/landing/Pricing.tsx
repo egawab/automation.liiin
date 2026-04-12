@@ -60,20 +60,20 @@ const plans = [
 
 export default function Pricing() {
   return (
-    <section id="pricing" className="py-24 px-4 bg-[#f5f5f7]">
+    <section id="pricing" className="py-24 px-4 bg-page">
       <div className="max-w-[980px] mx-auto">
         {/* Section Header */}
         <motion.div
-          initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
+          initial={{ opacity: 0, y: 8 }}
+          whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.5 }}
+          transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
           className="text-center mb-16"
         >
-          <h2 className="text-section-heading text-[#1d1d1f] mb-4">
+          <h2 className="text-section-heading text-primary mb-4">
             Simple, transparent pricing.
           </h2>
-          <p className="text-body text-[rgba(0,0,0,0.56)] max-w-xl mx-auto">
+          <p className="text-body text-secondary max-w-xl mx-auto">
             Choose the plan that fits your growth goals. All plans include a 14-day free trial.
           </p>
         </motion.div>
@@ -83,42 +83,42 @@ export default function Pricing() {
           {plans.map((plan, index) => (
             <motion.div
               key={index}
-              initial={{ opacity: 0 }}
-              whileInView={{ opacity: 1 }}
+              initial={{ opacity: 0, y: 8 }}
+              whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
-              transition={{ duration: 0.4, delay: index * 0.08 }}
+              transition={{ duration: 0.5, delay: index * 0.08, ease: [0.25, 0.46, 0.45, 0.94] }}
               className="relative"
             >
               {/* Popular Badge */}
               {plan.popular && (
                 <div className="absolute -top-3 left-1/2 transform -translate-x-1/2 z-10">
-                  <div className="bg-[#0071e3] text-white text-micro-bold px-4 py-1 rounded-full">
+                  <div className="bg-apple-blue text-white text-micro-bold px-4 py-1 rounded-full">
                     Most Popular
                   </div>
                 </div>
               )}
 
-              <div className={`h-full rounded-lg p-7 ${
+              <div className={`h-full rounded-xl p-7 border transition-premium hover-lift ${
                 plan.popular
-                  ? 'bg-white apple-shadow ring-2 ring-[#0071e3]'
-                  : 'bg-white'
+                  ? 'bg-surface apple-shadow-lg ring-2 ring-apple-blue border-apple-blue/20'
+                  : 'bg-surface border-border-subtle'
               }`}>
                 {/* Plan Name */}
-                <h3 className="text-card-title text-[#1d1d1f] mb-1">{plan.name}</h3>
-                <p className="text-caption text-[rgba(0,0,0,0.48)] mb-5">{plan.description}</p>
+                <h3 className="text-card-title text-primary mb-1">{plan.name}</h3>
+                <p className="text-caption text-tertiary mb-5">{plan.description}</p>
 
                 {/* Price */}
                 <div className="mb-6">
-                  <span className="text-section-heading text-[#1d1d1f]">${plan.price}</span>
-                  <span className="text-caption text-[rgba(0,0,0,0.48)]">{plan.period}</span>
+                  <span className="text-section-heading text-primary">${plan.price}</span>
+                  <span className="text-caption text-tertiary">{plan.period}</span>
                 </div>
 
                 {/* CTA */}
                 <Link href="/login?mode=register" className="block mb-6">
-                  <button className={`w-full py-3 rounded-[980px] text-body-emphasis transition-colors ${
+                  <button className={`w-full py-3 rounded-[980px] text-body-emphasis transition-premium press-effect ${
                     plan.popular
-                      ? 'bg-[#0071e3] hover:bg-[#0077ed] text-white'
-                      : 'bg-[#1d1d1f] hover:bg-[#333336] text-white'
+                      ? 'bg-apple-blue hover:opacity-90 text-white'
+                      : 'bg-surface-elevated hover:bg-surface-hover text-primary border border-border-default'
                   }`}>
                     {plan.cta}
                   </button>
@@ -128,8 +128,8 @@ export default function Pricing() {
                 <ul className="space-y-3">
                   {plan.features.map((feature, idx) => (
                     <li key={idx} className="flex items-start gap-2.5">
-                      <Check className="w-4 h-4 text-[#0071e3] flex-shrink-0 mt-0.5" />
-                      <span className="text-caption text-[rgba(0,0,0,0.8)]">{feature}</span>
+                      <Check className="w-4 h-4 text-apple-blue flex-shrink-0 mt-0.5" />
+                      <span className="text-caption text-primary">{feature}</span>
                     </li>
                   ))}
                 </ul>
@@ -143,11 +143,11 @@ export default function Pricing() {
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.4, delay: 0.3 }}
+          transition={{ duration: 0.5, delay: 0.3 }}
           className="mt-12 text-center"
         >
-          <p className="text-caption text-[rgba(0,0,0,0.48)]">
-            <span className="text-caption-bold text-[#1d1d1f]">30-day money-back guarantee.</span> No questions asked.
+          <p className="text-caption text-tertiary">
+            <span className="text-caption-bold text-primary">30-day money-back guarantee.</span> No questions asked.
           </p>
         </motion.div>
       </div>

@@ -139,11 +139,11 @@ export default function LiveWorkerViewer() {
 
   const getEventColor = (type: string) => {
     switch (type) {
-      case 'screenshot': return 'text-blue-400';
-      case 'action': return 'text-green-400';
-      case 'status': return 'text-purple-400';
-      case 'error': return 'text-red-400';
-      default: return 'text-gray-400';
+      case 'screenshot': return 'text-apple-blue';
+      case 'action': return 'text-success';
+      case 'status': return 'text-[#af52de]';
+      case 'error': return 'text-error';
+      default: return 'text-secondary';
     }
   };
 
@@ -155,43 +155,43 @@ export default function LiveWorkerViewer() {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
-          className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 border-2 border-yellow-500/50 rounded-2xl p-6 backdrop-blur-sm"
+          className="bg-warning/10 border-2 border-warning/40 rounded-xl p-6"
         >
           <div className="flex items-start gap-4">
             <div className="flex-shrink-0">
-              <div className="w-12 h-12 bg-yellow-500/20 rounded-full flex items-center justify-center animate-pulse">
-                <AlertCircle className="w-6 h-6 text-yellow-400" />
+              <div className="w-12 h-12 bg-warning/20 rounded-full flex items-center justify-center animate-pulse">
+                <AlertCircle className="w-6 h-6 text-warning" />
               </div>
             </div>
             <div className="flex-1">
-              <h3 className="text-xl font-bold text-yellow-400 mb-2">⏸️ WAITING FOR MANUAL SUBMIT</h3>
-              <p className="text-white text-lg mb-4">
+              <h3 className="text-xl font-bold text-warning mb-2">⏸️ WAITING FOR MANUAL SUBMIT</h3>
+              <p className="text-primary text-lg mb-4">
                 {manualSubmitState.instruction || 'Click the POST button in the browser window to submit the comment'}
               </p>
               
               {manualSubmitState.commentPreview && (
-                <div className="bg-gray-900/50 rounded-lg p-4 mb-3">
-                  <p className="text-sm text-gray-400 mb-1">Comment Preview:</p>
-                  <p className="text-white font-mono text-sm">&quot;{manualSubmitState.commentPreview}&quot;</p>
+                <div className="bg-surface rounded-lg p-4 mb-3 border border-border-subtle">
+                  <p className="text-sm text-secondary mb-1">Comment Preview:</p>
+                  <p className="text-primary font-mono text-sm">&quot;{manualSubmitState.commentPreview}&quot;</p>
                 </div>
               )}
               
               {manualSubmitState.postUrl && (
-                <div className="bg-gray-900/50 rounded-lg p-4 mb-4">
-                  <p className="text-sm text-gray-400 mb-1">Post URL:</p>
+                <div className="bg-surface rounded-lg p-4 mb-4 border border-border-subtle">
+                  <p className="text-sm text-secondary mb-1">Post URL:</p>
                   <a 
                     href={manualSubmitState.postUrl} 
                     target="_blank" 
                     rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300 text-sm break-all"
+                    className="text-apple-blue hover:underline text-sm break-all"
                   >
                     {manualSubmitState.postUrl}
                   </a>
                 </div>
               )}
               
-              <div className="flex items-center gap-2 text-yellow-400">
-                <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></div>
+              <div className="flex items-center gap-2 text-warning">
+                <div className="w-2 h-2 bg-warning rounded-full animate-pulse"></div>
                 <span className="text-sm font-semibold">Worker is paused - Waiting for you to click submit...</span>
               </div>
             </div>
@@ -201,19 +201,19 @@ export default function LiveWorkerViewer() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Live Browser View */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-2xl p-6 backdrop-blur-sm">
+      <div className="bg-surface border border-border-subtle rounded-xl p-6 apple-shadow">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-gray-500'}`} />
-            <h3 className="text-lg font-semibold text-white">Live Browser View</h3>
+            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-success animate-pulse' : 'bg-tertiary'}`} />
+            <h3 className="text-lg font-semibold text-primary">Live Browser View</h3>
           </div>
-          <div className="flex items-center gap-2 text-sm text-gray-400">
+          <div className="flex items-center gap-2 text-sm text-secondary">
             <Camera className="w-4 h-4" />
             <span>Real-time</span>
           </div>
         </div>
 
-        <div className="relative bg-gray-900 rounded-xl overflow-hidden aspect-video flex items-center justify-center">
+        <div className="relative bg-surface-hover rounded-lg overflow-hidden aspect-video flex items-center justify-center border border-border-subtle">
           {currentScreenshot ? (
             <motion.img
               key={currentScreenshot}
@@ -225,7 +225,7 @@ export default function LiveWorkerViewer() {
               className="w-full h-full object-contain"
             />
           ) : (
-            <div className="text-center text-gray-500">
+            <div className="text-center text-tertiary">
               <Camera className="w-12 h-12 mx-auto mb-2 opacity-50" />
               <p className="text-sm">Waiting for worker activity...</p>
               <p className="text-xs mt-1">Screenshots will appear here when automation starts</p>
@@ -233,9 +233,9 @@ export default function LiveWorkerViewer() {
           )}
         </div>
 
-        <div className="mt-4 flex items-center justify-between text-xs text-gray-400">
+        <div className="mt-4 flex items-center justify-between text-xs text-secondary">
           <span className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-gray-500'}`} />
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-success animate-pulse' : 'bg-tertiary'}`} />
             {isConnected ? 'Live connected' : 'Disconnected'}
           </span>
           <span>{events.length} events captured</span>
@@ -243,27 +243,27 @@ export default function LiveWorkerViewer() {
       </div>
 
       {/* Live Action Log */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-2xl p-6 backdrop-blur-sm">
+      <div className="bg-surface border border-border-subtle rounded-xl p-6 apple-shadow">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <Terminal className="w-5 h-5 text-gray-400" />
-            <h3 className="text-lg font-semibold text-white">Live Action Log</h3>
+            <Terminal className="w-5 h-5 text-secondary" />
+            <h3 className="text-lg font-semibold text-primary">Live Action Log</h3>
           </div>
           <button
             onClick={() => setAutoScroll(!autoScroll)}
-            className={`text-xs px-3 py-1 rounded-lg transition-colors ${
+            className={`text-xs px-3 py-1 rounded-lg transition-premium ${
               autoScroll 
-                ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
-                : 'bg-gray-700 text-gray-400 border border-gray-600'
+                ? 'bg-success/15 text-success border border-success/25' 
+                : 'bg-surface-hover text-secondary border border-border-subtle'
             }`}
           >
             Auto-scroll: {autoScroll ? 'ON' : 'OFF'}
           </button>
         </div>
 
-        <div className="bg-gray-900 rounded-xl p-4 h-96 overflow-y-auto font-mono text-sm">
+        <div className="bg-surface-hover border border-border-subtle rounded-lg p-4 h-96 overflow-y-auto font-mono text-sm scrollbar-thin">
           {events.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-gray-500">
+            <div className="flex items-center justify-center h-full text-tertiary">
               <div className="text-center">
                 <Terminal className="w-8 h-8 mx-auto mb-2 opacity-50" />
                 <p className="text-sm">No activity yet</p>
@@ -282,13 +282,13 @@ export default function LiveWorkerViewer() {
                     transition={{ duration: 0.2 }}
                     className="flex items-start gap-2 text-xs"
                   >
-                    <span className="text-gray-600 flex-shrink-0">
+                    <span className="text-tertiary flex-shrink-0">
                       {new Date(event.timestamp).toLocaleTimeString()}
                     </span>
                     <span className={`flex-shrink-0 ${getEventColor(event.type)}`}>
                       {getEventIcon(event.type)}
                     </span>
-                    <span className="text-gray-300 flex-1">
+                    <span className="text-primary flex-1">
                       {event.data.message}
                     </span>
                   </motion.div>
@@ -299,7 +299,7 @@ export default function LiveWorkerViewer() {
           )}
         </div>
 
-        <div className="mt-4 flex items-center justify-between text-xs text-gray-400">
+        <div className="mt-4 flex items-center justify-between text-xs text-secondary">
           <span>Showing last 50 events</span>
           <button
             onClick={async () => {
@@ -309,7 +309,7 @@ export default function LiveWorkerViewer() {
                 setCurrentScreenshot(null);
               }
             }}
-            className="text-red-400 hover:text-red-300 transition-colors"
+            className="text-error hover:opacity-80 transition-premium"
           >
             Clear logs
           </button>

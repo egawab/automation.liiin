@@ -2,12 +2,14 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, Sun, Moon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useTheme } from '@/components/theme-provider';
 
 export default function Navigation() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
     const handleScroll = () => setIsScrolled(window.scrollY > 20);
@@ -22,23 +24,23 @@ export default function Navigation() {
 
   return (
     <>
-      {/* Apple Glass Navigation — 48px, translucent dark + blur */}
+      {/* Apple Glass Navigation — 48px, translucent + blur */}
       <motion.nav
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.4 }}
         className={`fixed top-0 left-0 right-0 z-50 h-12 glass-nav transition-all duration-200 ${
-          isScrolled ? 'border-b border-white/10' : ''
+          isScrolled ? 'border-b border-border-subtle' : ''
         }`}
       >
         <div className="max-w-[980px] mx-auto px-4 sm:px-6 h-full">
           <div className="flex items-center justify-between h-full">
-            {/* Logo — Clean white wordmark */}
-            <Link href="/" className="text-white text-sm font-semibold tracking-tight hover:opacity-80 transition-opacity">
+            {/* Logo */}
+            <Link href="/" className="text-primary text-sm font-semibold tracking-tight hover:opacity-80 transition-opacity">
               Nexora
             </Link>
 
-            {/* Desktop Nav Links — 12px, weight 400, white */}
+            {/* Desktop Nav Links */}
             <div className="hidden md:flex items-center gap-6">
               {[
                 { href: '#features', label: 'Features' },
@@ -47,36 +49,53 @@ export default function Navigation() {
                 <a
                   key={link.href}
                   href={link.href}
-                  className="text-xs font-normal text-white/80 hover:text-white transition-colors"
+                  className="text-xs font-normal text-secondary hover:text-primary transition-colors"
                 >
                   {link.label}
                 </a>
               ))}
             </div>
 
-            {/* Desktop CTA */}
-            <div className="hidden md:flex items-center gap-5">
+            {/* Desktop CTA + Theme Toggle */}
+            <div className="hidden md:flex items-center gap-4">
+              {/* Theme Toggle */}
+              <button
+                onClick={toggleTheme}
+                className="p-1.5 rounded-full bg-surface-hover hover:bg-surface-elevated transition-premium text-secondary hover:text-primary"
+                aria-label="Toggle theme"
+              >
+                {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
               <Link
                 href="/login"
-                className="text-xs font-normal text-white/80 hover:text-white transition-colors"
+                className="text-xs font-normal text-secondary hover:text-primary transition-colors"
               >
                 Sign In
               </Link>
               <Link href="/login?mode=register">
-                <button className="px-4 py-1.5 bg-[#0071e3] hover:bg-[#0077ed] text-white text-xs font-normal rounded-full transition-colors">
+                <button className="btn-apple-primary text-xs px-4 py-1.5">
                   Get Started
                 </button>
               </Link>
             </div>
 
-            {/* Mobile Menu Button */}
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden p-1 text-white/80 hover:text-white transition-colors"
-              aria-label="Toggle mobile menu"
-            >
-              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
+            {/* Mobile: Theme + Menu */}
+            <div className="flex md:hidden items-center gap-2">
+              <button
+                onClick={toggleTheme}
+                className="p-1.5 rounded-full bg-surface-hover text-secondary"
+                aria-label="Toggle theme"
+              >
+                {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="p-1 text-secondary hover:text-primary transition-colors"
+                aria-label="Toggle mobile menu"
+              >
+                {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
         </div>
       </motion.nav>
@@ -90,7 +109,7 @@ export default function Navigation() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-40 md:hidden bg-black/60 backdrop-blur-sm"
+              className="fixed inset-0 z-40 md:hidden bg-page/60 backdrop-blur-sm"
               onClick={() => setIsMobileMenuOpen(false)}
             />
             <motion.div
@@ -98,7 +117,7 @@ export default function Navigation() {
               animate={{ y: 0 }}
               exit={{ y: '-100%' }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed top-12 left-0 right-0 z-50 md:hidden glass-nav border-b border-white/10"
+              className="fixed top-12 left-0 right-0 z-50 md:hidden glass-nav border-b border-border-subtle"
             >
               <div className="max-w-[980px] mx-auto px-6 py-4 space-y-1">
                 {[
@@ -109,7 +128,7 @@ export default function Navigation() {
                     key={link.href}
                     href={link.href}
                     onClick={() => setIsMobileMenuOpen(false)}
-                    className="block py-3 text-sm font-normal text-white/80 hover:text-white transition-colors border-b border-white/5"
+                    className="block py-3 text-sm font-normal text-secondary hover:text-primary transition-colors border-b border-border-subtle"
                   >
                     {link.label}
                   </a>
@@ -117,13 +136,13 @@ export default function Navigation() {
                 <Link
                   href="/login"
                   onClick={() => setIsMobileMenuOpen(false)}
-                  className="block py-3 text-sm font-normal text-white/80 hover:text-white transition-colors border-b border-white/5"
+                  className="block py-3 text-sm font-normal text-secondary hover:text-primary transition-colors border-b border-border-subtle"
                 >
                   Sign In
                 </Link>
                 <div className="pt-3">
                   <Link href="/login?mode=register" onClick={() => setIsMobileMenuOpen(false)}>
-                    <button className="w-full py-3 bg-[#0071e3] hover:bg-[#0077ed] text-white text-sm font-normal rounded-lg transition-colors">
+                    <button className="w-full py-3 btn-apple-primary text-sm rounded-lg">
                       Get Started
                     </button>
                   </Link>
