@@ -21,6 +21,12 @@ window.__linkedInExtractorReady = true;
     }
   }
   chrome.runtime.onMessage.addListener(messageHandler);
+  
+  // Expose global for direct injection (bypasses message race conditions)
+  window.__startExtraction = function(keyword, settings, comments, dashboardUrl, userId) {
+    console.log(`[Ext] ✅ Direct injection start for: "${keyword}"`);
+    runExtraction(keyword, settings, comments, dashboardUrl, userId);
+  };
 
   // Expose cleanup so next injection can remove this listener
   window.__linkedInExtractorCleanup = () => {

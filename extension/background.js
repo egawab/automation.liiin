@@ -429,18 +429,21 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
 
       await sleep(1500); // Let script register listener
 
-      // Send EXECUTE_SEARCH
-      console.log("🚀 [Worker] Sending EXECUTE_SEARCH...");
+      // Send EXECUTE_SEARCH robustly via direct function execution instead of messaging
+      console.log("🚀 [Worker] Starting extraction via direct execution...");
       try {
-        await new Promise((resolve, reject) => {
-          chrome.tabs.sendMessage(tab.id, {
-            action: 'EXECUTE_SEARCH', keyword, settings, comments, dashboardUrl, userId
-          }, (res) => {
-            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-            else resolve(res);
-          });
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (k, s, c, du, u) => {
+            if (window.__startExtraction) {
+              window.__startExtraction(k, s, c, du, u);
+            } else {
+              throw new Error("Extractor function not defined on window.");
+            }
+          },
+          args: [keyword, settings, comments, dashboardUrl, userId]
         });
-        console.log("✅ [Worker] Content script acknowledged.");
+        console.log("✅ [Worker] Content script successfully executed phase bypass.");
         _lastContentHeartbeat = Date.now();
         return true;
       } catch (e) {
