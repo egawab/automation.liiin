@@ -475,8 +475,16 @@ window.__linkedInExtractorReady = true;
           try {
           heartbeat('Phase5-Typing', `⌨️ Comment ${commentIdx+1}/${commentsNeeded}: Scrolling to target post by ${p.author}...`);
           console.log(`[Ext] 🎯 Engaging with post by ${p.author}...`);
-          p.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          await wait(2000, 4000); // Read the post
+          // Use 'auto' instead of 'smooth' to prevent infinite blocking on background tabs in Chrome M110+
+          p.element.scrollIntoView({ behavior: 'auto', block: 'center' });
+          window.dispatchEvent(new Event('scroll'));
+          
+          // Also dispatch on all possible scroll containers to force LinkedIn's lazy loader
+          document.querySelectorAll('.scaffold-layout__main, .search-results-container').forEach(sc => {
+            sc.dispatchEvent(new Event('scroll'));
+          });
+          
+          await wait(2000, 4000); // Give React time to re-mount virtualized elements
           
           // 1. Click Comment Button (broad selectors)
           let commentBtn = p.element.querySelector('button.comment-button, button[aria-label*="Comment"], button[aria-label*="تعليق"]');
@@ -506,22 +514,30 @@ window.__linkedInExtractorReady = true;
           heartbeat('Phase5-Typing', `⌨️ Comment ${commentIdx+1}/${commentsNeeded}: Human-typing ${textToType.length} characters...`);
           console.log("[Ext]    Editor found. Starting human typing...");
           
-          // 3. Human Typewriter (char-by-char via execCommand on EDITOR focus)
+          // 3. Human Typewriter + Fallback React Injection
           editor.focus();
           await wait(300, 600);
-          // Select all existing content and delete it
           document.execCommand('selectAll', false, null);
           document.execCommand('delete', false, null);
           await wait(300, 600);
           
-          // Type each character with random human-like jitter
           for (let i = 0; i < textToType.length; i++) {
-            editor.focus(); // Re-focus each time to prevent React detach issues
+            editor.focus(); 
             document.execCommand('insertText', false, textToType[i]);
-            // Random jitter: 40-150ms per keystroke (human range)
             await wait(40, 150);
           }
-          console.log(`[Ext]    Typed ${textToType.length} chars. Reviewing...`);
+          
+          // Background tab fallback: if execCommand failed because standard OS focus was lost
+          if (!editor.innerText || editor.innerText.trim().length === 0 || editor.innerText.trim() !== textToType.trim()) {
+            console.warn("[Ext] ⚠️ ExecCommand missed characters (tab unfocused). Injecting manually...");
+            editor.innerHTML = `<p>${textToType}</p>`;
+          }
+          
+          // Force React to recognize the input regardless of how it was injected
+          const inputEvent = new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: textToType });
+          editor.dispatchEvent(inputEvent);
+          
+          console.log(`[Ext]    Typed ${textToType.length} chars. Wait for review...`);
           heartbeat('Phase5-Submit', `✅ Comment ${commentIdx+1}/${commentsNeeded}: Submitting comment...`);
           await wait(2000, 4000); // Pause to "review" the comment
           
