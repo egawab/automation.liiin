@@ -269,7 +269,7 @@ window.__linkedInExtractorReady = true;
       
       // Extract Post Body / Preview text
       try {
-        const textEls = container.querySelectorAll('.feed-shared-text, .update-components-text, .feed-shared-update-v2__description, .break-words, span[dir="ltr"]');
+        const textEls = container.querySelectorAll('.feed-shared-update-v2__commentary, .update-components-text .break-words, .feed-shared-text, .update-components-text, .feed-shared-update-v2__description, .entity-result__content-summary');
         for (const el of textEls) {
            if (el.innerText && el.innerText.trim().length > 10) {
               textSnippet = el.innerText.replace(/[\n\r]+/g, ' ').trim().substring(0, 400);
