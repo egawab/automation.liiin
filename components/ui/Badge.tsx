@@ -20,13 +20,13 @@ export default function Badge({
   const baseStyles = 'inline-flex items-center gap-1.5 font-semibold rounded-full whitespace-nowrap';
 
   const variantStyles = {
-    success: 'bg-[rgba(52,199,89,0.12)] text-[#34c759]',
-    warning: 'bg-[rgba(255,159,10,0.12)] text-[#ff9f0a]',
-    error: 'bg-[rgba(255,59,48,0.12)] text-[#ff3b30]',
-    info: 'bg-[rgba(0,113,227,0.12)] text-[#0071e3]',
-    neutral: 'bg-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.56)]',
-    primary: 'bg-[rgba(0,113,227,0.12)] text-[#0071e3]',
-    secondary: 'bg-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.48)]'
+    success: 'bg-success/15 text-success',
+    warning: 'bg-warning/15 text-warning',
+    error: 'bg-error/15 text-error',
+    info: 'bg-apple-blue/15 text-apple-blue',
+    neutral: 'bg-surface-hover text-secondary',
+    primary: 'bg-apple-blue/15 text-apple-blue',
+    secondary: 'bg-surface-hover text-tertiary'
   };
 
   const sizeStyles = {
@@ -36,13 +36,13 @@ export default function Badge({
   };
 
   const dotColors = {
-    success: 'bg-[#34c759]',
-    warning: 'bg-[#ff9f0a]',
-    error: 'bg-[#ff3b30]',
-    info: 'bg-[#0071e3]',
-    neutral: 'bg-[rgba(255,255,255,0.32)]',
-    primary: 'bg-[#0071e3]',
-    secondary: 'bg-[rgba(255,255,255,0.32)]'
+    success: 'bg-success',
+    warning: 'bg-warning',
+    error: 'bg-error',
+    info: 'bg-apple-blue',
+    neutral: 'bg-tertiary',
+    primary: 'bg-apple-blue',
+    secondary: 'bg-tertiary'
   };
 
   return (

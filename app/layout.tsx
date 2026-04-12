@@ -1,5 +1,9 @@
 import './globals.css';
+import { Inter } from 'next/font/google';
 import { ToastProvider } from '@/components/ui/Toast';
+import { ThemeProvider } from '@/components/theme-provider';
+
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata = {
   title: 'Nexora – Your AI LinkedIn Presence',
@@ -12,10 +16,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body>
-        {children}
-        <ToastProvider />
+    <html lang="en" suppressHydrationWarning>
+      <body className={inter.className}>
+        <ThemeProvider>
+          <ToastProvider />
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );

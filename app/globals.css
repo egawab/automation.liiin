@@ -2,60 +2,30 @@
 
 @theme {
   /* ===================================
-     APPLE DESIGN SYSTEM — Color Tokens
+     APPLE DESIGN SYSTEM — Base Tokens
      Source: DESIGN.md
      =================================== */
 
-  /* Primary Surfaces */
-  --color-apple-black: #000000;
-  --color-apple-white: #ffffff;
-  --color-apple-gray: #f5f5f7;
-  --color-apple-nearblack: #1d1d1f;
+  /* Map CSS Variables to Tailwind Utilities */
+  --color-page: var(--bg-page);
+  --color-surface: var(--bg-surface);
+  --color-surface-hover: var(--bg-surface-hover);
+  --color-surface-elevated: var(--bg-surface-elevated);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-border-subtle: var(--border-subtle);
 
   /* Interactive — Single accent */
   --color-apple-blue: #0071e3;
   --color-apple-link: #0066cc;
   --color-apple-link-dark: #2997ff;
 
-  /* Dark Surfaces */
-  --color-dark-1: #272729;
-  --color-dark-2: #262628;
-  --color-dark-3: #28282a;
-  --color-dark-4: #2a2a2d;
-  --color-dark-5: #242426;
-
-  /* Button States */
-  --color-btn-active: #ededf2;
-  --color-btn-default: #fafafc;
-
-  /* Status Colors (kept for dashboard functionality) */
-  --color-success-50: #ecfdf5;
-  --color-success-100: #d1fae5;
-  --color-success-500: #34c759;
-  --color-success-600: #30b350;
-
-  --color-warning-50: #fffbeb;
-  --color-warning-100: #fef3c7;
-  --color-warning-500: #ff9f0a;
-  --color-warning-600: #e68f09;
-
-  --color-error-50: #fef2f2;
-  --color-error-100: #fee2e2;
-  --color-error-500: #ff3b30;
-  --color-error-600: #e03530;
-
-  /* Gray scale for Tailwind compatibility */
-  --color-gray-50: #f9fafb;
-  --color-gray-100: #f5f5f7;
-  --color-gray-200: #e8e8ed;
-  --color-gray-300: #d2d2d7;
-  --color-gray-400: #86868b;
-  --color-gray-500: #6e6e73;
-  --color-gray-600: #424245;
-  --color-gray-700: #333336;
-  --color-gray-800: #1d1d1f;
-  --color-gray-900: #000000;
-  --color-gray-950: #000000;
+  /* Status Colors */
+  --color-success: #34c759;
+  --color-warning: #ff9f0a;
+  --color-error: #ff3b30;
 
   /* ===================================
      TYPOGRAPHY — SF Pro Fallback Chain
@@ -76,25 +46,6 @@
   --font-size-6xl: 3.5rem;       /* 56px — Apple hero */
 
   /* ===================================
-     SPACING (8px base system)
-     =================================== */
-  --spacing-0: 0;
-  --spacing-px: 1px;
-  --spacing-0\.5: 0.125rem;
-  --spacing-1: 0.25rem;
-  --spacing-2: 0.5rem;
-  --spacing-3: 0.75rem;
-  --spacing-4: 1rem;
-  --spacing-5: 1.25rem;
-  --spacing-6: 1.5rem;
-  --spacing-8: 2rem;
-  --spacing-10: 2.5rem;
-  --spacing-12: 3rem;
-  --spacing-16: 4rem;
-  --spacing-20: 5rem;
-  --spacing-24: 6rem;
-
-  /* ===================================
      BORDER RADIUS — Apple Scale
      =================================== */
   --radius-sm: 5px;
@@ -102,49 +53,72 @@
   --radius-md: 11px;
   --radius-lg: 12px;
   --radius-pill: 980px;
-  --radius-full: 9999px;
 
   /* ===================================
-     SHADOWS — Apple (single soft diffused)
+     SHADOWS
      =================================== */
-  --shadow-xs: none;
-  --shadow-sm: none;
-  --shadow-base: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
-  --shadow-md: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
-  --shadow-lg: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
-  --shadow-xl: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
-
-  /* ===================================
-     TRANSITIONS
-     =================================== */
-  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-medium: 300ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow: 500ms cubic-bezier(0.4, 0, 0.2, 1);
+  --shadow-apple: var(--apple-shadow);
 }
 
 @layer base {
+  :root {
+    /* APPLE LIGHT MODE (DEFAULT) */
+    --bg-page: #f5f5f7;
+    --bg-surface: #ffffff;
+    --bg-surface-hover: rgba(0, 0, 0, 0.03);
+    --bg-surface-elevated: #ffffff;
+    
+    --text-primary: #1d1d1f;
+    --text-secondary: rgba(0, 0, 0, 0.56);
+    --text-tertiary: rgba(0, 0, 0, 0.32);
+    
+    --border-subtle: rgba(0, 0, 0, 0.05);
+    
+    --glass-nav: rgba(255, 255, 255, 0.8);
+    --apple-shadow: rgba(0, 0, 0, 0.08) 3px 5px 20px 0px;
+    
+    color-scheme: light;
+  }
+
+  .dark {
+    /* APPLE DARK MODE */
+    --bg-page: #000000;
+    --bg-surface: #1d1d1f;
+    --bg-surface-hover: rgba(255, 255, 255, 0.04);
+    --bg-surface-elevated: #272729;
+    
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.64);
+    --text-tertiary: rgba(255, 255, 255, 0.32);
+    
+    --border-subtle: rgba(255, 255, 255, 0.05);
+    
+    --glass-nav: rgba(0, 0, 0, 0.8);
+    --apple-shadow: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
+    
+    color-scheme: dark;
+  }
+
   body {
-    @apply bg-black text-white font-sans antialiased;
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+    @apply font-sans antialiased;
     font-size: 17px;
     line-height: 1.47;
     letter-spacing: -0.374px;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 }
 
 @layer utilities {
-  /* ===================================
-     APPLE NAVIGATION GLASS
-     =================================== */
   .glass-nav {
-    background: rgba(0, 0, 0, 0.8);
+    background: var(--glass-nav);
     backdrop-filter: saturate(180%) blur(20px);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
-  /* ===================================
-     APPLE TYPOGRAPHY UTILITIES
-     =================================== */
+  /* TYPOGRAPHY */
   .text-display-hero {
     font-size: 3.5rem;    /* 56px */
     font-weight: 600;
@@ -168,7 +142,7 @@
 
   .text-card-title {
     font-size: 1.3125rem; /* 21px */
-    font-weight: 700;
+    font-weight: 600;
     line-height: 1.19;
     letter-spacing: 0.231px;
   }
@@ -215,143 +189,39 @@
     letter-spacing: -0.12px;
   }
 
-  /* ===================================
-     APPLE COLOR UTILITIES
-     =================================== */
-  .text-primary-on-light {
-    color: #1d1d1f;
-  }
-
-  .text-secondary-on-light {
-    color: rgba(0, 0, 0, 0.8);
-  }
-
-  .text-tertiary-on-light {
-    color: rgba(0, 0, 0, 0.48);
-  }
-
-  .text-primary-on-dark {
-    color: #ffffff;
-  }
-
-  .text-secondary-on-dark {
-    color: rgba(255, 255, 255, 0.8);
-  }
-
-  .text-tertiary-on-dark {
-    color: rgba(255, 255, 255, 0.48);
-  }
-
-  .bg-section-light {
-    background-color: #f5f5f7;
-  }
-
-  .bg-section-dark {
-    background-color: #000000;
-  }
-
-  .bg-surface-dark {
-    background-color: #272729;
-  }
-
-  /* ===================================
-     APPLE BUTTON UTILITIES
-     =================================== */
+  /* BUTTON UTILITIES */
   .btn-apple-primary {
-    background-color: #0071e3;
+    background-color: var(--color-apple-blue);
     color: #ffffff;
     padding: 8px 15px;
     border-radius: 8px;
     border: 1px solid transparent;
-    font-size: 17px;
-    font-weight: 400;
-    line-height: 1;
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.2;
     cursor: pointer;
-    transition: background-color 0.2s;
+    transition: opacity 0.2s;
   }
   .btn-apple-primary:hover {
-    background-color: #0077ed;
-  }
-
-  .btn-apple-dark {
-    background-color: #1d1d1f;
-    color: #ffffff;
-    padding: 8px 15px;
-    border-radius: 8px;
-    font-size: 17px;
-    font-weight: 400;
-    line-height: 1;
-    cursor: pointer;
-    transition: background-color 0.2s;
+    opacity: 0.9;
   }
 
   .btn-apple-pill {
     background: transparent;
-    border: 1px solid #0066cc;
-    color: #0066cc;
+    border: 1px solid var(--color-apple-blue);
+    color: var(--color-apple-blue);
     border-radius: 980px;
-    padding: 8px 20px;
+    padding: 8px 16px;
     font-size: 14px;
-    font-weight: 400;
+    font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
   }
   .btn-apple-pill:hover {
-    text-decoration: underline;
+    background: rgba(0, 113, 227, 0.05);
   }
 
-  .btn-apple-pill-dark {
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.48);
-    color: #ffffff;
-    border-radius: 980px;
-    padding: 8px 20px;
-    font-size: 14px;
-    font-weight: 400;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .btn-apple-pill-dark:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-
-  /* ===================================
-     APPLE CARD SHADOW
-     =================================== */
   .apple-shadow {
-    box-shadow: rgba(0, 0, 0, 0.22) 3px 5px 30px 0px;
-  }
-
-  /* ===================================
-     LINK STYLES
-     =================================== */
-  .link-apple {
-    color: #0066cc;
-    text-decoration: none;
-    font-size: 14px;
-    letter-spacing: -0.224px;
-  }
-  .link-apple:hover {
-    text-decoration: underline;
-  }
-
-  .link-apple-dark {
-    color: #2997ff;
-    text-decoration: none;
-    font-size: 14px;
-    letter-spacing: -0.224px;
-  }
-  .link-apple-dark:hover {
-    text-decoration: underline;
-  }
-
-  /* ===================================
-     NEXORA BRAND (Apple-aligned)
-     =================================== */
-  .nexora-brand-text {
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    color: #ffffff;
-    display: inline-block;
+    box-shadow: var(--apple-shadow);
   }
 }

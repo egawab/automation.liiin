@@ -5,16 +5,31 @@
   <title>Nexora Extension</title>
   <style>
     :root {
-      --bg-base: #000000;
-      --bg-surface: #1d1d1f;
-      --bg-surface-hover: rgba(255,255,255,0.06);
-      --border: rgba(255,255,255,0.05);
-      --text-primary: #ffffff;
-      --text-secondary: rgba(255,255,255,0.48);
+      /* Apple Light Theme (Default) */
+      --bg-base: #f5f5f7;
+      --bg-surface: #ffffff;
+      --bg-surface-hover: rgba(0,0,0,0.04);
+      --border: rgba(0,0,0,0.08);
+      --text-primary: #1d1d1f;
+      --text-secondary: rgba(0,0,0,0.56);
       --accent: #0071e3;
       --success: #34c759;
       --danger: #ff3b30;
       --warning: #ff9f0a;
+      --glass-bg: rgba(255,255,255,0.8);
+    }
+    
+    @media (prefers-color-scheme: dark) {
+      :root {
+        /* Apple Dark Theme */
+        --bg-base: #000000;
+        --bg-surface: #1d1d1f;
+        --bg-surface-hover: rgba(255,255,255,0.06);
+        --border: rgba(255,255,255,0.05);
+        --text-primary: #ffffff;
+        --text-secondary: rgba(255,255,255,0.48);
+        --glass-bg: rgba(0,0,0,0.8);
+      }
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -60,14 +75,14 @@
     .btn-danger:hover:not(:disabled) { opacity: 0.9; }
 
     /* ── Header ── */
-    header {
       padding: 14px 20px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       border-bottom: 1px solid var(--border);
-      background: rgba(0,0,0,0.8);
-      backdrop-filter: blur(20px);
+      background: var(--glass-bg);
+      backdrop-filter: saturate(180%) blur(20px);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
       position: sticky;
       top: 0;
       z-index: 10;
@@ -126,13 +141,13 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       font-size: 13px;
-      background: #272729;
+      background: var(--bg-surface-hover);
       color: var(--text-primary);
       outline: none;
       transition: border-color 0.2s;
     }
     input:focus { border-color: var(--accent); }
-    input::placeholder { color: rgba(255,255,255,0.24); }
+    input::placeholder { color: var(--text-secondary); opacity: 0.7; }
 
     #setupMsg { text-align: center; font-size: 11px; font-weight: 600; min-height: 16px; color: var(--text-secondary); margin-top: 4px; }
 
@@ -174,8 +189,8 @@
     .stat-label { font-size: 9px; color: var(--text-secondary); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
 
     /* Keyword Box */
-    .keyword-box { background: rgba(0,113,227,0.08); border: 1px solid rgba(0,113,227,0.16); border-radius: 10px; padding: 10px 14px; text-align: center; margin-bottom: 14px; }
-    .keyword-label { font-size: 9px; font-weight: 700; color: rgba(255,255,255,0.48); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+    .keyword-box { background: var(--bg-surface-hover); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; text-align: center; margin-bottom: 14px; }
+    .keyword-label { font-size: 9px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
     .keyword-text { font-size: 12px; font-weight: 600; color: var(--accent); }
 
     /* Play/Pause */
@@ -187,11 +202,11 @@
     .activity-header { font-size: 10px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
     .activity-dot { width: 4px; height: 4px; background: var(--success); border-radius: 50%; }
 
-    .activity-log { background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px solid var(--border); padding: 4px 0; max-height: 140px; overflow-y: auto; }
+    .activity-log { background: var(--bg-surface-hover); border-radius: 8px; border: 1px solid var(--border); padding: 4px 0; max-height: 140px; overflow-y: auto; }
     .activity-log::-webkit-scrollbar { width: 3px; }
-    .activity-log::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    .activity-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-    .log-entry { padding: 6px 12px; display: flex; align-items: flex-start; gap: 8px; font-size: 11px; color: rgba(255,255,255,0.64); line-height: 1.4; }
+    .log-entry { padding: 6px 12px; display: flex; align-items: flex-start; gap: 8px; font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
     .log-entry:first-child { color: var(--text-primary); font-weight: 600; }
     .log-entry .log-time { font-size: 9px; color: var(--text-secondary); min-width: 38px; padding-top: 1px; }
     .log-entry .log-text { flex: 1; word-break: break-word; }

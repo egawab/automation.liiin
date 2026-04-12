@@ -17,21 +17,21 @@ interface StatCardProps {
 }
 
 const iconBgMap: Record<string, string> = {
-  primary: 'bg-[rgba(0,113,227,0.12)] text-[#0071e3]',
-  secondary: 'bg-[rgba(255,255,255,0.06)] text-[rgba(255,255,255,0.56)]',
-  accent: 'bg-[rgba(0,113,227,0.12)] text-[#0071e3]',
-  success: 'bg-[rgba(52,199,89,0.12)] text-[#34c759]',
-  warning: 'bg-[rgba(255,159,10,0.12)] text-[#ff9f0a]',
-  gray: 'bg-[rgba(255,255,255,0.06)] text-[rgba(255,255,255,0.48)]'
+  primary: 'bg-apple-blue/15 text-apple-blue',
+  secondary: 'bg-surface-elevated text-secondary',
+  accent: 'bg-apple-blue/15 text-apple-blue',
+  success: 'bg-success/15 text-success',
+  warning: 'bg-warning/15 text-warning',
+  gray: 'bg-surface-hover text-tertiary'
 };
 
 const progressColorMap: Record<string, string> = {
-  primary: 'bg-[#0071e3]',
-  secondary: 'bg-[rgba(255,255,255,0.32)]',
-  accent: 'bg-[#0071e3]',
-  success: 'bg-[#34c759]',
-  warning: 'bg-[#ff9f0a]',
-  gray: 'bg-[rgba(255,255,255,0.32)]'
+  primary: 'bg-apple-blue',
+  secondary: 'bg-secondary',
+  accent: 'bg-apple-blue',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  gray: 'bg-secondary'
 };
 
 export default function StatCard({
@@ -49,19 +49,19 @@ export default function StatCard({
       <Card className="h-full">
         <div className="flex items-start justify-between mb-3">
           <div className="flex-1">
-            <p className="text-micro text-[rgba(255,255,255,0.48)] mb-1.5">{title}</p>
+            <p className="text-micro text-secondary mb-1.5">{title}</p>
             <div className="flex items-baseline gap-2">
-              <h3 className="text-tile-heading text-white">{value}</h3>
+              <h3 className="text-tile-heading text-primary">{value}</h3>
               {maxValue && (
-                <span className="text-caption text-[rgba(255,255,255,0.32)]">/ {maxValue}</span>
+                <span className="text-caption text-tertiary">/ {maxValue}</span>
               )}
             </div>
             {trend && (
               <div className="flex items-center gap-1 mt-1.5">
-                <span className={`text-micro-bold ${trendUp ? 'text-[#34c759]' : 'text-[#ff3b30]'}`}>
+                <span className={`text-micro-bold ${trendUp ? 'text-success' : 'text-error'}`}>
                   {trendUp ? '↑' : '↓'} {trend}
                 </span>
-                <span className="text-micro text-[rgba(255,255,255,0.32)]">from last week</span>
+                <span className="text-micro text-tertiary">from last week</span>
               </div>
             )}
           </div>
@@ -71,7 +71,7 @@ export default function StatCard({
         </div>
 
         {showProgress && maxValue && (
-          <div className="w-full bg-[rgba(255,255,255,0.06)] rounded-full h-1.5 overflow-hidden">
+          <div className="w-full bg-surface-hover rounded-full h-1.5 overflow-hidden">
             <motion.div
               initial={{ width: 0 }}
               animate={{ width: `${progressPercentage}%` }}

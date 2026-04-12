@@ -22,14 +22,14 @@ export default function Button({
   disabled,
   ...props
 }: ButtonProps) {
-  const baseStyles = 'inline-flex items-center justify-center gap-2 font-normal transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#0071e3]';
+  const baseStyles = 'inline-flex items-center justify-center gap-2 font-normal transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-apple-blue';
 
   const variantStyles = {
-    primary: 'bg-[#0071e3] text-white hover:bg-[#0077ed] active:bg-[#006edb]',
-    secondary: 'bg-[#1d1d1f] text-white hover:bg-[#333336]',
-    outline: 'border border-[#0066cc] bg-transparent text-[#0066cc] hover:underline',
-    ghost: 'bg-transparent text-[#0066cc] hover:bg-[rgba(0,0,0,0.04)]',
-    link: 'bg-transparent text-[#0066cc] hover:underline underline-offset-4 p-0'
+    primary: 'bg-apple-blue text-white hover:opacity-90 active:opacity-80',
+    secondary: 'bg-surface-elevated border border-subtle text-primary hover:bg-surface-hover',
+    outline: 'border border-apple-blue bg-transparent text-apple-blue hover:bg-apple-blue/5',
+    ghost: 'bg-transparent text-apple-blue hover:bg-surface-hover',
+    link: 'bg-transparent text-apple-blue hover:underline underline-offset-4 p-0'
   };
 
   const sizeStyles = {

@@ -15,9 +15,9 @@ interface ChartProps {
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-[#1d1d1f] rounded-lg p-3 apple-shadow border border-white/5">
-        <p className="text-micro-bold text-white mb-0.5">{label}</p>
-        <p className="text-caption text-[#0071e3]">{payload[0].value} comments</p>
+      <div className="bg-surface rounded-lg p-3 apple-shadow border border-subtle">
+        <p className="text-micro-bold text-primary mb-0.5">{label}</p>
+        <p className="text-caption text-apple-blue">{payload[0].value} comments</p>
       </div>
     );
   }
@@ -34,12 +34,12 @@ export default function Chart({
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-[#0071e3]" />
+              <TrendingUp className="w-4 h-4 text-apple-blue" />
               <CardTitle>{title}</CardTitle>
             </div>
             <div className="flex gap-1.5">
-              <button className="px-3 py-1 text-micro-bold rounded-md bg-[#0071e3] text-white">7 Days</button>
-              <button className="px-3 py-1 text-micro rounded-md text-[rgba(255,255,255,0.48)] hover:bg-white/5 transition-colors">30 Days</button>
+              <button className="px-3 py-1 text-micro-bold rounded-md bg-apple-blue text-white">7 Days</button>
+              <button className="px-3 py-1 text-micro rounded-md text-secondary hover:bg-surface-hover transition-colors">30 Days</button>
             </div>
           </div>
           <CardDescription>{description}</CardDescription>
@@ -54,17 +54,17 @@ export default function Chart({
                     <stop offset="95%" stopColor={color} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="name" stroke="rgba(255,255,255,0.24)" style={{ fontSize: '11px', fontWeight: 400 }} />
-                <YAxis stroke="rgba(255,255,255,0.24)" style={{ fontSize: '11px', fontWeight: 400 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                <XAxis dataKey="name" stroke="var(--text-tertiary)" style={{ fontSize: '11px', fontWeight: 400 }} />
+                <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '11px', fontWeight: 400 }} />
                 <Tooltip content={<CustomTooltip />} />
                 <Area type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} fill="url(#colorValue)" animationDuration={1000} />
               </AreaChart>
             ) : (
               <LineChart data={data}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="name" stroke="rgba(255,255,255,0.24)" style={{ fontSize: '11px', fontWeight: 400 }} />
-                <YAxis stroke="rgba(255,255,255,0.24)" style={{ fontSize: '11px', fontWeight: 400 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                <XAxis dataKey="name" stroke="var(--text-tertiary)" style={{ fontSize: '11px', fontWeight: 400 }} />
+                <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '11px', fontWeight: 400 }} />
                 <Tooltip content={<CustomTooltip />} />
                 <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={{ fill: color, r: 3 }} activeDot={{ r: 5 }} animationDuration={1000} />
               </LineChart>

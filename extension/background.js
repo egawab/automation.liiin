@@ -82,17 +82,33 @@ function injectToastDOM(title, message, isError) {
   
   shadow.innerHTML = `
     <style>
+      :host {
+        --toast-bg: #ffffff;
+        --toast-border: rgba(0, 0, 0, 0.08);
+        --toast-text: #1d1d1f;
+        --toast-sec: rgba(0, 0, 0, 0.56);
+        --shadow: rgba(0, 0, 0, 0.1) 0 8px 30px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :host {
+          --toast-bg: #1d1d1f;
+          --toast-border: rgba(255, 255, 255, 0.05);
+          --toast-text: #ffffff;
+          --toast-sec: rgba(255, 255, 255, 0.48);
+          --shadow: rgba(0, 0, 0, 0.4) 0 8px 30px;
+        }
+      }
       .toast {
         width: 320px;
-        background: #1d1d1f;
+        background: var(--toast-bg);
         backdrop-filter: blur(16px);
         -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--toast-border);
         border-radius: 12px;
         padding: 16px 20px;
-        color: #ffffff;
+        color: var(--toast-text);
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+        box-shadow: var(--shadow);
         transform: translateX(120%);
         opacity: 0;
         transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
@@ -106,8 +122,8 @@ function injectToastDOM(title, message, isError) {
       .toast.hiding { transform: translateX(120%); opacity: 0; }
       .icon { font-size: 20px; line-height: 1; filter: drop-shadow(0 0 8px ${accent}60); }
       .content { flex: 1; }
-      .title { font-size: 14px; font-weight: 600; margin: 0 0 4px 0; color: #ffffff; letter-spacing: -0.01em; }
-      .message { font-size: 13px; font-weight: 400; margin: 0; color: rgba(255, 255, 255, 0.48); line-height: 1.4; }
+      .title { font-size: 14px; font-weight: 600; margin: 0 0 4px 0; color: var(--toast-text); letter-spacing: -0.01em; }
+      .message { font-size: 13px; font-weight: 400; margin: 0; color: var(--toast-sec); line-height: 1.4; }
       .progress {
         position: absolute; bottom: 0; left: 0; height: 3px; background: ${accent}; width: 100%;
         animation: shrink 4s linear forwards;

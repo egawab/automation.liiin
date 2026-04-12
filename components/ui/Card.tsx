@@ -20,10 +20,10 @@ export default function Card({
   const baseStyles = 'rounded-lg overflow-hidden transition-all duration-200';
 
   const variantStyles = {
-    default: 'bg-[#272729]',
-    elevated: 'bg-[#272729] apple-shadow',
-    glass: 'bg-[rgba(39,39,41,0.8)] backdrop-blur-xl',
-    gradient: 'bg-[#2a2a2d]'
+    default: 'bg-surface',
+    elevated: 'bg-surface-elevated apple-shadow',
+    glass: 'glass-nav',
+    gradient: 'bg-surface-hover'
   };
 
   const paddingStyles = {
@@ -33,7 +33,7 @@ export default function Card({
     lg: 'p-7 md:p-10'
   };
 
-  const hoverStyle = hover ? 'hover:bg-[#2a2a2d]' : '';
+  const hoverStyle = hover ? 'hover:bg-surface-hover' : '';
 
   const combinedStyles = `${baseStyles} ${variantStyles[variant]} ${paddingStyles[padding]} ${hoverStyle} ${onClick ? 'cursor-pointer' : ''} ${className}`;
 
@@ -51,12 +51,12 @@ export function CardHeader({ children, className = '' }: CardHeaderProps) {
 
 export interface CardTitleProps { children: React.ReactNode; className?: string; }
 export function CardTitle({ children, className = '' }: CardTitleProps) {
-  return <h3 className={`text-card-title text-white ${className}`}>{children}</h3>;
+  return <h3 className={`text-card-title text-primary ${className}`}>{children}</h3>;
 }
 
 export interface CardDescriptionProps { children: React.ReactNode; className?: string; }
 export function CardDescription({ children, className = '' }: CardDescriptionProps) {
-  return <p className={`text-caption text-[rgba(255,255,255,0.48)] mt-1 ${className}`}>{children}</p>;
+  return <p className={`text-caption text-tertiary mt-1 ${className}`}>{children}</p>;
 }
 
 export interface CardContentProps { children: React.ReactNode; className?: string; }
@@ -66,5 +66,5 @@ export function CardContent({ children, className = '' }: CardContentProps) {
 
 export interface CardFooterProps { children: React.ReactNode; className?: string; }
 export function CardFooter({ children, className = '' }: CardFooterProps) {
-  return <div className={`mt-5 pt-5 border-t border-white/5 ${className}`}>{children}</div>;
+  return <div className={`mt-5 pt-5 border-t border-subtle ${className}`}>{children}</div>;
 }

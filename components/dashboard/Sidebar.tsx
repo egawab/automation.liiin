@@ -21,10 +21,10 @@ const navItems = [
 
 export default function Sidebar({ activeTab, onTabChange, systemActive }: SidebarProps) {
   return (
-    <div className="w-64 bg-black border-r border-white/5 flex flex-col">
+    <div className="w-64 bg-surface border-r border-subtle flex flex-col">
       {/* Logo */}
-      <div className="p-5 border-b border-white/5">
-        <Link href="/" className="text-white text-base font-semibold tracking-tight hover:opacity-80 transition-opacity">
+      <div className="p-5 border-b border-subtle">
+        <Link href="/" className="text-primary text-base font-semibold tracking-tight hover:opacity-80 transition-opacity">
           Nexora
         </Link>
       </div>
@@ -40,8 +40,8 @@ export default function Sidebar({ activeTab, onTabChange, systemActive }: Sideba
               onClick={() => onTabChange(item.id)}
               className={`w-full flex items-center gap-3 px-3 py-2.5 text-caption rounded-lg transition-all ${
                 isActive
-                  ? 'bg-[#0071e3] text-white'
-                  : 'text-[rgba(255,255,255,0.56)] hover:bg-white/5 hover:text-white'
+                  ? 'bg-apple-blue text-white'
+                  : 'text-secondary hover:bg-surface-hover hover:text-primary'
               }`}
             >
               <Icon className="w-4 h-4 flex-shrink-0" />
@@ -52,16 +52,16 @@ export default function Sidebar({ activeTab, onTabChange, systemActive }: Sideba
       </div>
 
       {/* User */}
-      <div className="p-3 border-t border-white/5">
-        <div className="flex items-center gap-3 p-3 rounded-lg bg-[#272729]">
-          <div className="w-8 h-8 rounded-full bg-[#0071e3] flex items-center justify-center text-white text-micro-bold">
+      <div className="p-3 border-t border-subtle">
+        <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-hover">
+          <div className="w-8 h-8 rounded-full bg-apple-blue flex items-center justify-center text-white text-micro-bold">
             N
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-micro-bold text-white truncate">Pro Account</p>
+            <p className="text-micro-bold text-primary truncate">Pro Account</p>
             <div className="flex items-center gap-1.5">
-              <div className={`w-1.5 h-1.5 rounded-full ${systemActive ? 'bg-[#34c759]' : 'bg-[rgba(255,255,255,0.24)]'}`} />
-              <p className="text-[10px] text-[rgba(255,255,255,0.48)]">
+              <div className={`w-1.5 h-1.5 rounded-full ${systemActive ? 'bg-success' : 'bg-secondary opacity-50'}`} />
+              <p className="text-[10px] text-tertiary">
                 Agent: {systemActive ? 'Active' : 'Off'}
               </p>
             </div>

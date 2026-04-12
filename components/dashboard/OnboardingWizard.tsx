@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, CheckCircle2, Download, Link2, Sparkles, ShieldCheck } from 'lucide-react';
-import Card from '@/components/ui/Card';
+import { Bot, CheckCircle2, Download, Link2, Sparkles } from 'lucide-react';
 import Badge from '@/components/ui/Badge';
 
 interface OnboardingWizardProps {
@@ -38,17 +37,17 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-      <div className="w-full max-w-2xl bg-[#1d1d1f] shadow-2xl overflow-hidden rounded-xl border border-[rgba(255,255,255,0.05)] apple-shadow">
+      <div className="w-full max-w-2xl bg-surface-elevated shadow-2xl overflow-hidden rounded-xl border border-subtle apple-shadow">
         
         {/* Header */}
-        <div className="p-8 md:p-10 border-b border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)] text-white relative">
+        <div className="p-8 md:p-10 border-b border-subtle bg-surface text-primary relative">
           <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
             <Bot className="w-40 h-40" />
           </div>
           <div className="relative z-10">
             <Badge variant="info" size="sm" className="mb-4">Quick Start Guide</Badge>
-            <h3 className="text-display-hero mb-2">Welcome to Nexora <span className="text-[#0071e3]">Pro</span></h3>
-            <p className="text-caption text-[rgba(255,255,255,0.48)] max-w-lg leading-relaxed">
+            <h3 className="text-display-hero mb-2">Welcome to Nexora <span className="text-apple-blue">Pro</span></h3>
+            <p className="text-caption text-secondary max-w-lg leading-relaxed">
               Let's set up your automated LinkedIn engine in 3 simple steps. No coding or complex configuration required.
             </p>
           </div>
@@ -60,12 +59,12 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
             {[1, 2, 3].map(num => (
               <div key={num} className="flex items-center gap-4 flex-1">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm transition-all duration-300 ${
-                  step > num || (step === 3 && num === 3 && isExtensionConnected) ? 'bg-[#34c759] text-white' : 
-                  step === num ? 'bg-[#0071e3] text-white' : 'bg-[#272729] text-[rgba(255,255,255,0.48)] border border-[rgba(255,255,255,0.05)]'
+                  step > num || (step === 3 && num === 3 && isExtensionConnected) ? 'bg-success text-white' : 
+                  step === num ? 'bg-apple-blue text-white' : 'bg-surface-hover text-tertiary border border-subtle'
                 }`}>
                   {step > num ? <CheckCircle2 className="w-5 h-5" /> : num}
                 </div>
-                {num < 3 && <div className={`h-[2px] flex-1 ${step > num ? 'bg-[#34c759]' : 'bg-[rgba(255,255,255,0.05)]'}`}></div>}
+                {num < 3 && <div className={`h-[2px] flex-1 ${step > num ? 'bg-success' : 'bg-surface-hover'}`}></div>}
               </div>
             ))}
           </div>
@@ -76,30 +75,30 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
             {step === 1 && (
               <div className="animate-in fade-in slide-in-from-right-4 duration-500">
                 <div className="flex items-center gap-4 mb-6">
-                  <div className="w-12 h-12 bg-[rgba(255,255,255,0.06)] rounded-xl flex items-center justify-center">
-                    <Download className="w-6 h-6 text-white" />
+                  <div className="w-12 h-12 bg-surface-hover rounded-xl flex items-center justify-center">
+                    <Download className="w-6 h-6 text-primary" />
                   </div>
                   <div>
-                    <h4 className="text-tile-heading text-white">Install the Agent</h4>
-                    <p className="text-micro text-[rgba(255,255,255,0.48)]">Add the Nexora extension to Google Chrome</p>
+                    <h4 className="text-tile-heading text-primary">Install the Agent</h4>
+                    <p className="text-micro text-secondary">Add the Nexora extension to Google Chrome</p>
                   </div>
                 </div>
                 
-                <div className="bg-[#272729] rounded-xl p-6 border border-[rgba(255,255,255,0.05)] mb-6">
-                  <ol className="list-decimal list-inside space-y-3 text-caption text-[rgba(255,255,255,0.8)]">
+                <div className="bg-surface-hover rounded-xl p-6 border border-subtle mb-6">
+                  <ol className="list-decimal list-inside space-y-3 text-caption text-primary">
                     <li>Download the extension ZIP file below</li>
                     <li>Extract it to a folder on your computer</li>
-                    <li>Go to <code className="bg-[#1d1d1f] px-2 py-1 rounded text-white border border-[rgba(255,255,255,0.05)]">chrome://extensions</code></li>
+                    <li>Go to <code className="bg-surface px-2 py-1 rounded text-primary border border-subtle">chrome://extensions</code></li>
                     <li>Enable <strong>Developer mode</strong> (top right)</li>
                     <li>Click <strong>Load unpacked</strong> and select the folder</li>
                   </ol>
                 </div>
                 
                 <div className="flex flex-col sm:flex-row items-center gap-3">
-                  <a href="/LinkedInExtension.zip" download className="w-full sm:w-auto px-6 py-2.5 bg-[#0071e3] text-white rounded-md text-caption-bold hover:bg-[#0071e3]/90 transition-all flex items-center justify-center gap-2">
+                  <a href="/LinkedInExtension.zip" download className="w-full sm:w-auto px-6 py-2.5 bg-apple-blue text-white rounded-md text-caption-bold hover:bg-apple-blue/90 transition-all flex items-center justify-center gap-2">
                     <Download className="w-4 h-4" /> Download Extension
                   </a>
-                  <button onClick={() => setStep(2)} className="w-full sm:w-auto px-6 py-2.5 bg-[rgba(255,255,255,0.06)] text-white rounded-md text-caption-bold hover:bg-[rgba(255,255,255,0.12)] transition-all">
+                  <button onClick={() => setStep(2)} className="w-full sm:w-auto px-6 py-2.5 bg-surface-hover text-primary rounded-md text-caption-bold hover:bg-surface-elevated transition-all border border-subtle">
                     I've installed it
                   </button>
                 </div>
@@ -109,43 +108,43 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
             {step === 2 && (
               <div className="animate-in fade-in slide-in-from-right-4 duration-500">
                 <div className="flex items-center gap-4 mb-6">
-                  <div className="w-12 h-12 bg-[rgba(0,113,227,0.1)] text-[#0071e3] rounded-xl flex items-center justify-center">
+                  <div className="w-12 h-12 bg-apple-blue/10 text-apple-blue rounded-xl flex items-center justify-center">
                     <Link2 className="w-6 h-6" />
                   </div>
                   <div>
-                    <h4 className="text-tile-heading text-white">Connect to Dashboard</h4>
-                    <p className="text-micro text-[rgba(255,255,255,0.48)]">Link your browser strictly via 1-Click mapping</p>
+                    <h4 className="text-tile-heading text-primary">Connect to Dashboard</h4>
+                    <p className="text-micro text-secondary">Link your browser strictly via 1-Click mapping</p>
                   </div>
                 </div>
                 
-                <div className="bg-[rgba(0,113,227,0.04)] rounded-xl p-8 border border-[rgba(0,113,227,0.16)] mb-6 text-center">
+                <div className="bg-apple-blue/5 rounded-xl p-8 border border-apple-blue/20 mb-6 text-center">
                   {!isExtensionConnected ? (
                     <>
-                      <div className="w-16 h-16 bg-[#1d1d1f] rounded-full mx-auto mb-4 border border-[rgba(255,255,255,0.05)] flex items-center justify-center">
+                      <div className="w-16 h-16 bg-surface-elevated rounded-full mx-auto mb-4 border border-subtle flex items-center justify-center">
                         <span className="relative flex h-5 w-5">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#0071e3] opacity-40"></span>
-                          <span className="relative inline-flex rounded-full h-5 w-5 bg-[#0071e3]"></span>
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-apple-blue opacity-40"></span>
+                          <span className="relative inline-flex rounded-full h-5 w-5 bg-apple-blue"></span>
                         </span>
                       </div>
-                      <h5 className="font-semibold text-white mb-2">Waiting for connection...</h5>
-                      <p className="text-caption text-[rgba(255,255,255,0.64)] max-w-sm mx-auto">Open the Nexora Extension from your browser toolbar and click <strong>Auto-Connect</strong>.</p>
+                      <h5 className="font-semibold text-primary mb-2">Waiting for connection...</h5>
+                      <p className="text-caption text-secondary max-w-sm mx-auto">Open the Nexora Extension from your browser toolbar and click <strong>Auto-Connect</strong>.</p>
                     </>
                   ) : (
                     <div className="animate-in zoom-in duration-300">
-                      <div className="w-16 h-16 bg-[rgba(52,199,89,0.1)] text-[#34c759] rounded-full mx-auto mb-4 border border-[rgba(52,199,89,0.2)] flex items-center justify-center">
+                      <div className="w-16 h-16 bg-success/10 text-success rounded-full mx-auto mb-4 border border-success/20 flex items-center justify-center">
                         <CheckCircle2 className="w-8 h-8" />
                       </div>
-                      <h5 className="font-semibold text-[#34c759] mb-2">Connected Successfully!</h5>
-                      <p className="text-caption text-[#34c759]/70">Your extension is now linked to this dashboard.</p>
+                      <h5 className="font-semibold text-success mb-2">Connected Successfully!</h5>
+                      <p className="text-caption text-success/70">Your extension is now linked to this dashboard.</p>
                     </div>
                   )}
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <button onClick={() => setStep(1)} className="px-6 py-2.5 text-[rgba(255,255,255,0.64)] text-caption-bold hover:bg-[rgba(255,255,255,0.06)] rounded-md transition-all">
+                  <button onClick={() => setStep(1)} className="px-6 py-2.5 text-secondary text-caption-bold hover:bg-surface-hover rounded-md transition-all">
                     Back
                   </button>
-                  <button onClick={() => setStep(3)} className="px-6 py-2.5 bg-[rgba(255,255,255,0.06)] text-white rounded-md text-caption-bold hover:bg-[rgba(255,255,255,0.12)] transition-all">
+                  <button onClick={() => setStep(3)} className="px-6 py-2.5 bg-surface-hover border border-subtle text-primary rounded-md text-caption-bold hover:bg-surface-elevated transition-all">
                     Skip / Next
                   </button>
                 </div>
@@ -155,12 +154,12 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
             {step === 3 && (
               <div className="animate-in fade-in slide-in-from-right-4 duration-500">
                 <div className="flex items-center gap-4 mb-6">
-                  <div className="w-12 h-12 bg-[rgba(255,159,10,0.1)] text-[#ff9f0a] rounded-xl flex items-center justify-center">
+                  <div className="w-12 h-12 bg-warning/10 text-warning rounded-xl flex items-center justify-center">
                     <Sparkles className="w-6 h-6" />
                   </div>
                   <div>
-                    <h4 className="text-tile-heading text-white">Load a Starter Pack</h4>
-                    <p className="text-micro text-[rgba(255,255,255,0.48)]">Instantly seed your account with AI-crafted targets</p>
+                    <h4 className="text-tile-heading text-primary">Load a Starter Pack</h4>
+                    <p className="text-micro text-secondary">Instantly seed your account with AI-crafted targets</p>
                   </div>
                 </div>
 
@@ -168,28 +167,28 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
                   <button 
                     onClick={() => handleApplyPack('marketing')}
                     disabled={isDeployingPack}
-                    className="p-5 text-left bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-xl hover:border-[#0071e3] transition-all disabled:opacity-50 group"
+                    className="p-5 text-left bg-surface-hover border border-subtle rounded-xl hover:border-apple-blue transition-all disabled:opacity-50 group"
                   >
                     <Badge variant="info" size="sm" className="mb-3">Marketing</Badge>
-                    <h5 className="font-semibold text-white mb-1 group-hover:text-[#0071e3] transition-colors">Growth & Marketing</h5>
-                    <p className="text-micro text-[rgba(255,255,255,0.48)]">+3 Keywords • +9 Comments</p>
+                    <h5 className="font-semibold text-primary mb-1 group-hover:text-apple-blue transition-colors">Growth & Marketing</h5>
+                    <p className="text-micro text-tertiary">+3 Keywords • +9 Comments</p>
                   </button>
                   <button 
                     onClick={() => handleApplyPack('tech')}
                     disabled={isDeployingPack}
-                    className="p-5 text-left bg-[#272729] border border-[rgba(255,255,255,0.05)] rounded-xl hover:border-[#0071e3] transition-all disabled:opacity-50 group"
+                    className="p-5 text-left bg-surface-hover border border-subtle rounded-xl hover:border-apple-blue transition-all disabled:opacity-50 group"
                   >
                     <Badge variant="neutral" size="sm" className="mb-3">Tech</Badge>
-                    <h5 className="font-semibold text-white mb-1 group-hover:text-[#0071e3] transition-colors">Software Engineering</h5>
-                    <p className="text-micro text-[rgba(255,255,255,0.48)]">+3 Keywords • +9 Comments</p>
+                    <h5 className="font-semibold text-primary mb-1 group-hover:text-apple-blue transition-colors">Software Engineering</h5>
+                    <p className="text-micro text-tertiary">+3 Keywords • +9 Comments</p>
                   </button>
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <button onClick={() => setStep(2)} className="px-6 py-2.5 text-[rgba(255,255,255,0.64)] text-caption-bold hover:bg-[rgba(255,255,255,0.06)] rounded-md transition-all">
+                  <button onClick={() => setStep(2)} className="px-6 py-2.5 text-secondary text-caption-bold hover:bg-surface-hover rounded-md transition-all">
                     Back
                   </button>
-                  <button onClick={onClose} className="px-6 py-2.5 bg-[#0071e3] text-white rounded-md text-caption-bold hover:bg-[#0071e3]/90 transition-all">
+                  <button onClick={onClose} className="px-6 py-2.5 bg-apple-blue text-white rounded-md text-caption-bold hover:bg-apple-blue/90 transition-all">
                     I'll add manually
                   </button>
                 </div>

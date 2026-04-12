@@ -33,7 +33,7 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
       <CardHeader>
         <div className="flex justify-between items-center mb-1">
           <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-[#0071e3]" />
+            <Activity className="w-4 h-4 text-apple-blue" />
             <CardTitle>Live Activity Feed</CardTitle>
           </div>
           <Badge variant="error" size="sm" dot>Live</Badge>
@@ -46,11 +46,11 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
       <CardContent>
         {logs.length === 0 ? (
           <div className="text-center py-10">
-            <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-[#1d1d1f] flex items-center justify-center">
-              <Activity className="w-5 h-5 text-[rgba(255,255,255,0.32)]" />
+            <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-surface-hover flex items-center justify-center">
+              <Activity className="w-5 h-5 text-tertiary" />
             </div>
-            <p className="text-caption-bold text-white mb-1">No Activity Yet</p>
-            <p className="text-micro text-[rgba(255,255,255,0.48)]">
+            <p className="text-caption-bold text-primary mb-1">No Activity Yet</p>
+            <p className="text-micro text-secondary">
               Start your agent to see live updates here.
             </p>
           </div>
@@ -67,38 +67,38 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
                 <motion.div
                   key={log.id}
                   variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }}
-                  className="flex items-start gap-3 p-4 rounded-lg bg-[#1d1d1f] border border-[rgba(255,255,255,0.04)]"
+                  className="flex items-start gap-3 p-4 rounded-lg bg-surface border border-subtle"
                 >
                   <div className={`p-2 rounded-md flex-shrink-0 ${
-                    log.status === 'Success' ? 'bg-[rgba(52,199,89,0.12)] text-[#34c759]' :
-                    log.status === 'Failed' ? 'bg-[rgba(255,59,48,0.12)] text-[#ff3b30]' :
-                    'bg-[rgba(255,159,10,0.12)] text-[#ff9f0a]'
+                    log.status === 'Success' ? 'bg-success/15 text-success' :
+                    log.status === 'Failed' ? 'bg-error/15 text-error' :
+                    'bg-warning/15 text-warning'
                   }`}>
                     <StatusIcon className="w-4 h-4" />
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <p className="text-caption-bold text-white mb-1">{log.action}</p>
+                    <p className="text-caption-bold text-primary mb-1">{log.action}</p>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <div className="flex items-center gap-1 text-micro text-[rgba(255,255,255,0.48)]">
+                      <div className="flex items-center gap-1 text-micro text-secondary">
                         <Clock className="w-3 h-3" />
                         {new Date(log.time).toLocaleTimeString()}
                       </div>
-                      <span className="text-[rgba(255,255,255,0.16)]">·</span>
+                      <span className="text-tertiary">·</span>
                       <Badge variant={statusVariants[log.status]} size="sm">{log.status}</Badge>
 
                       {log.commentUrl && (
                         <>
-                          <span className="text-[rgba(255,255,255,0.16)]">·</span>
-                          <a href={log.commentUrl} target="_blank" rel="noopener noreferrer" className="text-micro text-[#0071e3] hover:underline">
+                          <span className="text-tertiary">·</span>
+                          <a href={log.commentUrl} target="_blank" rel="noopener noreferrer" className="text-micro text-apple-blue hover:underline">
                             View Comment
                           </a>
                         </>
                       )}
                       {!log.commentUrl && log.postUrl && log.postUrl !== 'N/A' && log.postUrl !== 'unknown' && (
                         <>
-                          <span className="text-[rgba(255,255,255,0.16)]">·</span>
-                          <a href={log.postUrl} target="_blank" rel="noopener noreferrer" className="text-micro text-[#0071e3] hover:underline">
+                          <span className="text-tertiary">·</span>
+                          <a href={log.postUrl} target="_blank" rel="noopener noreferrer" className="text-micro text-apple-blue hover:underline">
                             View Post
                           </a>
                         </>
