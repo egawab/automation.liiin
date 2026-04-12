@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Bot, CheckCircle2, Download, Link2, Sparkles, ShieldCheck } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
-import { Modal } from '@/components/ui/Modal';
-import Button from '@/components/ui/Button';
 
 interface OnboardingWizardProps {
   isOpen: boolean;
