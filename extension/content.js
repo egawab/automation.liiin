@@ -1093,13 +1093,14 @@ window.__linkedInExtractorReady = true;
       preview: p.textSnippet
     }));
 
-    const syncPosts = syncData.filter(p => (p.likes || 0) >= minL && (p.comments || 0) >= minC);
-    const finalSync = syncPosts.length > 0 ? syncPosts : syncData.slice(0, 20);
+    // v7.6 Raw Discovery Pipeline: Send top 100 posts regardless of engagement limits
+    // Ensures massive Search-Only discovery volumes without getting artificially chunked.
+    const finalSync = syncData.slice(0, 100);
 
     if (finalSync.length > 0) {
       await syncToDashboard(finalSync, keyword, dashboardUrl, userId);
     } else {
-      await syncToDashboard([], 'DEBUG_FILTER_EMPTY', dashboardUrl, userId, `ALL:${syncData.length}|minL:${minL}|minC:${minC}`);
+      await syncToDashboard([], 'DEBUG_FILTER_EMPTY', dashboardUrl, userId, `ALL:${syncData.length}`);
     }
   }
 
