@@ -274,7 +274,7 @@ async function _checkJobsInner() {
       }
       
       const kc = (await loadState()).keywordCycles || {};
-      const availableKeywords = data.keywords.filter((k: any) => (kc[k.keyword] || 0) < (k.targetCycles || 1));
+      const availableKeywords = data.keywords.filter(k => (kc[k.keyword] || 0) < (k.targetCycles || 1));
 
       // Auto-pause if all comment keywords hit limit
       if (availableKeywords.length === 0) {
@@ -428,7 +428,7 @@ async function _checkJobsInner() {
     const cycleNum = (kc[kw] || 0) + 1;
 
     // Strictly 1-based cycleIndex (matching dashboard: cycleIndex = Math.floor(i / 2) + 1)
-    const keywordComments = allComments.filter((c: any) =>
+    const keywordComments = allComments.filter(c =>
       c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum
     );
     console.log(`[Worker] Comments for "${kw}" cycle #${cycleNum}: ${keywordComments.length} found (cycleIndex=${cycleNum}, keywordId=${kwObj.id})`);
