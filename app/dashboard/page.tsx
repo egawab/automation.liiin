@@ -153,24 +153,48 @@ export default function Dashboard() {
   const toggleSystem = async () => {
     // START VALIDATION
     if (!systemActive) {
-      if (keywords.length === 0) {
-        alert("You must define at least one keyword campaign before starting.");
-        return;
-      }
-      
-      const invalidKeywords: string[] = [];
-      for (const kw of keywords) {
-        const required = (kw.targetCycles || 1) * 2;
-        // Use the nested comments array returned directly from the API include query
-        const kwComments = kw.comments || [];
-        if (kwComments.length !== required) {
-          invalidKeywords.push(kw.keyword);
+      if (isSearchOnly) {
+        // Search-Only Mode Validation
+        // Fetch fresh settings first because React state might not reflect what's saved in DB if they didn't click Save Search Configuration
+        const setRes = await fetch('/api/settings');
+        if (setRes.ok) {
+          const freshSettings = await setRes.json();
+          let parsedSearch = [];
+          try {
+            parsedSearch = JSON.parse(freshSettings.searchConfigJson || "[]");
+          } catch(e) {}
+          
+          if (!parsedSearch || parsedSearch.length === 0) {
+            alert("No Search Configuration found!\n\nPlease scroll down to 'Agent Configuration' -> 'Operating Mode', build your search cycles, and click 'Save Search Configuration' before starting.");
+            return;
+          }
+          
+          const validKeywords = parsedSearch.flat().filter((kw: string) => typeof kw === 'string' && kw.trim().length > 0);
+          if (validKeywords.length === 0) {
+            alert("Your saved Search Configuration has 0 valid keywords.\n\nPlease define your keywords per cycle and click 'Save Search Configuration' before starting.");
+            return;
+          }
         }
-      }
+      } else {
+        // Comment Mode Validation
+        if (keywords.length === 0) {
+          alert("You must define at least one keyword campaign before starting.");
+          return;
+        }
+        
+        const invalidKeywords: string[] = [];
+        for (const kw of keywords) {
+          const required = (kw.targetCycles || 1) * 2;
+          const kwComments = kw.comments || [];
+          if (kwComments.length !== required) {
+            invalidKeywords.push(kw.keyword);
+          }
+        }
 
-      if (invalidKeywords.length > 0) {
-        alert(`Cannot start. The following campaigns have missing or invalid comment configurations:\n\n${invalidKeywords.join(', ')}\n\nPlease recreate them with exact comments for each cycle.`);
-        return;
+        if (invalidKeywords.length > 0) {
+          alert(`Cannot start. The following campaigns have missing or invalid comment configurations:\n\n${invalidKeywords.join(', ')}\n\nPlease recreate them with exact comments for each cycle.`);
+          return;
+        }
       }
     }
 
@@ -957,18 +981,31 @@ export default function Dashboard() {
                       </div>
 
                       {/* Keyword Blocks */}
-                      <div className="space-y-4">
+                      <div className="space-y-6">
                         {Array.from({ length: searchTargetCycles }).map((_, cycleIndex) => {
                           const cycleKeywords = searchConfig[cycleIndex] || [''];
+                          const maxKeywords = 3;
                           return (
-                            <div key={`search-cycle-${cycleIndex}`} className="dash-recessed p-5 rounded-xl border border-border-default/50">
-                              <div className="flex justify-between items-center mb-3">
-                                <h4 className="text-sm font-bold text-primary uppercase tracking-wider">Cycle {cycleIndex + 1}</h4>
+                            <div key={`search-cycle-${cycleIndex}`} className="dash-recessed p-5 rounded-2xl border-2 border-border-default hover:border-apple-blue/50 transition-colors">
+                              <div className="flex justify-between items-center mb-4">
+                                <div className="flex items-center gap-3">
+                                  <h4 className="text-base font-black text-primary uppercase tracking-widest flex items-center gap-2">
+                                    <span className="bg-apple-blue/20 text-apple-blue w-6 h-6 rounded-full flex items-center justify-center text-xs">
+                                      {cycleIndex + 1}
+                                    </span>
+                                    Cycle {cycleIndex + 1}
+                                  </h4>
+                                  <Badge variant={cycleKeywords.length >= maxKeywords ? "error" : "success"} size="sm">
+                                    {cycleKeywords.length} / {maxKeywords} Keywords
+                                  </Badge>
+                                </div>
                                 <Button 
                                   type="button" 
                                   variant="secondary" 
                                   size="sm" 
+                                  disabled={cycleKeywords.length >= maxKeywords}
                                   onClick={() => {
+                                    if (cycleKeywords.length >= maxKeywords) return;
                                     const newConfig = [...searchConfig];
                                     newConfig[cycleIndex] = [...cycleKeywords, ''];
                                     setSearchConfig(newConfig);
@@ -978,9 +1015,13 @@ export default function Dashboard() {
                                   Add Keyword
                                 </Button>
                               </div>
-                              <div className="flex flex-col gap-3">
+                              
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {cycleKeywords.map((kw, kwIndex) => (
-                                  <div key={`cycle-${cycleIndex}-kw-${kwIndex}`} className="flex gap-2 relative">
+                                  <div key={`cycle-${cycleIndex}-kw-${kwIndex}`} className="flex items-center gap-2 relative bg-surface-elevated rounded-lg p-1 border border-border-default/50 focus-within:border-apple-blue">
+                                    <span className="text-xs font-bold text-secondary pl-3 uppercase tracking-wider">
+                                       KW {kwIndex + 1}:
+                                    </span>
                                     <input 
                                       value={kw}
                                       onChange={(e) => {
@@ -991,7 +1032,7 @@ export default function Dashboard() {
                                         setSearchConfig(newConfig);
                                       }}
                                       placeholder="e.g. b2b outbound"
-                                      className="w-full px-3 py-2 dash-input outline-none" 
+                                      className="flex-1 px-3 py-2 bg-transparent text-sm text-primary outline-none" 
                                     />
                                     {cycleKeywords.length > 1 && (
                                       <button 
@@ -1003,7 +1044,7 @@ export default function Dashboard() {
                                           newConfig[cycleIndex] = newCyc;
                                           setSearchConfig(newConfig);
                                         }}
-                                        className="text-tertiary hover:text-error transition-colors px-2 absolute right-2 top-1/2 transform -translate-y-1/2"
+                                        className="text-tertiary hover:text-error transition-colors p-2 rounded-md hover:bg-error/10 mr-1"
                                       >
                                         <Trash2 className="w-4 h-4" />
                                       </button>
@@ -1014,6 +1055,33 @@ export default function Dashboard() {
                             </div>
                           );
                         })}
+                      </div>
+
+                      {/* Dedicated Save Flow Button */}
+                      <div className="mt-8 pt-6 flex justify-end" style={{ borderTop: '1px solid var(--dash-border)' }}>
+                        <Button 
+                          type="button"
+                          onClick={async () => {
+                            const validSearchConfig = searchConfig.map(arr => arr.filter(k => k.trim().length > 0));
+                            if (validSearchConfig.some(arr => arr.length === 0)) {
+                              alert("Validation Error: All search cycles must have at least 1 keyword populated.");
+                              return;
+                            }
+                            await fetch('/api/settings', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ 
+                                searchConfigJson: JSON.stringify(validSearchConfig),
+                                searchOnlyMode: isSearchOnly
+                              })
+                            });
+                            alert('✅ Search Configuration correctly bound to cycles and saved!');
+                            fetchData();
+                          }}
+                          leftIcon={<Shield className="w-4 h-4" />}
+                        >
+                          Save Search Configuration
+                        </Button>
                       </div>
                     </div>
                   )}
