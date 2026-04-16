@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// LinkedIn Precision Extraction Engine v7 (Deterministic)
+// LinkedIn Precision Extraction Engine v7.5 (Safety-Hardened)
 // ═══════════════════════════════════════════════════════════
 // v7 Architecture:
 //
@@ -655,8 +655,8 @@ window.__linkedInExtractorReady = true;
       window.dispatchEvent(new Event('scroll'));
       scrollTarget.dispatchEvent(new Event('scroll'));
 
-      // Wait (realistic pacing)
-      await wait(1000, 1500);
+      // Wait (realistic pacing with more variation)
+      await wait(1200, 2500);
 
       // Heartbeat every 5 steps
       if (step % 5 === 4) {
@@ -956,9 +956,9 @@ window.__linkedInExtractorReady = true;
 
           console.log(`[Ext] ✅ ${commentsPostedThisCycle}/${requiredComments} comments placed.`);
 
-          // Human-like pause between comments
+          // Human-like pause between comments (8-15 seconds for safety)
           if (commentIdx < requiredComments) {
-            await wait(3000, 5000);
+            await wait(8000, 15000);
           }
         } else {
           console.log(`[Ext]    ⏭️ Failed on target ${targetIdx}. Trying next candidate.`);
@@ -1045,7 +1045,7 @@ window.__linkedInExtractorReady = true;
               await chrome.storage.local.set({ commentedPosts: commentedHistory, usedCommentIds: usedCommentHistory });
             } catch(e) {}
             console.log(`[Ext] ✅ Emergency: ${commentsPostedThisCycle}/${requiredComments} comments placed.`);
-            if (commentIdx < requiredComments) await wait(3000, 5000);
+            if (commentIdx < requiredComments) await wait(8000, 15000);
           }
         }
       }

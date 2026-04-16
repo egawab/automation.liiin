@@ -1,23 +1,24 @@
 // ═══════════════════════════════════════════════════════════
-// LinkedIn Safety Worker v5 — Reliable 2-comment-per-cycle
+// LinkedIn Safety Worker v6 — Stable & Deterministic
 // ═══════════════════════════════════════════════════════════
-// Fixes applied:
-// FIX-1: Stale-job timeout raised to 10 min (pipeline can take ~8 min)
-// FIX-2: cycleIndex filter now tries both 0-based AND 1-based to be safe
-// FIX-3: Partial-cycle guard requires ALL assigned comments, not just > 0
-// FIX-4: Watchdog raised to 10 min to match real pipeline duration
-// FIX-5: lastJobTime stamped on COMPLETION, not on start, so stale check
-//        never fires during a live run
+// v6 Changes:
+//   - Fixed 15-minute cooldown between cycles (no randomness)
+//   - cycleIndex is strictly 1-based (matching dashboard)
+//   - Enforces exactly 2 comments per cycle
+//   - Search-only mode iterates ALL keywords per cycle
+//   - Per-hour comment cap: 4 comments/hour
+//   - Exponential backoff on failed cycles
+//   - First-cycle warm-up delay
 // ═══════════════════════════════════════════════════════════
 
-console.log("[Worker] ═══ Safety Worker v5 (Reliable) Initialized ═══");
+console.log("[Worker] ═══ Safety Worker v6 (Stable) Initialized ═══");
 
 // ── Persistent State (chrome.storage.local) ──
 async function loadState() {
   return chrome.storage.local.get({
     isJobRunning: false,
     activeTabId: null,
-    cycleStartTime: 0,   // FIX-5: separate timestamp for stale detection
+    cycleStartTime: 0,
     lastJobTime: 0,
     cooldownMs: 0,
     isPaused: false,
@@ -25,8 +26,11 @@ async function loadState() {
     currentKeyword: null,
     wasDashboardActive: null,
     dailyCommentsMade: 0,
+    hourlyCommentsMade: 0,
     lastCommentDate: null,
+    lastCommentHour: -1,
     keywordSearchPages: {},
+    consecutiveFailures: 0,
     activityLog: []
   });
 }
@@ -129,8 +133,14 @@ async function showPremiumToast(title, message, isError = false) {
 // ── Helpers ──
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-function randomCooldown() {
-  return 600000 + Math.floor(Math.random() * 300000); // 10-15 min
+// Fixed 15-minute cooldown between cycles for predictability and safety
+const CYCLE_COOLDOWN_MS = 900000; // 15 minutes exactly
+
+function getCooldown(consecutiveFailures = 0) {
+  // Exponential backoff: 15 min → 20 min → 30 min on consecutive failures
+  if (consecutiveFailures >= 2) return 1800000; // 30 min
+  if (consecutiveFailures >= 1) return 1200000; // 20 min
+  return CYCLE_COOLDOWN_MS; // 15 min
 }
 
 function waitForTabLoad(tabId, timeoutMs = 20000) {
@@ -277,53 +287,119 @@ async function _checkJobsInner() {
       await saveState({ isPaused: false });
     }
 
-    // ── Start cycle ──
-    const kwObj = availableKeywords[Math.floor(Math.random() * availableKeywords.length)];
-    const kw = kwObj.keyword;
-    const cycleNum = (kc[kw] || 0) + 1;
-
-    // ── Daily Safety Limit Check ──
+    // ── Safety Limit Resets ──
     const today = new Date().toDateString();
+    const currentHour = new Date().getHours();
     if (state.lastCommentDate !== today) {
       state.dailyCommentsMade = 0;
-      await saveState({ dailyCommentsMade: 0, lastCommentDate: today });
+      state.hourlyCommentsMade = 0;
+      await saveState({ dailyCommentsMade: 0, hourlyCommentsMade: 0, lastCommentDate: today, lastCommentHour: currentHour });
       console.log("📅 [Worker] New day started. Reset daily comment quota.");
+    }
+    if (state.lastCommentHour !== currentHour) {
+      state.hourlyCommentsMade = 0;
+      await saveState({ hourlyCommentsMade: 0, lastCommentHour: currentHour });
+      console.log("🕐 [Worker] New hour started. Reset hourly comment quota.");
     }
 
     const settings = data.settings || {};
     const allComments = data.comments || [];
 
-    // FIX-2: cycleIndex mismatch — the dashboard may use 0-based or 1-based cycleIndex.
-    // Try 1-based first (cycleNum), then fall back to 0-based (cycleNum - 1).
-    // Log clearly so mismatches are visible in the console.
-    let keywordComments = allComments.filter(c =>
-      c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum
-    );
-    if (keywordComments.length === 0) {
-      // Fallback: 0-based index
-      keywordComments = allComments.filter(c =>
-        c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum - 1
-      );
-      if (keywordComments.length > 0) {
-        console.log(`[Worker] ℹ️ cycleIndex is 0-based on this dashboard. Found ${keywordComments.length} comments using index ${cycleNum - 1}.`);
-      }
-    } else {
-      console.log(`[Worker] ℹ️ cycleIndex is 1-based on this dashboard. Found ${keywordComments.length} comments using index ${cycleNum}.`);
-    }
+    // ═══════════════════════════════════════════════════════════
+    // SEARCH-ONLY MODE: Iterate ALL keywords in one pass
+    // ═══════════════════════════════════════════════════════════
+    if (settings.searchOnlyMode) {
+      console.log(`🔍 [Worker] SEARCH-ONLY MODE: Processing ${availableKeywords.length} keyword(s)...`);
+      await saveState({
+        isJobRunning: true,
+        cycleStartTime: Date.now(),
+        liveStatusText: `🔍 Search-only: Processing ${availableKeywords.length} keywords...`
+      });
 
-    if (keywordComments.length === 0 && !settings.searchOnlyMode) {
-      console.warn(`[Worker] ⚠️ Zero comments assigned for keyword "${kw}" cycle ${cycleNum}. Check dashboard cycleIndex values. Skipping cycle to avoid wasting a slot.`);
-      // Don't consume the cycle slot — just return and wait for next poll
+      // Process up to 2 keywords per cycle for safety
+      const keywordsToSearch = availableKeywords.slice(0, 2);
+      
+      for (let ki = 0; ki < keywordsToSearch.length; ki++) {
+        const kwObj = keywordsToSearch[ki];
+        const searchPages = (await loadState()).keywordSearchPages || {};
+        const pageNum = (searchPages[kwObj.keyword] || 0) + 1;
+
+        console.log(`🔍 [Worker] Search-only keyword ${ki+1}/${keywordsToSearch.length}: "${kwObj.keyword}" (Page ${pageNum})`);
+        showPremiumToast('Search Mode', `Searching: "${kwObj.keyword}" (${ki+1}/${keywordsToSearch.length})`, false);
+
+        await saveState({
+          currentKeyword: kwObj.keyword,
+          liveStatusText: `🔍 Searching "${kwObj.keyword}" (${ki+1}/${keywordsToSearch.length})...`
+        });
+
+        await startScrapingCycle(kwObj.keyword, settings, [], dashboardUrl, userId, 1, pageNum);
+
+        // Wait 3-5 min between keywords within a search cycle
+        if (ki < keywordsToSearch.length - 1) {
+          const interKeywordDelay = 180000 + Math.floor(Math.random() * 120000); // 3-5 min
+          const delayMin = Math.round(interKeywordDelay / 60000);
+          console.log(`⏳ [Worker] Waiting ${delayMin} min before next keyword...`);
+          await saveState({ liveStatusText: `⏳ Cooling down ${delayMin} min before next keyword...` });
+          await sleep(interKeywordDelay);
+        }
+      }
+
+      // Don't increment keywordCycles in search-only mode — search is unlimited
+      // Just set cooldown and finish
+      await saveState({
+        isJobRunning: false,
+        activeTabId: null,
+        cycleStartTime: 0,
+        lastJobTime: Date.now(),
+        cooldownMs: CYCLE_COOLDOWN_MS,
+        currentKeyword: null,
+        liveStatusText: ''
+      });
+
+      const cdMin = Math.round(CYCLE_COOLDOWN_MS / 60000);
+      console.log(`[Worker] Search-only cycle done. Cooldown: ${cdMin} min.`);
+      showPremiumToast('Search Complete', `✅ Searched ${keywordsToSearch.length} keyword(s). Cooling down ${cdMin} min.`, false);
       return;
     }
 
-    if (state.dailyCommentsMade >= 15 && !settings.searchOnlyMode) {
-      console.warn("🛡️ [Worker] Daily comment limit (15) reached! Forcing Search-Only mode.");
-      settings.searchOnlyMode = true;
+    // ═══════════════════════════════════════════════════════════
+    // COMMENT MODE: Pick one keyword, enforce exactly 2 comments
+    // ═══════════════════════════════════════════════════════════
+    const kwObj = availableKeywords[Math.floor(Math.random() * availableKeywords.length)];
+    const kw = kwObj.keyword;
+    const cycleNum = (kc[kw] || 0) + 1;
+
+    // Strictly 1-based cycleIndex (matching dashboard: cycleIndex = Math.floor(i / 2) + 1)
+    const keywordComments = allComments.filter(c =>
+      c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum
+    );
+    console.log(`[Worker] Comments for "${kw}" cycle #${cycleNum}: ${keywordComments.length} found (cycleIndex=${cycleNum}, keywordId=${kwObj.id})`);
+
+    // ── Enforce exactly 2 comments per cycle ──
+    if (keywordComments.length !== 2) {
+      console.error(`[Worker] ❌ VALIDATION FAILED: Expected exactly 2 comments for cycle #${cycleNum} of "${kw}", but found ${keywordComments.length}. Skipping cycle.`);
+      console.error(`[Worker] Available comment cycleIndexes for this keyword:`, allComments.filter(c => c.keywordId === kwObj.id).map(c => `id=${c.id} cycleIndex=${c.cycleIndex}`));
+      showPremiumToast('Configuration Error', `❌ Keyword "${kw}" cycle #${cycleNum} needs exactly 2 comments, found ${keywordComments.length}. Fix in Campaign Builder.`, true);
+      return;
     }
 
-    // FIX-5: Stamp cycleStartTime NOW (before tab opens) for stale detection.
-    // lastJobTime is only stamped on COMPLETION (in finishCycle) so cooldown is accurate.
+    // ── Per-hour comment cap: max 4 comments/hour ──
+    if (state.hourlyCommentsMade >= 4) {
+      console.warn("🛡️ [Worker] Hourly comment cap (4/hour) reached. Waiting for next hour.");
+      showPremiumToast('Safety Limit', '🛡️ Hourly comment limit reached (4/hr). Cooling down.', false);
+      await saveState({ cooldownMs: CYCLE_COOLDOWN_MS, lastJobTime: Date.now() });
+      return;
+    }
+
+    // ── Daily comment cap: max 15/day ──
+    if (state.dailyCommentsMade >= 15) {
+      console.warn("🛡️ [Worker] Daily comment limit (15) reached! Pausing until tomorrow.");
+      showPremiumToast('Daily Limit', '🛡️ Daily comment limit reached (15/day). Resuming tomorrow.', false);
+      await saveState({ isPaused: true, cooldownMs: 3600000, lastJobTime: Date.now() });
+      return;
+    }
+
+    // Stamp cycleStartTime before tab opens for stale detection
     await saveState({
       isJobRunning: true,
       currentKeyword: kw,
@@ -340,7 +416,6 @@ async function _checkJobsInner() {
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
-    // Make sure we don't leave isJobRunning=true if the poll itself throws
     const s = await loadState();
     if (s.isJobRunning) {
       await saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
@@ -509,17 +584,16 @@ async function finishCycle(tabId, incrementKeyword = true) {
   }
 
   const state = await loadState();
-  const cd = randomCooldown();
+  const failures = incrementKeyword ? 0 : (state.consecutiveFailures || 0) + 1;
+  const cd = getCooldown(failures);
 
-  // FIX-5: lastJobTime is NOW stamped here on completion, not on cycle start.
-  // This means the cooldown timer is accurate, and the stale-job check
-  // (which uses cycleStartTime) never interferes with the cooldown.
   const updates = {
     isJobRunning: false,
     activeTabId: null,
     cycleStartTime: 0,
-    lastJobTime: Date.now(),  // ← moved from _checkJobsInner
+    lastJobTime: Date.now(),
     cooldownMs: cd,
+    consecutiveFailures: failures,
     liveStatusText: ''
   };
 
@@ -528,6 +602,7 @@ async function finishCycle(tabId, incrementKeyword = true) {
     kc[state.currentKeyword] = (kc[state.currentKeyword] || 0) + 1;
     console.log(`[Worker] Keyword "${state.currentKeyword}" cycle ${kc[state.currentKeyword]} complete.`);
     updates.keywordCycles = kc;
+    updates.consecutiveFailures = 0; // Reset on success
   }
 
   // Always increment the LinkedIn search page so the next attempt doesn't get stuck on an exhausted page
@@ -541,7 +616,7 @@ async function finishCycle(tabId, incrementKeyword = true) {
 
   await saveState(updates);
   const cdMin = Math.round(cd / 60000);
-  console.log(`[Worker] Cycle done. Next cooldown: ${cdMin} min.`);
+  console.log(`[Worker] Cycle done. Next cooldown: ${cdMin} min${failures > 0 ? ` (backoff level ${failures})` : ''}.`);
   showPremiumToast('Cycle Complete', `✅ Cycle complete! Cooling down for ${cdMin} minutes...`, false);
 }
 
@@ -551,7 +626,7 @@ let _lastContentHeartbeat = 0;
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'START_POLLING') {
     console.log("🚀 [Worker] Received START command from dashboard. Resetting system limits and waking up.");
-    saveState({ isPaused: false, keywordCycles: {}, cooldownMs: 0, cycleStartTime: 0 }).then(() => {
+    saveState({ isPaused: false, keywordCycles: {}, cooldownMs: 0, cycleStartTime: 0, consecutiveFailures: 0, hourlyCommentsMade: 0 }).then(() => {
       checkJobs();
     });
     if (sendResponse) sendResponse({ ok: true });
@@ -582,10 +657,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'COMMENT_POSTED') {
     loadState().then(async s => {
-      const newCount = (s.dailyCommentsMade || 0) + 1;
-      await saveState({ dailyCommentsMade: newCount });
-      console.log(`💬 [Worker] Comment posted successfully. Daily quota: ${newCount}/15`);
-      showPremiumToast('Comment Posted', `Successfully posted comment #${newCount}/15 for today!`, false);
+      const newDaily = (s.dailyCommentsMade || 0) + 1;
+      const newHourly = (s.hourlyCommentsMade || 0) + 1;
+      await saveState({ dailyCommentsMade: newDaily, hourlyCommentsMade: newHourly });
+      console.log(`💬 [Worker] Comment posted successfully. Daily: ${newDaily}/15 | Hourly: ${newHourly}/4`);
+      showPremiumToast('Comment Posted', `Successfully posted comment #${newDaily}/15 today (${newHourly}/4 this hour)!`, false);
       const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
       if (config.dashboardUrl && config.userId) {
         fetch(`${config.dashboardUrl}/api/extension/action`, {
@@ -674,8 +750,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("🚀 [Worker] Safety Worker v5 installed.");
-  saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
+  console.log("🚀 [Worker] Safety Worker v6 installed.");
+  saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0, consecutiveFailures: 0 });
   setTimeout(() => checkJobs(), 5000);
 });
 

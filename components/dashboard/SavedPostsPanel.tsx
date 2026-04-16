@@ -254,7 +254,7 @@ export function SavedPostsPanel() {
                     <ExternalLink className="w-3.5 h-3.5" />
                     Engage Target
                   </Button>
-                  <Button onClick={() => markAsVisited(post.id)} variant="secondary" size="sm" disabled={post.visited} className="col-span-1">
+                  <Button onClick={() => openPost(post)} variant="secondary" size="sm" disabled={post.visited} className="col-span-1" title="View on LinkedIn">
                     <Eye className="w-3.5 h-3.5" />
                   </Button>
                 </div>
