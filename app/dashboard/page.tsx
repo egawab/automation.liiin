@@ -46,6 +46,12 @@ export default function Dashboard() {
   const [newComments, setNewComments] = useState<string[]>(['', '']);
   const [newTopic, setNewTopic] = useState('');
 
+  // Search-Only Config UI State
+  const [searchConfig, setSearchConfig] = useState<string[][]>([['', '']]);
+  const [searchTargetCycles, setSearchTargetCycles] = useState<number>(1);
+  const [isSearchOnly, setIsSearchOnly] = useState<boolean>(true);
+  const hasLoadedSettings = useRef(false);
+
   // Wizard State
   const [showWizard, setShowWizard] = useState(false);
 
@@ -63,6 +69,19 @@ export default function Dashboard() {
       settingsData = await setRes.json();
       setSettings(settingsData);
       setSystemActive(settingsData.systemActive);
+
+      // Initialize search config state exactly once to not overwrite user edits during polling
+      if (!hasLoadedSettings.current) {
+        setIsSearchOnly(settingsData.searchOnlyMode ?? true);
+        try {
+          const parsed = JSON.parse(settingsData.searchConfigJson || "[]");
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setSearchConfig(parsed);
+            setSearchTargetCycles(parsed.length);
+          }
+        } catch (e) {}
+        hasLoadedSettings.current = true;
+      }
     }
 
     // Fetch Stats & Logs for Dashboard
@@ -282,7 +301,10 @@ export default function Dashboard() {
       proxyHost: formData.get('proxyHost') as string || null,
       proxyPort: formData.get('proxyPort') ? Number(formData.get('proxyPort')) : null,
       proxyUser: formData.get('proxyUser') as string || null,
-      proxyPass: formData.get('proxyPass') as string || null
+      proxyPass: formData.get('proxyPass') as string || null,
+      
+      // Search UI
+      searchConfigJson: JSON.stringify(searchConfig)
     };
     await fetch('/api/settings', {
       method: 'POST',
@@ -851,7 +873,7 @@ export default function Dashboard() {
 
             <form onSubmit={saveSettings} className="space-y-6">
 
-              {/* Section 1: Mode Selection */}
+              {/* Section 1: Mode Selection & Search Config */}
               <Card variant="dashboard" accent="settings" className="overflow-hidden">
                 <div className="px-6 py-4" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
                   <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
@@ -863,7 +885,8 @@ export default function Dashboard() {
                     <input
                       type="checkbox"
                       name="searchOnlyMode"
-                      defaultChecked={settings.searchOnlyMode ?? true}
+                      checked={isSearchOnly}
+                      onChange={(e) => setIsSearchOnly(e.target.checked)}
                       className="w-5 h-5 mt-0.5 rounded border-2 border-border-default bg-surface-elevated text-apple-blue focus:ring-1 focus:ring-apple-blue focus:ring-offset-0 transition-all cursor-pointer"
                     />
                     <div>
@@ -871,6 +894,129 @@ export default function Dashboard() {
                       <p className="text-micro text-secondary mt-1">Search and save posts WITHOUT auto-commenting. Safer and avoids CAPTCHA triggers.</p>
                     </div>
                   </label>
+                  
+                  {isSearchOnly && (
+                    <div className="mt-6 pt-6" style={{ borderTop: '1px solid var(--dash-border)' }}>
+                      <div className="flex justify-between items-end mb-4">
+                        <div>
+                          <h4 className="text-caption-bold text-primary flex items-center gap-2">
+                            <Shield className="w-4 h-4 text-apple-blue" />
+                            Search Cycles & Keywords
+                          </h4>
+                          <p className="text-micro text-secondary mt-1">Configure your discovery loops. We recommend 2 cycles to maximize daily safety limits.</p>
+                        </div>
+                        <div className="flex gap-3 items-center">
+                          <Button 
+                            type="button" 
+                            variant="secondary" 
+                            size="sm"
+                            onClick={() => {
+                              setSearchTargetCycles(2);
+                              setSearchConfig([['saas', 'sales'], ['b2b', 'startups']]);
+                            }}
+                          >
+                            Apply Safe Defaults
+                          </Button>
+                          <div className="flex items-center gap-2">
+                            <label className="text-micro-bold text-secondary uppercase">Cycles</label>
+                            <select
+                              value={searchTargetCycles}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                setSearchTargetCycles(val);
+                                setSearchConfig(prev => {
+                                  let newArr = [...prev];
+                                  if (val > newArr.length) {
+                                    while (newArr.length < val) newArr.push(['', '']);
+                                  } else {
+                                    newArr = newArr.slice(0, val);
+                                  }
+                                  return newArr;
+                                });
+                              }}
+                              className="px-3 py-1.5 dash-input outline-none rounded-md w-24"
+                            >
+                              <option value={1}>1 Cycle</option>
+                              <option value={2}>2 Cycles</option>
+                              <option value={3}>3 Cycles</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Timing Transparency Panel */}
+                      <div className="bg-surface-elevated border border-border-subtle rounded-lg p-4 mb-6 flex gap-6 text-sm text-secondary">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">⏱️</span> 
+                          <span><strong>3-5 mins</strong> between keywords</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">💤</span> 
+                          <span><strong>15 mins</strong> between cycles</span>
+                        </div>
+                      </div>
+
+                      {/* Keyword Blocks */}
+                      <div className="space-y-4">
+                        {Array.from({ length: searchTargetCycles }).map((_, cycleIndex) => {
+                          const cycleKeywords = searchConfig[cycleIndex] || [''];
+                          return (
+                            <div key={`search-cycle-${cycleIndex}`} className="dash-recessed p-5 rounded-xl border border-border-default/50">
+                              <div className="flex justify-between items-center mb-3">
+                                <h4 className="text-sm font-bold text-primary uppercase tracking-wider">Cycle {cycleIndex + 1}</h4>
+                                <Button 
+                                  type="button" 
+                                  variant="secondary" 
+                                  size="sm" 
+                                  onClick={() => {
+                                    const newConfig = [...searchConfig];
+                                    newConfig[cycleIndex] = [...cycleKeywords, ''];
+                                    setSearchConfig(newConfig);
+                                  }}
+                                  leftIcon={<Plus className="w-3 h-3" />}
+                                >
+                                  Add Keyword
+                                </Button>
+                              </div>
+                              <div className="flex flex-col gap-3">
+                                {cycleKeywords.map((kw, kwIndex) => (
+                                  <div key={`cycle-${cycleIndex}-kw-${kwIndex}`} className="flex gap-2 relative">
+                                    <input 
+                                      value={kw}
+                                      onChange={(e) => {
+                                        const newConfig = [...searchConfig];
+                                        const newCyc = [...newConfig[cycleIndex]];
+                                        newCyc[kwIndex] = e.target.value;
+                                        newConfig[cycleIndex] = newCyc;
+                                        setSearchConfig(newConfig);
+                                      }}
+                                      placeholder="e.g. b2b outbound"
+                                      className="w-full px-3 py-2 dash-input outline-none" 
+                                    />
+                                    {cycleKeywords.length > 1 && (
+                                      <button 
+                                        type="button"
+                                        onClick={() => {
+                                          const newConfig = [...searchConfig];
+                                          const newCyc = [...newConfig[cycleIndex]];
+                                          newCyc.splice(kwIndex, 1);
+                                          newConfig[cycleIndex] = newCyc;
+                                          setSearchConfig(newConfig);
+                                        }}
+                                        className="text-tertiary hover:text-error transition-colors px-2 absolute right-2 top-1/2 transform -translate-y-1/2"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </Card>
 

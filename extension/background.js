@@ -31,6 +31,7 @@ async function loadState() {
     lastCommentHour: -1,
     keywordSearchPages: {},
     consecutiveFailures: 0,
+    currentSearchCycle: 0,
     activityLog: []
   });
 }
@@ -243,6 +244,7 @@ async function _checkJobsInner() {
         wasDashboardActive: true,
         lastJobTime: 0,
         dailyCommentsMade: 0,
+        currentSearchCycle: 0,
         cycleStartTime: 0
       });
       state.keywordCycles = {};
@@ -250,6 +252,7 @@ async function _checkJobsInner() {
       state.wasDashboardActive = true;
       state.lastJobTime = 0;
       state.dailyCommentsMade = 0;
+      state.currentSearchCycle = 0;
     } else {
       await saveState({ wasDashboardActive: isActive });
     }
@@ -306,46 +309,84 @@ async function _checkJobsInner() {
     const allComments = data.comments || [];
 
     // ═══════════════════════════════════════════════════════════
-    // SEARCH-ONLY MODE: Iterate ALL keywords in one pass
+    // SEARCH-ONLY MODE: Emulate cycle tracking driven by config
     // ═══════════════════════════════════════════════════════════
     if (settings.searchOnlyMode) {
-      console.log(`🔍 [Worker] SEARCH-ONLY MODE: Processing ${availableKeywords.length} keyword(s)...`);
+      let searchConfig = [];
+      try {
+        searchConfig = JSON.parse(settings.searchConfigJson || "[]");
+      } catch (e) {
+        console.warn("⚠️ [Worker] Failed to parse searchConfigJson", e);
+      }
+      
+      const targetSearchCycles = searchConfig.length;
+      
+      if (targetSearchCycles === 0) {
+        console.warn("⚠️ [Worker] Search-Only mode active but no cycles configured. Waiting...");
+        return;
+      }
+      
+      const currentCycleNum = state.currentSearchCycle || 0;
+      
+      if (currentCycleNum >= targetSearchCycles) {
+        if (!state.isPaused) {
+          await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: CYCLE_COOLDOWN_MS });
+          console.log("⏸️ [Worker] AUTO-PAUSED: All search cycles completed.");
+          // Also set dashboard active to false
+          try {
+            await fetch(`${dashboardUrl}/api/settings`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+              body: JSON.stringify({ systemActive: false })
+            });
+            console.log("✅ [Worker] Dashboard systemActive set to FALSE.");
+          } catch(e) {}
+        }
+        return;
+      }
+      
+      const keywordsToSearch = searchConfig[currentCycleNum] || [];
+      // Clean empty keywords
+      const cleanKeywords = keywordsToSearch.filter(k => (typeof k === 'string' && k.trim().length > 0));
+
+      console.log(`🔍 [Worker] SEARCH-ONLY CYCLE ${currentCycleNum + 1}/${targetSearchCycles}: Processing ${cleanKeywords.length} keyword(s)...`);
       await saveState({
         isJobRunning: true,
         cycleStartTime: Date.now(),
-        liveStatusText: `🔍 Search-only: Processing ${availableKeywords.length} keywords...`
+        liveStatusText: `🔍 Search cycle ${currentCycleNum + 1}: Processing ${cleanKeywords.length} keywords...`
       });
 
-      // Process up to 2 keywords per cycle for safety
-      const keywordsToSearch = availableKeywords.slice(0, 2);
-      
-      for (let ki = 0; ki < keywordsToSearch.length; ki++) {
-        const kwObj = keywordsToSearch[ki];
-        const searchPages = (await loadState()).keywordSearchPages || {};
-        const pageNum = (searchPages[kwObj.keyword] || 0) + 1;
+      if (cleanKeywords.length > 0) {
+        for (let ki = 0; ki < cleanKeywords.length; ki++) {
+          const kwStr = cleanKeywords[ki];
+          const searchPages = (await loadState()).keywordSearchPages || {};
+          const pageNum = (searchPages[kwStr] || 0) + 1;
 
-        console.log(`🔍 [Worker] Search-only keyword ${ki+1}/${keywordsToSearch.length}: "${kwObj.keyword}" (Page ${pageNum})`);
-        showPremiumToast('Search Mode', `Searching: "${kwObj.keyword}" (${ki+1}/${keywordsToSearch.length})`, false);
+          console.log(`🔍 [Worker] Search-only keyword ${ki+1}/${cleanKeywords.length}: "${kwStr}" (Page ${pageNum})`);
+          showPremiumToast('Search Mode', `Searching: "${kwStr}" (${ki+1}/${cleanKeywords.length})`, false);
 
-        await saveState({
-          currentKeyword: kwObj.keyword,
-          liveStatusText: `🔍 Searching "${kwObj.keyword}" (${ki+1}/${keywordsToSearch.length})...`
-        });
+          await saveState({
+            currentKeyword: kwStr,
+            liveStatusText: `🔍 Searching "${kwStr}" (${ki+1}/${cleanKeywords.length})...`
+          });
 
-        await startScrapingCycle(kwObj.keyword, settings, [], dashboardUrl, userId, 1, pageNum);
+          // Phase 1 mode bypasses comment arrays
+          await startScrapingCycle(kwStr, settings, [], dashboardUrl, userId, currentCycleNum + 1, pageNum);
 
-        // Wait 3-5 min between keywords within a search cycle
-        if (ki < keywordsToSearch.length - 1) {
-          const interKeywordDelay = 180000 + Math.floor(Math.random() * 120000); // 3-5 min
-          const delayMin = Math.round(interKeywordDelay / 60000);
-          console.log(`⏳ [Worker] Waiting ${delayMin} min before next keyword...`);
-          await saveState({ liveStatusText: `⏳ Cooling down ${delayMin} min before next keyword...` });
-          await sleep(interKeywordDelay);
+          // Wait 3-5 min between keywords within a cycle (unless it's the last one)
+          if (ki < cleanKeywords.length - 1) {
+            const interKeywordDelay = 180000 + Math.floor(Math.random() * 120000); // 3-5 min
+            const delayMin = Math.round(interKeywordDelay / 60000);
+            console.log(`⏳ [Worker] Waiting ${delayMin} min before next keyword...`);
+            await saveState({ liveStatusText: `⏳ Cooling down ${delayMin} min before next keyword...` });
+            await sleep(interKeywordDelay);
+          }
         }
+      } else {
+        console.log(`⚠️ [Worker] Cycle ${currentCycleNum + 1} has zero keywords. Skipping...`);
       }
 
-      // Don't increment keywordCycles in search-only mode — search is unlimited
-      // Just set cooldown and finish
+      // Finish Search Cycle & trigger cooldown
       await saveState({
         isJobRunning: false,
         activeTabId: null,
@@ -353,14 +394,16 @@ async function _checkJobsInner() {
         lastJobTime: Date.now(),
         cooldownMs: CYCLE_COOLDOWN_MS,
         currentKeyword: null,
+        currentSearchCycle: currentCycleNum + 1, // Advance cycle
         liveStatusText: ''
       });
 
       const cdMin = Math.round(CYCLE_COOLDOWN_MS / 60000);
-      console.log(`[Worker] Search-only cycle done. Cooldown: ${cdMin} min.`);
-      showPremiumToast('Search Complete', `✅ Searched ${keywordsToSearch.length} keyword(s). Cooling down ${cdMin} min.`, false);
+      console.log(`[Worker] Search cycle ${currentCycleNum + 1} done. Cooldown: ${cdMin} min.`);
+      showPremiumToast('Search Complete', `✅ Search cycle ${currentCycleNum + 1} completed. Next in ${cdMin} min.`, false);
       return;
     }
+
 
     // ═══════════════════════════════════════════════════════════
     // COMMENT MODE: Pick one keyword, enforce exactly 2 comments
@@ -626,7 +669,7 @@ let _lastContentHeartbeat = 0;
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'START_POLLING') {
     console.log("🚀 [Worker] Received START command from dashboard. Resetting system limits and waking up.");
-    saveState({ isPaused: false, keywordCycles: {}, cooldownMs: 0, cycleStartTime: 0, consecutiveFailures: 0, hourlyCommentsMade: 0 }).then(() => {
+    saveState({ isPaused: false, keywordCycles: {}, cooldownMs: 0, cycleStartTime: 0, consecutiveFailures: 0, hourlyCommentsMade: 0, currentSearchCycle: 0 }).then(() => {
       checkJobs();
     });
     if (sendResponse) sendResponse({ ok: true });

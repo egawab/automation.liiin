@@ -42,6 +42,7 @@ model Settings {
   linkedinSessionCookie String  @default("")
   platformUrl           String  @default("")
   searchOnlyMode        Boolean @default(true)
+  searchConfigJson      String  @default("[]")
   // Conservative search limits (safest configuration)
   maxSearchesPerHour    Int     @default(6)
   maxSearchesPerDay     Int     @default(20)
