@@ -257,35 +257,47 @@ async function _checkJobsInner() {
       await saveState({ wasDashboardActive: isActive });
     }
 
-    if (!isActive || !data.hasJobs || !data.keywords?.length) {
+    const settings = data.settings || {};
+
+    if (!isActive || !data.hasJobs) {
       console.log(`😴 [Worker] Idle. active=${isActive}, hasJobs=${data.hasJobs}`);
       return;
     }
 
-    // Filter keywords that haven't hit their dynamic cycle limit
-    const kc = (await loadState()).keywordCycles || {};
-    const availableKeywords = data.keywords.filter(k => (kc[k.keyword] || 0) < (k.targetCycles || 1));
-
-    // Auto-pause if all keywords hit limit
-    if (availableKeywords.length === 0) {
-      if (!state.isPaused) {
-        await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: randomCooldown(), dailyCommentsMade: 0 });
-        console.log("⏸️ [Worker] AUTO-PAUSED: All keywords completed their target cycles.");
-        try {
-          await fetch(`${dashboardUrl}/api/settings`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-            body: JSON.stringify({ systemActive: false })
-          });
-          console.log("✅ [Worker] Dashboard systemActive set to FALSE. Engine fully stopped.");
-        } catch(e) {
-          console.error("❌ [Worker] Failed to deactivate dashboard:", e.message);
-        }
+    if (!settings.searchOnlyMode) {
+      // ═══════════════════════════════════════════════════════════
+      // LEGACY COMMENT MODE: Restrict payload using comment keyword cycles
+      // ═══════════════════════════════════════════════════════════
+      if (!data.keywords?.length) {
+        console.log(`😴 [Worker] Idle: Comment campaigns missing.`);
+        return;
       }
-      return;
+      
+      const kc = (await loadState()).keywordCycles || {};
+      const availableKeywords = data.keywords.filter((k: any) => (kc[k.keyword] || 0) < (k.targetCycles || 1));
+
+      // Auto-pause if all comment keywords hit limit
+      if (availableKeywords.length === 0) {
+        if (!state.isPaused) {
+          await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: randomCooldown(), dailyCommentsMade: 0 });
+          console.log("⏸️ [Worker] AUTO-PAUSED: All comment keywords completed their target cycles.");
+          try {
+            await fetch(`${dashboardUrl}/api/settings`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+              body: JSON.stringify({ systemActive: false })
+            });
+            console.log("✅ [Worker] Dashboard systemActive set to FALSE.");
+          } catch(e) {}
+        }
+        return;
+      }
+      
+      // Inject availableKeywords into data for traditional loop access below
+      data.availableKeywords = availableKeywords; 
     }
 
-    // Unpause if new keywords available
+    // Unpause if new valid jobs exist
     if (state.isPaused) {
       await saveState({ isPaused: false });
     }
@@ -305,7 +317,6 @@ async function _checkJobsInner() {
       console.log("🕐 [Worker] New hour started. Reset hourly comment quota.");
     }
 
-    const settings = data.settings || {};
     const allComments = data.comments || [];
 
     // ═══════════════════════════════════════════════════════════
@@ -408,12 +419,16 @@ async function _checkJobsInner() {
     // ═══════════════════════════════════════════════════════════
     // COMMENT MODE: Pick one keyword, enforce exactly 2 comments
     // ═══════════════════════════════════════════════════════════
-    const kwObj = availableKeywords[Math.floor(Math.random() * availableKeywords.length)];
+    const available = data.availableKeywords || [];
+    if (available.length === 0) return;
+    
+    const kwObj = available[Math.floor(Math.random() * available.length)];
     const kw = kwObj.keyword;
+    const kc = (await loadState()).keywordCycles || {};
     const cycleNum = (kc[kw] || 0) + 1;
 
     // Strictly 1-based cycleIndex (matching dashboard: cycleIndex = Math.floor(i / 2) + 1)
-    const keywordComments = allComments.filter(c =>
+    const keywordComments = allComments.filter((c: any) =>
       c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum
     );
     console.log(`[Worker] Comments for "${kw}" cycle #${cycleNum}: ${keywordComments.length} found (cycleIndex=${cycleNum}, keywordId=${kwObj.id})`);

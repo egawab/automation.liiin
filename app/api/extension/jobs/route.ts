@@ -28,13 +28,24 @@ export async function GET(req: Request) {
       return setCorsHeaders(NextResponse.json({ active: false, message: 'System inactive or user not found' }, { status: 200 }));
     }
 
-    // Get active keywords
+    // Get active comment campaign keywords
     const keywords = await prisma.keyword.findMany({
       where: { userId, active: true },
     });
 
-    if (keywords.length === 0) {
-      return setCorsHeaders(NextResponse.json({ active: true, hasJobs: false, message: 'No active keywords found' }, { status: 200 }));
+    let hasValidSearchConfig = false;
+    if (settings.searchOnlyMode && settings.searchConfigJson) {
+      try {
+         const parsed = JSON.parse(settings.searchConfigJson);
+         if (Array.isArray(parsed) && parsed.length > 0) {
+           const validKeywords = parsed.flat().filter(kw => typeof kw === 'string' && kw.trim().length > 0);
+           if (validKeywords.length > 0) hasValidSearchConfig = true;
+         }
+      } catch(e) {}
+    }
+
+    if (keywords.length === 0 && !hasValidSearchConfig) {
+      return setCorsHeaders(NextResponse.json({ active: true, hasJobs: false, message: 'No active campaigns or search configs found' }, { status: 200 }));
     }
 
     // Get active comments
