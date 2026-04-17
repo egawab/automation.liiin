@@ -500,13 +500,6 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
     // We minimize the window immediately after injection starts so it doesn't
     // steal the user's screen, but by then the JS engine is already running at
     // full speed and Chrome won't throttle it back for several seconds.
-    // Capture the user's current window before spawning so we can rebound focus
-    let userWindowId = null;
-    try {
-      const currentWin = await chrome.windows.getLastFocused();
-      if (currentWin) userWindowId = currentWin.id;
-    } catch(e) {}
-
     const win = await chrome.windows.create({
       url: searchUrl,
       type: 'normal',
@@ -517,14 +510,6 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
     });
     const tab = win.tabs[0];
     await saveState({ activeTabId: tab.id });
-
-    // Focus Rebound: push the LinkedIn window behind the user's active workspace
-    if (userWindowId) {
-      try {
-        await chrome.windows.update(userWindowId, { focused: true });
-        console.log(`🔄 [Worker] Focus rebounded to user window ${userWindowId}.`);
-      } catch(e) {}
-    }
 
     console.log(`💉 [Worker] Tab ${tab.id} created. Waiting for page load...`);
     await waitForTabLoad(tab.id, 20000);
@@ -827,13 +812,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     console.log("🚀 [Worker] Received instant START_POLLING from dashboard bridge!");
     sendResponse({ ack: true });
     
-    // Auto-heal missing config if passed from dashboard
+    const triggerStart = () => {
+       // Force a 100% clean reset because a human clicked start
+       chrome.storage.local.set({ wasDashboardActive: false, currentSearchCycle: 0, isPaused: false, keywordCycles: {} }, () => {
+         setTimeout(() => checkJobs(), 50);
+       });
+    };
+
     if (msg.dashboardUrl && msg.userId) {
-      chrome.storage.sync.set({ dashboardUrl: msg.dashboardUrl, userId: msg.userId }, () => {
-         setTimeout(() => checkJobs(), 500);
-      });
+      chrome.storage.sync.set({ dashboardUrl: msg.dashboardUrl, userId: msg.userId }, triggerStart);
     } else {
-      setTimeout(() => checkJobs(), 500);
+      triggerStart();
     }
   }
 });
