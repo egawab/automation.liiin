@@ -203,12 +203,13 @@ export default function Dashboard() {
     // Optimistic UI update
     setSystemActive(newState);
     
-    // ✅ Fire-and-forget: persist to DB in background (no await) for instant startup
-    fetch('/api/settings', {
+    // ✅ Persist to DB first. This takes ~50ms but prevents a fatal Race Condition
+    // where the extension polls the API before the database finishes saving systemActive=true!
+    await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ systemActive: newState, searchOnlyMode: isSearchOnly })
-    }).catch(() => {});
+    });
 
     console.log(`🤖 Extension Pilot: ${newState ? 'ACTIVE' : 'PAUSED'}`);
     
