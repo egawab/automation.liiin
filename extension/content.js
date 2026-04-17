@@ -543,23 +543,49 @@ window.__linkedInExtractorReady = true;
       return 'BLOCKED';
     }
 
-    // 8. Post-submit verification: check if the editor content was consumed
-    //    LinkedIn clears the editor after a successful comment post.
-    //    If the editor still has our text, the submit likely failed.
-    const postSubmitText = (editor.innerText || editor.textContent || '').trim();
-    const editorStillExists = document.contains(editor);
-    const textWasConsumed = !editorStillExists || postSubmitText.length === 0 || postSubmitText !== currentText;
+    // 8. Post-submit verification: Physical DOM match required
+    //    LinkedIn clears the editor after a successful comment post, but also on silent errors.
+    //    We must physically query the container to ensure the text actually materialized.
+    const textWasConsumed = !document.contains(editor) || (editor.innerText || editor.textContent || '').trim().length === 0;
+    
+    // Safety delay to allow LinkedIn to render the new comment node
+    await wait(3000, 5000);
+    
+    let commentVerifiedInDom = false;
+    try {
+      // Search all comment nodes within the overarching container
+      const commentNodes = Array.from(container.querySelectorAll('.comments-comment-item, .update-components-comment, article'));
+      for (const node of commentNodes) {
+        const nodeText = (node.innerText || node.textContent || '');
+        // Do a clean check matching the injected string
+        if (nodeText.includes(textToType.trim()) && !node.contains(editor)) {
+          commentVerifiedInDom = true;
+          break;
+        }
+      }
+      
+      // Fallback: If LinkedIn's tree structure shifted, search the raw text content of the entire container,
+      // but only if the editor itself no longer contains it.
+      if (!commentVerifiedInDom && textWasConsumed) {
+         const fullText = (container.innerText || container.textContent || '');
+         if (fullText.includes(textToType.trim())) {
+           commentVerifiedInDom = true;
+         }
+      }
+    } catch(e) {}
 
-    if (textWasConsumed) {
-      console.log(`[Ext]    ✅ Comment VERIFIED submitted on ${postUrl}`);
+    if (commentVerifiedInDom) {
+      console.log(`[Ext]    ✅ Comment PHYISCALLY VERIFIED in DOM on ${postUrl}`);
       safeSend({ action: 'COMMENT_POSTED', url: postUrl });
       return 'SUCCESS';
-    } else {
+    } 
+    
+    if (!textWasConsumed && !commentVerifiedInDom) {
       // Retry: try clicking submit once more
       console.warn('[Ext]    ⚠️ Editor still has text — retrying submit...');
       try {
         submitBtn.click();
-        await wait(2500, 3500);
+        await wait(3500, 5500);
 
         // Check for restriction again after retry
         const retryRestriction = detectLinkedInRestriction();
@@ -568,17 +594,24 @@ window.__linkedInExtractorReady = true;
           return 'BLOCKED';
         }
 
-        const retryText = (editor.innerText || editor.textContent || '').trim();
-        if (retryText.length === 0 || retryText !== currentText) {
-          console.log(`[Ext]    ✅ Comment VERIFIED on retry for ${postUrl}`);
+        // Final verification pass
+        let retryVerified = false;
+        const retryNodes = Array.from(container.querySelectorAll('.comments-comment-item, .update-components-comment, article'));
+        for (const node of retryNodes) {
+          if ((node.innerText || node.textContent || '').includes(textToType.trim()) && !node.contains(editor)) {
+            retryVerified = true; break;
+          }
+        }
+        if (retryVerified) {
+          console.log(`[Ext]    ✅ Comment PHYISCALLY VERIFIED on retry for ${postUrl}`);
           safeSend({ action: 'COMMENT_POSTED', url: postUrl });
           return 'SUCCESS';
         }
       } catch(e) {}
-
-      console.warn('[Ext]    ❌ Comment submission NOT verified. Will not count this post.');
-      return 'FAILED';
     }
+
+    console.warn('[Ext]    ❌ Comment purely failed. It did not appear in the DOM. Marking FAILED.');
+    return 'FAILED';
   }
 
   // ─── Main Pipeline (v7: 4-Phase Deterministic) ───

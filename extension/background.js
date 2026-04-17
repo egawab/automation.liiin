@@ -281,7 +281,8 @@ async function _checkJobsInner() {
       // Auto-pause if all comment keywords hit limit
       if (availableKeywords.length === 0) {
         if (!state.isPaused) {
-          await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: randomCooldown(), dailyCommentsMade: 0 });
+          const fallbackCooldown = 900000 + Math.floor(Math.random() * 300000); // 15-20 min
+          await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: fallbackCooldown, dailyCommentsMade: 0 });
           console.log("⏸️ [Worker] AUTO-PAUSED: All comment keywords completed their target cycles.");
           try {
             await fetch(`${dashboardUrl}/api/settings`, {
