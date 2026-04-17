@@ -203,11 +203,11 @@ export default function Dashboard() {
     // Optimistic UI update
     setSystemActive(newState);
     
-    // ✅ Update settings to toggle systemActive flag for the Extension
+    // ✅ Update settings to toggle systemActive flag for the Extension, and lock the mode actively running
     await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ systemActive: newState })
+      body: JSON.stringify({ systemActive: newState, searchOnlyMode: isSearchOnly })
     });
 
     console.log(`🤖 Extension Pilot: ${newState ? 'ACTIVE' : 'PAUSED'}`);
@@ -910,7 +910,16 @@ export default function Dashboard() {
                       type="checkbox"
                       name="searchOnlyMode"
                       checked={isSearchOnly}
-                      onChange={(e) => setIsSearchOnly(e.target.checked)}
+                      onChange={async (e) => {
+                        const val = e.target.checked;
+                        setIsSearchOnly(val);
+                        // Instant persist to prevent background worker desynchronization
+                        await fetch('/api/settings', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ searchOnlyMode: val })
+                        });
+                      }}
                       className="w-5 h-5 mt-0.5 rounded border-2 border-border-default bg-surface-elevated text-apple-blue focus:ring-1 focus:ring-apple-blue focus:ring-offset-0 transition-all cursor-pointer"
                     />
                     <div>

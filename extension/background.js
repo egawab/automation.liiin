@@ -240,6 +240,7 @@ async function _checkJobsInner() {
       console.log("🔄 [Worker] Dashboard turned active. Resetting cycles and daily limits.");
       await saveState({
         keywordCycles: {},
+        keywordSearchPages: {}, // Ensure pure isolated state
         isPaused: false,
         wasDashboardActive: true,
         lastJobTime: 0,
@@ -248,6 +249,7 @@ async function _checkJobsInner() {
         cycleStartTime: 0
       });
       state.keywordCycles = {};
+      state.keywordSearchPages = {};
       state.isPaused = false;
       state.wasDashboardActive = true;
       state.lastJobTime = 0;
