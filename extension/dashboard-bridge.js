@@ -16,9 +16,21 @@ window.addEventListener('message', (event) => {
   // Dashboard clicked 'START' or 'SYNC'
   if (event.data.action === 'START_ENGINE') {
     console.log("[Nexora Bridge] Received START_ENGINE from Dashboard! Relaying to background worker...");
+    
+    // Auto-heal payload
+    const dashboardUrl = window.location.origin;
+    let userId = null;
+    const match = document.cookie.match(/(?:(?:^|.*;\s*)auth_token\s*\=\s*([^;]*).*$)|^.*$/);
+    if (match && match[1]) {
+      try {
+        const decoded = JSON.parse(atob(match[1].split('.')[1]));
+        userId = decoded.userId;
+      } catch(e) { userId = match[1]; }
+    }
+
     try {
       if (chrome && chrome.runtime && chrome.runtime.id && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ action: 'START_POLLING' }, (response) => {
+        chrome.runtime.sendMessage({ action: 'START_POLLING', dashboardUrl, userId }, (response) => {
           if (chrome.runtime.lastError) {
             console.warn("[Nexora Bridge] Extension context error (safe to ignore):", chrome.runtime.lastError.message);
             return;

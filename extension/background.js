@@ -826,8 +826,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'START_POLLING') {
     console.log("🚀 [Worker] Received instant START_POLLING from dashboard bridge!");
     sendResponse({ ack: true });
-    // Fire immediately with a tiny delay to let the DB write land
-    setTimeout(() => checkJobs(), 500);
+    
+    // Auto-heal missing config if passed from dashboard
+    if (msg.dashboardUrl && msg.userId) {
+      chrome.storage.sync.set({ dashboardUrl: msg.dashboardUrl, userId: msg.userId }, () => {
+         setTimeout(() => checkJobs(), 500);
+      });
+    } else {
+      setTimeout(() => checkJobs(), 500);
+    }
   }
 });
 
