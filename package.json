@@ -16,7 +16,7 @@
         "worker": "tsx worker.ts",
         "worker:search": "tsx worker-search-only.ts",
         "test:recovery": "tsx test-account-recovery.ts",
-        "build:ext": "powershell -Command \"Remove-Item -Path LinkedInExtension.zip -ErrorAction SilentlyContinue; Compress-Archive -Path extension\\* -DestinationPath LinkedInExtension.zip\""
+        "build:ext": "powershell -Command \"Remove-Item -Path LinkedInExtension.zip -ErrorAction SilentlyContinue; Remove-Item -Path public\\LinkedInExtension.zip -ErrorAction SilentlyContinue; Compress-Archive -Path extension\\* -DestinationPath LinkedInExtension.zip; Copy-Item -Path LinkedInExtension.zip -Destination public\\LinkedInExtension.zip\""
     },
     "dependencies": {
         "@google/genai": "^1.17.0",
