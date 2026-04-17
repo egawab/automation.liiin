@@ -875,32 +875,33 @@ window.__linkedInExtractorReady = true;
       );
       console.log(`[Ext]    Strict reach matches (likes≥${minL}, comments≥${minC}, baseline≥${BASELINE_ENGAGEMENT}): ${strictMatches.length}`);
 
-      let finalCandidates = [];
+      const targetCount = Math.min(requiredComments * 3, Math.max(requiredComments, validPool.length));
+      let targets = [];
 
       if (strictMatches.length >= requiredComments) {
         // Enough strict matches
-        console.log(`[Ext]    \u2705 Using ${targets.length} strict-match targets (buffer ${targets.length - requiredComments}).`);
+        targets = strictMatches.sort(rankPosts).slice(0, targetCount);
+        console.log(`[Ext]    ✅ Using ${targets.length} strict-match targets.`);
       } else {
-        // GRACEFUL DEGRADATION: Not enough strict matches
-        console.warn(`[Ext]    \u26a0\ufe0f Only ${strictMatches.length} strict matches. Need ${requiredComments}. Applying graceful degradation...`);
-
-        // Enforce a proportional floor so we don't pick garbage posts
-        const fallbackMinLikes = Math.max(1, Math.floor(minL * 0.2));
-        const fallbackMinComments = Math.max(0, Math.floor(minC * 0.2));
+        // BEST-EFFORT RECOVERY (Per User Requirement)
+        // If we don't have enough strict matches, NEVER fail out. Backfill with the absolute highest engaged 
+        // leftovers available in the pool so that operation always successfully executes on best-available reach.
+        console.warn(`[Ext]    ⚠️ Only ${strictMatches.length} strict matches. Need ${requiredComments}. Applying Best-Effort Fallback to highest-reach alternatives...`);
 
         const strictUrls = new Set(strictMatches.map(p => p.url));
-        const remaining = validPool
+        const remainingValid = validPool
           .filter(p => !strictUrls.has(p.url))
-          .filter(p => p.likes >= fallbackMinLikes || p.postComments >= fallbackMinComments)
-          .sort(rankPosts); // Fallbacks also respect recency + engagement
+          .sort(rankPosts); // rankPosts sorts by largest engagement automatically
 
+        // Grab exactly what we need to meet the target count Buffer
         const needed = targetCount - strictMatches.length;
+        
         targets = [
           ...strictMatches.sort(rankPosts),
-          ...remaining.slice(0, needed)
+          ...remainingValid.slice(0, needed)
         ];
 
-        console.log(`[Ext]    Using ${strictMatches.length} strict + filtered fallback = ${targets.length} total valid targets.`);
+        console.log(`[Ext]    ✅ Recovered ${targets.length} Best-Effort targets to ensure execution does not fail.`);
       }
 
       if (targets.length === 0) {
@@ -1149,16 +1150,23 @@ window.__linkedInExtractorReady = true;
       preview: (p.textSnippet || '').substring(0, 200) // Truncate to prevent Chrome IPC overflow
     }));
 
-    // v7.8 Quality-First Pipeline: STRIPPING ALL JUNK.
-    // Discard any results that do not strictly meet high-visibility and engagement standards.
+    // Sort ALL data by total engagement (likes + comments) descending so the best rise to top
+    syncData.sort((a, b) => ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0)));
+
+    // v7.8 Quality-First Pipeline: Try to strip generic junk
     const BASELINE_ENGAGEMENT = Math.max(10, minL + minC);
     const premiumData = syncData.filter(p => (p.likes || 0) + (p.comments || 0) >= BASELINE_ENGAGEMENT);
     
-    // Sort by total engagement (likes + comments) descending
-    premiumData.sort((a, b) => ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0)));
-    
-    // Grab the top highest performers
-    const finalSync = premiumData.slice(0, 100);
+    // Best-Effort Recovery: If premium data filtering resulted in an unacceptably low volume (e.g. < 5 posts),
+    // default to capturing the absolute best 100 available from the generic pool rather than returning empty.
+    let finalSync = [];
+    if (premiumData.length >= 5) {
+      finalSync = premiumData.slice(0, 100);
+      console.log(`[Ext] 📜 Extracted ${finalSync.length} Ultra-Premium results.`);
+    } else {
+      finalSync = syncData.slice(0, 100);
+      console.log(`[Ext] 📜 Premium pool critically low. Recovered ${finalSync.length} Best-Effort Alternative results.`);
+    }
 
     if (finalSync.length > 0) {
       await syncToDashboard(finalSync, keyword, dashboardUrl, userId);
