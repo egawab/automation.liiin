@@ -667,18 +667,25 @@ window.__linkedInExtractorReady = true;
     const scrollTarget = findScrollContainer();
 
     // ══════════════════════════════════════════════════════════════
-    // PHASE 1: DEEP DISCOVERY SCROLL (no commenting)
+    // PHASE 1: DEEP DISCOVERY SCROLL (HUNT MODE for Proven Reach)
     // ══════════════════════════════════════════════════════════════
-    console.log(`[Ext] ═══ PHASE 1: Deep Discovery Scroll ═══`);
-    heartbeat('Phase1-Discovery', '🔍 Phase 1: Deep discovery scroll...');
+    console.log(`[Ext] ═══ PHASE 1: Deep Discovery Scroll (Hunt Mode) ═══`);
+    heartbeat('Phase1-Discovery', '🔍 Phase 1: Deep hunting for high-quality posts...');
 
     const allPosts = []; // { url, likes, postComments, author, container }
     const seenUrns = new Set();
 
-    const SCROLL_STEPS  = 30;
+    const MAX_SCROLLS = 100; // Increased significantly to guarantee volume
     const SCROLL_AMOUNT = 1200;
-
-    for (let step = 0; step < SCROLL_STEPS; step++) {
+    
+    // Baseline definition of "High Quality / Proven Performer"
+    // At least 10 combined engagements, or matching user's strict min requests if higher.
+    const BASELINE_ENGAGEMENT = Math.max(10, minL + minC);
+    
+    let step = 0;
+    let highQualityCount = 0;
+    
+    while (step < MAX_SCROLLS) {
       // Scroll
       if (typeof scrollTarget.scrollBy === 'function') {
         scrollTarget.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
@@ -688,12 +695,12 @@ window.__linkedInExtractorReady = true;
       window.dispatchEvent(new Event('scroll'));
       scrollTarget.dispatchEvent(new Event('scroll'));
 
-      // Wait (realistic pacing with more variation)
+      // Wait (pacing for network requests)
       await wait(1200, 2500);
 
       // Heartbeat every 5 steps
       if (step % 5 === 4) {
-        heartbeat(`Phase1-Scroll-${step+1}/${SCROLL_STEPS}`, `🔍 Discovering posts: ${step+1}/${SCROLL_STEPS} (found ${allPosts.length} so far)...`);
+        heartbeat(`Phase1-Scroll-${step+1}/${MAX_SCROLLS}`, `🔍 Hunting: ${step+1}/${MAX_SCROLLS} (Found ${highQualityCount} high-quality / ${allPosts.length} total)...`);
       }
 
       // Click "Show more" / "See more" buttons
@@ -760,10 +767,29 @@ window.__linkedInExtractorReady = true;
           urn: urn,
           commentable: commentable
         });
+        
+        if (metrics.likes + metrics.postComments >= BASELINE_ENGAGEMENT) {
+          highQualityCount++;
+        }
       }
+      
+      // Early exit if we have found extensive, strong volume of PROVEN PERFORMERS
+      const REQUIRED_VOLUME = needsCommenting ? Math.max(requiredComments * 5, 20) : 50; 
+      if (highQualityCount >= REQUIRED_VOLUME && step >= 25) {
+        console.log(`[Ext] 🎯 Suitable strong volume found (${highQualityCount} high-quality posts). Concluding Hunt Mode.`);
+        break;
+      }
+      
+      const noMoreBtn = document.querySelector('.search-no-results__container');
+      if (noMoreBtn) {
+        console.log('[Ext] Hit End of Feed bounds.');
+        break;
+      }
+      
+      step++;
     }
 
-    console.log(`[Ext] 📊 Phase 1 complete: Discovered ${allPosts.length} posts.`);
+    console.log(`[Ext] 📊 Phase 1 complete: Discovered ${allPosts.length} total posts (${highQualityCount} High-Quality).`);
     heartbeat('Phase1-Done', `✅ Discovery complete: ${allPosts.length} posts found.`);
 
     // ── DIAGNOSTIC: If zero posts found, dump DOM structure to help debug ──
@@ -843,19 +869,16 @@ window.__linkedInExtractorReady = true;
         return a.ageHours - b.ageHours; // Exact age tiebreaker
       }
 
-      // Apply strict reach criteria on the valid pool
+      // Apply strict reach criteria on the valid pool. MUST have strong engagement.
       const strictMatches = validPool.filter(p =>
-        p.likes >= minL && p.postComments >= minC
+        p.likes >= minL && p.postComments >= minC && (p.likes + p.postComments) >= BASELINE_ENGAGEMENT
       );
-      console.log(`[Ext]    Strict reach matches (likes\u2265${minL}, comments\u2265${minC}): ${strictMatches.length}`);
+      console.log(`[Ext]    Strict reach matches (likes≥${minL}, comments≥${minC}, baseline≥${BASELINE_ENGAGEMENT}): ${strictMatches.length}`);
 
-      // Provide 3x buffer of targets so Phase 3 has fallbacks
-      const targetCount = Math.min(requiredComments * 3, validPool.length);
-      let targets = [];
+      let finalCandidates = [];
 
       if (strictMatches.length >= requiredComments) {
         // Enough strict matches
-        targets = strictMatches.sort(rankPosts).slice(0, targetCount);
         console.log(`[Ext]    \u2705 Using ${targets.length} strict-match targets (buffer ${targets.length - requiredComments}).`);
       } else {
         // GRACEFUL DEGRADATION: Not enough strict matches
@@ -1126,10 +1149,16 @@ window.__linkedInExtractorReady = true;
       preview: (p.textSnippet || '').substring(0, 200) // Truncate to prevent Chrome IPC overflow
     }));
 
-    // v7.7 Quality-First Pipeline: Sort by total engagement (likes + comments) descending
-    // Same volume (100 posts) but now guaranteed highest-traction results first
-    syncData.sort((a, b) => ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0)));
-    const finalSync = syncData.slice(0, 100);
+    // v7.8 Quality-First Pipeline: STRIPPING ALL JUNK.
+    // Discard any results that do not strictly meet high-visibility and engagement standards.
+    const BASELINE_ENGAGEMENT = Math.max(10, minL + minC);
+    const premiumData = syncData.filter(p => (p.likes || 0) + (p.comments || 0) >= BASELINE_ENGAGEMENT);
+    
+    // Sort by total engagement (likes + comments) descending
+    premiumData.sort((a, b) => ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0)));
+    
+    // Grab the top highest performers
+    const finalSync = premiumData.slice(0, 100);
 
     if (finalSync.length > 0) {
       await syncToDashboard(finalSync, keyword, dashboardUrl, userId);
