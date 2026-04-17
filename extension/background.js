@@ -500,6 +500,13 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
     // We minimize the window immediately after injection starts so it doesn't
     // steal the user's screen, but by then the JS engine is already running at
     // full speed and Chrome won't throttle it back for several seconds.
+    // Capture the user's current window before spawning so we can rebound focus
+    let userWindowId = null;
+    try {
+      const currentWin = await chrome.windows.getLastFocused();
+      if (currentWin) userWindowId = currentWin.id;
+    } catch(e) {}
+
     const win = await chrome.windows.create({
       url: searchUrl,
       type: 'normal',
@@ -511,9 +518,17 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
     const tab = win.tabs[0];
     await saveState({ activeTabId: tab.id });
 
-    console.log(`💉 [Worker] Tab ${tab.id} created (focused window). Waiting for page load...`);
+    // Focus Rebound: push the LinkedIn window behind the user's active workspace
+    if (userWindowId) {
+      try {
+        await chrome.windows.update(userWindowId, { focused: true });
+        console.log(`🔄 [Worker] Focus rebounded to user window ${userWindowId}.`);
+      } catch(e) {}
+    }
+
+    console.log(`💉 [Worker] Tab ${tab.id} created. Waiting for page load...`);
     await waitForTabLoad(tab.id, 20000);
-    await sleep(3000); // LinkedIn JS hydration
+    await sleep(1000); // Quick hydration buffer
 
     // ── Helper: Inject and Start ──
     async function injectAndStart() {

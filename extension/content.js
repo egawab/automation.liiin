@@ -625,9 +625,9 @@ window.__linkedInExtractorReady = true;
     console.log(`[Ext] Assigned comments: ${comments ? comments.length : 0}`);
     console.log(`[Ext] URL: ${window.location.href}`);
 
-    // ── Page hydration ──
+    // ── Page hydration (fast) ──
     heartbeat('Phase0-Hydration', '⏳ Hydrating page...');
-    await wait(3000, 4000);
+    await wait(1000, 1500);
 
     if (!window.location.href.includes('/content/')) {
       const btn = Array.from(document.querySelectorAll('button'))
@@ -1123,11 +1123,12 @@ window.__linkedInExtractorReady = true;
       likes: p.likes,
       comments: p.postComments,
       author: p.author,
-      preview: p.textSnippet
+      preview: (p.textSnippet || '').substring(0, 200) // Truncate to prevent Chrome IPC overflow
     }));
 
-    // v7.6 Raw Discovery Pipeline: Send top 100 posts regardless of engagement limits
-    // Ensures massive Search-Only discovery volumes without getting artificially chunked.
+    // v7.7 Quality-First Pipeline: Sort by total engagement (likes + comments) descending
+    // Same volume (100 posts) but now guaranteed highest-traction results first
+    syncData.sort((a, b) => ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0)));
     const finalSync = syncData.slice(0, 100);
 
     if (finalSync.length > 0) {

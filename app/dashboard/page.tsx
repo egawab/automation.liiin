@@ -203,16 +203,16 @@ export default function Dashboard() {
     // Optimistic UI update
     setSystemActive(newState);
     
-    // ✅ Update settings to toggle systemActive flag for the Extension, and lock the mode actively running
-    await fetch('/api/settings', {
+    // ✅ Fire-and-forget: persist to DB in background (no await) for instant startup
+    fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ systemActive: newState, searchOnlyMode: isSearchOnly })
-    });
+    }).catch(() => {});
 
     console.log(`🤖 Extension Pilot: ${newState ? 'ACTIVE' : 'PAUSED'}`);
     
-    // 🚀 Send direct push to the extension (via injected dashboard-bridge.js)
+    // 🚀 Send direct push to the extension IMMEDIATELY (via injected dashboard-bridge.js)
     if (newState) {
       window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'START_ENGINE' }, '*');
     }
