@@ -819,6 +819,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// ── Instant Start Listener ──
+// The dashboard-bridge.js sends START_POLLING when the user clicks START.
+// Without this listener, the worker waits up to 60s for the next alarm tick.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'START_POLLING') {
+    console.log("🚀 [Worker] Received instant START_POLLING from dashboard bridge!");
+    sendResponse({ ack: true });
+    // Fire immediately with a tiny delay to let the DB write land
+    setTimeout(() => checkJobs(), 500);
+  }
+});
+
 // ── Alarm + Startup ──
 chrome.alarms.create('checkJobsAlarm', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
