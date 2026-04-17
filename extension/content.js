@@ -183,15 +183,8 @@ window.__linkedInExtractorReady = true;
       const m = html.match(/urn:li:(activity|ugcPost):\d+/);
       if (m) return m[0];
       
-      // Method 9: Deterministic Fallback Hash
-      // If LinkedIn stripped absolute IDs from this view, generate a stable ID so we don't drop the post!
-      const safeText = (el.innerText || '').substring(0, 100).replace(/[^a-z0-9]/gi, '');
-      if (safeText.length > 20) {
-         let hash = 0;
-         for (let i = 0; i < safeText.length; i++) hash = Math.imul(31, hash) + safeText.charCodeAt(i) | 0;
-         return 'fallback:urn:text:' + Math.abs(hash);
-      }
-      
+      // If no valid URL can be constructed, we must cleanly abort this node
+      // rather than injecting broken fallback hashes into the database.
       return null;
     } catch(e) { return null; }
   }
