@@ -66,7 +66,11 @@ export function SavedPostsPanel() {
 
   function openPost(post: SavedPost) {
     markAsVisited(post.id);
-    window.open(post.postUrl, '_blank');
+    let finalUrl = post.postUrl;
+    if (!finalUrl.startsWith('http')) {
+      finalUrl = 'https://' + finalUrl.replace(/^\/*/, '');
+    }
+    window.open(finalUrl, '_blank');
   }
 
   const uniqueKeywords = Array.from(new Set(posts.map(p => p.keyword)));

@@ -319,9 +319,9 @@ export default function Dashboard() {
       workHoursEnd: Number(formData.get('workHoursEnd') ?? 18),
       skipWeekends: formData.get('skipWeekends') === 'on',
       maxSearchesPerHour: Number(formData.get('maxSearchesPerHour') ?? 6),
-      maxSearchesPerDay: Number(formData.get('maxSearchesPerDay') ?? 20),
+      maxSearchesPerDay: Number(formData.get('maxSearchesPerDay') ?? 40),
       minDelayBetweenSearchesMinutes: Number(formData.get('minDelayBetweenSearchesMinutes') ?? 5),
-      maxKeywordsPerCycle: Number(formData.get('maxKeywordsPerCycle') ?? 3),
+      maxKeywordsPerCycle: Number(formData.get('maxKeywordsPerCycle') ?? 5),
       // Proxy Configuration
       proxyHost: formData.get('proxyHost') as string || null,
       proxyPort: formData.get('proxyPort') ? Number(formData.get('proxyPort')) : null,
@@ -1106,25 +1106,33 @@ export default function Dashboard() {
                   </h3>
                 </div>
                 <div className="p-6 space-y-5">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div className="bg-apple-blue/5 border border-apple-blue/20 rounded-lg p-4">
+                    <h4 className="text-sm font-bold text-apple-blue mb-1">Continuous Safe Pacing Active</h4>
+                    <p className="text-micro text-secondary leading-relaxed">
+                      To keep your account absolutely safe from bot-detection, the worker automatically paces itself. 
+                      You can load unlimited keywords; it will process them continuously at a safe speed of <strong>~40 queries per day</strong> while you leave it running.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
                     <div>
-                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Searches / Hour</label>
-                      <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="12"
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Maximum safe limit is 6">Max / Hour</label>
+                      <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="15"
                         className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                     <div>
-                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Searches / Day</label>
-                      <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 20} min="1" max="60"
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Safe daily volume is 40-60">Max / Day</label>
+                      <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 40} min="1" max="100"
                         className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                     <div>
-                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Min Delay (min)</label>
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Human rest between keywords">Rest (min)</label>
                       <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="1" max="30"
                         className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                     <div>
-                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Keywords / Cycle</label>
-                      <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 3} min="1" max="10"
+                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Batch Size</label>
+                      <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 5} min="1" max="20"
                         className="w-full px-3 py-2.5 dash-input outline-none" />
                     </div>
                   </div>

@@ -242,9 +242,9 @@ async function workerLoop() {
         await broadcastStatus('✅ Authenticated - Ready to search');
       }
 
-      // Fetch active keywords (limit to maxKeywordsPerCycle for safety)
+      // Fetch active keywords and shuffle them to ensure organic cycling over large lists
       let keywords = await getActiveKeywords(settings.userId);
-      keywords = keywords.slice(0, 10); // Phase 4: Overridden to 10 keywords
+      keywords = keywords.sort(() => Math.random() - 0.5); // Shuffle array
       
       if (keywords.length === 0) {
         console.log('⚠️  No active keywords. Waiting...\n');
@@ -351,26 +351,10 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
     console.log(`✅ ${strictMatches.length} posts match reach criteria\n`);
     await broadcastLog(`Found ${strictMatches.length} matching posts for "${keyword.keyword}" (${withEngagement.length} with engagement data)`);
 
-          let postsToSave: PostCandidate[] = [...strictMatches];
-      
-      // Phase 4: Supplement strict matches with top engagement results if volume is low (target 15)
-      if (postsToSave.length < 15 && withEngagement.length > 0) {
-        const remainingTarget = 15 - postsToSave.length;
-        const potentialSupplements = withEngagement
-          .filter(p => !postsToSave.some(s => s.url === p.url))
-          .sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments))
-          .slice(0, remainingTarget);
-        
-        if (potentialSupplements.length > 0) {
-          console.log(`➕ Supplementing with ${potentialSupplements.length} high-reach posts to hit target volume.`);
-          postsToSave = [...postsToSave, ...potentialSupplements];
-        }
-      }
-
-      let usedFallback = postsToSave.length > strictMatches.length;
+      let postsToSave: PostCandidate[] = [...strictMatches];
 
       if (postsToSave.length === 0) {
-        console.log('⚠️  No posts matching criteria or with engagement found. Skipping.\n');
+        console.log('⚠️  No posts matching strict reach criteria found. Skipping.\n');
         await broadcastLog(`No quality matches found for "${keyword.keyword}". Skipping.`, 'warn');
         return;
       }
@@ -384,7 +368,7 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 
     console.log(`💾 Saved ${savedCount} new posts to dashboard\n`);
     await broadcastLog(
-      `${usedFallback ? '✅ Saved fallback posts' : '✅ Saved strict matches'} for "${keyword.keyword}" (${savedCount}/${postsToSave.length} saved)`
+      `✅ Saved high-quality strict matches for "${keyword.keyword}" (${savedCount} saved)`
     );
 
   } catch (error: any) {
@@ -419,8 +403,8 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     // ── Scroll loop: 7 rounds to load as many posts as possible ──────────────
     // After each scroll we wait for NEW content rather than a fixed delay,
     // so fast-loading pages don't waste time.
-    console.log('📜 Scrolling to load more posts...');
-    for (let round = 0; round < 15; round++) {
+    console.log('📜 Scrolling deep to load maximum posts...');
+    for (let round = 0; round < 25; round++) {
       // Scroll to bottom of the last visible result card (triggers infinite scroll)
       await page.evaluate(() => {
         const cards = document.querySelectorAll(
@@ -683,11 +667,23 @@ async function logSearch(userId: string, keyword: string): Promise<void> {
 
 async function savePostToDatabase(post: PostCandidate, keyword: string, userId: string): Promise<boolean> {
   try {
+    // Robust URL validation and sanitization
+    let cleanUrl = post.url;
+    if (!cleanUrl.startsWith('http')) {
+      cleanUrl = `https://www.linkedin.com${cleanUrl.startsWith('/') ? '' : '/'}${cleanUrl}`;
+    }
+    try {
+      new URL(cleanUrl); // Throws if completely invalid
+    } catch {
+      console.log(`⚠️ Invalid URL detected and discarded: ${cleanUrl}`);
+      return false;
+    }
+
     // Check if post already exists
     const existing = await prisma.savedPost.findFirst({
       where: {
         userId,
-        postUrl: post.url
+        postUrl: cleanUrl
       }
     });
 
@@ -699,7 +695,7 @@ async function savePostToDatabase(post: PostCandidate, keyword: string, userId: 
     await prisma.savedPost.create({
       data: {
         userId,
-        postUrl: post.url,
+        postUrl: cleanUrl,
         postAuthor: post.author,
         postPreview: post.preview,
         likes: post.likes,
@@ -760,8 +756,11 @@ async function initializeBrowser() {
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
       '--disable-web-security',
-      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-features=IsolateOrigins,site-per-process,CalculateNativeWinOcclusion',
       '--disable-site-isolation-trials',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
       // Appear more human-like
       '--window-size=1920,1080',
       '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
