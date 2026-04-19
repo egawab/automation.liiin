@@ -130,6 +130,11 @@ window.__linkedInExtractorReady = true;
         if (cUrn.includes('activity:') || cUrn.includes('ugcPost:') || cUrn.includes('share:')) return cUrn;
       }
 
+      // Method 4.5: Explicit data-id or data-activity-urn fallbacks found in newer Search A/B tests
+      const dataId = el.getAttribute('data-id') || el.querySelector('[data-id]')?.getAttribute('data-id') || '';
+      if (dataId.includes('activity:') || dataId.includes('ugcPost:')) return dataId;
+
+
       // Method 5: data-view-tracking-scope (breadcrumb-encoded URN)
       const trackingEls = [el, ...el.querySelectorAll('[data-view-tracking-scope]')];
       for (const tel of trackingEls) {
@@ -318,6 +323,9 @@ window.__linkedInExtractorReady = true;
     '[role="listitem"]',
     '[data-chameleon-result-urn]',
     'li.artdeco-card',
+    '.search-results__cluster',
+    '[data-id]',
+    '.search-result-collection'
   ];
 
   // ─── Find scroll container ───
@@ -694,13 +702,21 @@ window.__linkedInExtractorReady = true;
     let step = 0;
     let highQualityCount = 0;
     
+    let previousPostsCount = 0;
+    let paginationStalls = 0;
+    
     while (step < MAX_SCROLLS) {
-      // Scroll
+      // 1. Dual-Scroll: Aggressively scroll both the detected container AND the window
       if (typeof scrollTarget.scrollBy === 'function') {
         scrollTarget.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
       } else {
         scrollTarget.scrollTop += SCROLL_AMOUNT;
       }
+      
+      if (scrollTarget !== window && scrollTarget !== document.documentElement) {
+        window.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
+      }
+      
       window.dispatchEvent(new Event('scroll'));
       scrollTarget.dispatchEvent(new Event('scroll'));
 
@@ -712,13 +728,32 @@ window.__linkedInExtractorReady = true;
         heartbeat(`Phase1-Scroll-${step+1}/${MAX_SCROLLS}`, `🔍 Hunting: ${step+1}/${MAX_SCROLLS} (Found ${highQualityCount} high-quality / ${allPosts.length} total)...`);
       }
 
-      // Click "Show more" / "See more" buttons
+      // 2. Click "Show more" / "See more" buttons (Standard UI)
       const more = Array.from(document.querySelectorAll('button')).find(b =>
         b.innerText.toLowerCase().includes('show more') ||
         b.innerText.toLowerCase().includes('see more')  ||
         b.innerText.toLowerCase().includes('عرض المزيد')
       );
       if (more) { more.click(); await wait(600, 1000); }
+
+      // 3. Pagination Autopilot: Detect if we're stalled on a paginated search layout
+      if (allPosts.length === previousPostsCount) {
+        paginationStalls++;
+      } else {
+        paginationStalls = 0;
+      }
+      previousPostsCount = allPosts.length;
+
+      // If we've stalled for 3 scrolls, try hitting the "Next" page button
+      if (paginationStalls >= 3) {
+        const nextBtn = document.querySelector('.artdeco-pagination__button--next, button[aria-label="Next"]');
+        if (nextBtn && !nextBtn.disabled) {
+          console.log(`[Ext] 📄 Stalled on current page. Clicking Pagination "Next"...`);
+          nextBtn.click();
+          paginationStalls = 0;
+          await wait(2500, 4000); // give time for the next page to load
+        }
+      }
 
       // Collect newly visible post containers
       const visibleContainers = [];
