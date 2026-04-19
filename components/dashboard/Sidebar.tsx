@@ -3,13 +3,15 @@
 import React from 'react';
 import Link from 'next/link';
 import { motion } from 'motion/react';
-import { LayoutDashboard, Search, Settings, Sparkles, Shield, Bookmark, Crown } from 'lucide-react';
+import { LayoutDashboard, Search, Settings, Sparkles, Shield, Bookmark, Crown, CreditCard } from 'lucide-react';
 
 interface SidebarProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
   systemActive: boolean;
   isAdmin?: boolean;
+  subscriptionStatus?: string;
+  trialDaysRemaining?: number;
 }
 
 const navItems = [
@@ -18,10 +20,17 @@ const navItems = [
   { id: 'keywords', label: 'Target Campaigns', icon: Search, accent: 'var(--section-campaigns)' },
   { id: 'autoposts', label: 'Auto Posts', icon: Sparkles, accent: 'var(--section-campaigns)' },
   { id: 'extension-connect', label: 'Connect Extension', icon: Shield, accent: 'var(--section-extension)' },
+  { id: 'billing', label: 'Billing & Plan', icon: CreditCard, accent: 'var(--section-billing)' },
   { id: 'settings', label: 'Settings', icon: Settings, accent: 'var(--section-settings)' },
 ];
 
-export default function Sidebar({ activeTab, onTabChange, systemActive, isAdmin }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, systemActive, isAdmin, subscriptionStatus, trialDaysRemaining }: SidebarProps) {
+  let displayStatus = 'Free Trial';
+  if (isAdmin) displayStatus = 'Admin Control';
+  else if (subscriptionStatus === 'ACTIVE') displayStatus = 'Yearly Subscriber';
+  else if (subscriptionStatus === 'EXPIRED') displayStatus = 'Expired Account';
+  else if (subscriptionStatus === 'TRIAL') displayStatus = `Free Trial (${trialDaysRemaining} days left)`;
+
   return (
     <div className="w-64 dash-sidebar flex flex-col">
       {/* Logo */}
@@ -72,11 +81,11 @@ export default function Sidebar({ activeTab, onTabChange, systemActive, isAdmin 
                 <motion.div
                   layoutId="sidebar-active-indicator"
                   className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-r-full"
-                  style={{ background: item.accent }}
+                  style={{ background: item.accent || '#0a84ff' }}
                   transition={{ type: "spring", stiffness: 350, damping: 30 }}
                 />
               )}
-              <Icon className="w-4 h-4 flex-shrink-0" style={isActive ? { color: item.accent } : {}} />
+              <Icon className="w-4 h-4 flex-shrink-0" style={isActive ? { color: item.accent || '#0a84ff' } : {}} />
               <span className="font-medium">{item.label}</span>
             </button>
           );
@@ -100,7 +109,11 @@ export default function Sidebar({ activeTab, onTabChange, systemActive, isAdmin 
             N
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-micro-bold text-primary truncate">Pro Account</p>
+            <p className="text-micro-bold text-primary truncate" style={{ 
+              color: isAdmin ? '#0a84ff' : (subscriptionStatus === 'ACTIVE' ? '#30d158' : (subscriptionStatus === 'EXPIRED' ? '#ff3b30' : 'var(--text-primary)'))
+            }}>
+              {displayStatus}
+            </p>
             <div className="flex items-center gap-1.5">
               <div className="relative">
                 <div className={`w-1.5 h-1.5 rounded-full ${systemActive ? 'bg-success' : 'bg-secondary opacity-50'}`} />

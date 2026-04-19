@@ -18,6 +18,7 @@ import ActivityFeed from '@/components/dashboard/ActivityFeed';
 import Chart from '@/components/dashboard/Chart';
 import DailySummaryCard from '@/components/dashboard/DailySummaryCard';
 import { SavedPostsPanel } from '@/components/dashboard/SavedPostsPanel';
+import BillingPanel from '@/components/dashboard/BillingPanel';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Input, { TextArea } from '@/components/ui/Input';
@@ -391,6 +392,9 @@ export default function Dashboard() {
 
   const renderContent = () => {
     switch (activeTab) {
+      case 'billing':
+        return <BillingPanel isAdmin={isAdmin} subscriptionStatus={subscriptionStatus} trialDaysRemaining={trialDaysRemaining} />;
+
       case 'saved-posts':
         return <SavedPostsPanel />;
       
@@ -1347,31 +1351,40 @@ export default function Dashboard() {
         </div>
       )}
 
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} systemActive={systemActive} isAdmin={isAdmin} />
+      <Sidebar 
+        activeTab={activeTab} 
+        onTabChange={setActiveTab} 
+        systemActive={systemActive} 
+        isAdmin={isAdmin}
+        subscriptionStatus={subscriptionStatus}
+        trialDaysRemaining={trialDaysRemaining}
+      />
 
       <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--dash-bg)' }}>
         <Header title={activeTab} sessionConnected={true} />
 
-        {/* ── Trial Countdown Banner ── */}
-        {!subscriptionExpired && subscriptionStatus === 'TRIAL' && trialDaysRemaining <= 10 && (
+        {/* ── Trial Countdown Banner (Always shown during trial) ── */}
+        {!subscriptionExpired && subscriptionStatus === 'TRIAL' && !isAdmin && (
           <div style={{
             padding: '10px 20px',
             background: trialDaysRemaining <= 3
               ? 'linear-gradient(90deg, rgba(255,59,48,0.15), rgba(255,107,53,0.15))'
-              : 'linear-gradient(90deg, rgba(255,214,10,0.12), rgba(255,159,10,0.12))',
+              : trialDaysRemaining <= 10 
+              ? 'linear-gradient(90deg, rgba(255,214,10,0.12), rgba(255,159,10,0.12))'
+              : 'linear-gradient(90deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))',
             borderBottom: '1px solid rgba(255,255,255,0.06)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
             fontSize: '13px', fontWeight: 500
           }}>
-            <span>⚠️</span>
-            <span style={{ color: trialDaysRemaining <= 3 ? '#ff3b30' : '#ff9f0a' }}>
+            <span>{trialDaysRemaining <= 10 ? '⚠️' : '⏱️'}</span>
+            <span style={{ color: trialDaysRemaining <= 3 ? '#ff3b30' : trialDaysRemaining <= 10 ? '#ff9f0a' : 'var(--text-secondary)' }}>
               {trialDaysRemaining} day{trialDaysRemaining !== 1 ? 's' : ''} remaining in your free trial
             </span>
             <span style={{ color: 'var(--text-secondary)' }}>—</span>
-            <a href="mailto:sddeeoossa@gmail.com?subject=Nexora%20Account%20Activation"
-              style={{ color: '#0a84ff', textDecoration: 'none', fontWeight: 600 }}>
+            <button onClick={() => setActiveTab('billing')}
+              style={{ background: 'none', border: 'none', color: '#0a84ff', fontWeight: 600, cursor: 'pointer', padding: 0 }}>
               Upgrade Now
-            </a>
+            </button>
           </div>
         )}
 
