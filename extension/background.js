@@ -328,7 +328,10 @@ async function _checkJobsInner() {
     if (settings.searchOnlyMode) {
       let searchConfig = [];
       try {
-        searchConfig = JSON.parse(settings.searchConfigJson || "[]");
+        const rawList = JSON.parse(settings.searchConfigJson || "[]").flat(Infinity).filter(k => typeof k === 'string' && k.trim().length > 0);
+        for (let i = 0; i < rawList.length; i += 3) {
+          searchConfig.push(rawList.slice(i, i + 3));
+        }
       } catch (e) {
         console.warn("⚠️ [Worker] Failed to parse searchConfigJson", e);
       }
