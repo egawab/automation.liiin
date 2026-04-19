@@ -47,8 +47,7 @@ export default function Dashboard() {
   const [newTopic, setNewTopic] = useState('');
 
   // Search-Only Config UI State
-  const [searchConfig, setSearchConfig] = useState<string[][]>([['', '']]);
-  const [searchTargetCycles, setSearchTargetCycles] = useState<number>(1);
+  const [searchConfigText, setSearchConfigText] = useState<string>('');
   const [isSearchOnly, setIsSearchOnly] = useState<boolean>(true);
   const hasLoadedSettings = useRef(false);
 
@@ -76,8 +75,7 @@ export default function Dashboard() {
         try {
           const parsed = JSON.parse(settingsData.searchConfigJson || "[]");
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setSearchConfig(parsed);
-            setSearchTargetCycles(parsed.length);
+            setSearchConfigText(parsed.flat(Infinity).filter((k: string) => typeof k === 'string' && k.trim().length > 0).join('\n'));
           }
         } catch (e) {}
         hasLoadedSettings.current = true;
@@ -164,14 +162,16 @@ export default function Dashboard() {
             parsedSearch = JSON.parse(freshSettings.searchConfigJson || "[]");
           } catch(e) {}
           
+          let validKeywords = [];
+          
           if (!parsedSearch || parsedSearch.length === 0) {
-            alert("No Search Configuration found!\n\nPlease scroll down to 'Agent Configuration' -> 'Operating Mode', build your search cycles, and click 'Save Search Configuration' before starting.");
+            alert("No Search Configuration found!\n\nPlease scroll down to 'Operating Mode', paste your keywords into the Bulk Target Keywords box, and click 'Save All Configurations' before starting.");
             return;
           }
           
-          const validKeywords = parsedSearch.flat().filter((kw: string) => typeof kw === 'string' && kw.trim().length > 0);
+          validKeywords = parsedSearch.flat(Infinity).filter((kw: string) => typeof kw === 'string' && kw.trim().length > 0);
           if (validKeywords.length === 0) {
-            alert("Your saved Search Configuration has 0 valid keywords.\n\nPlease define your keywords per cycle and click 'Save Search Configuration' before starting.");
+            alert("Your saved Search Configuration has 0 valid keywords.\n\nPlease paste your keywords into the Bulk Target Keywords box and click 'Save All Configurations' before starting.");
             return;
           }
         }
@@ -329,7 +329,7 @@ export default function Dashboard() {
       proxyPass: formData.get('proxyPass') as string || null,
       
       // Search UI
-      searchConfigJson: JSON.stringify(searchConfig)
+      searchConfigJson: JSON.stringify(searchConfigText.split('\n').map(k => k.trim()).filter(k => k.length > 0))
     };
     await fetch('/api/settings', {
       method: 'POST',
@@ -935,136 +935,25 @@ export default function Dashboard() {
                         <div>
                           <h4 className="text-caption-bold text-primary flex items-center gap-2">
                             <Shield className="w-4 h-4 text-apple-blue" />
-                            Search Cycles & Keywords
+                            Bulk Target Keywords
                           </h4>
-                          <p className="text-micro text-secondary mt-1">Configure your discovery loops. We recommend 2 cycles to maximize daily safety limits.</p>
-                        </div>
-                        <div className="flex gap-3 items-center">
-                          <Button 
-                            type="button" 
-                            variant="secondary" 
-                            size="sm"
-                            onClick={() => {
-                              setSearchTargetCycles(2);
-                              setSearchConfig([['saas', 'sales'], ['b2b', 'startups']]);
-                            }}
-                          >
-                            Apply Safe Defaults
-                          </Button>
-                          <div className="flex items-center gap-2">
-                            <label className="text-micro-bold text-secondary uppercase">Cycles</label>
-                            <select
-                              value={searchTargetCycles}
-                              onChange={(e) => {
-                                const val = parseInt(e.target.value);
-                                setSearchTargetCycles(val);
-                                setSearchConfig(prev => {
-                                  let newArr = [...prev];
-                                  if (val > newArr.length) {
-                                    while (newArr.length < val) newArr.push(['', '']);
-                                  } else {
-                                    newArr = newArr.slice(0, val);
-                                  }
-                                  return newArr;
-                                });
-                              }}
-                              className="px-3 py-1.5 dash-input outline-none rounded-md w-24"
-                            >
-                              <option value={1}>1 Cycle</option>
-                              <option value={2}>2 Cycles</option>
-                              <option value={3}>3 Cycles</option>
-                            </select>
-                          </div>
+                          <p className="text-micro text-secondary mt-1">Paste your unlimited keyword list here, one per line. The worker will naturally sort, cycle, and scrape them.</p>
                         </div>
                       </div>
 
-                      {/* Timing Transparency Panel */}
-                      <div className="bg-surface-elevated border border-border-subtle rounded-lg p-4 mb-6 flex gap-6 text-sm text-secondary">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">⏱️</span> 
-                          <span><strong>3-5 mins</strong> between keywords</span>
+                      {/* Bulk Text Area */}
+                      <div className="dash-recessed p-5 rounded-2xl border-2 border-border-default hover:border-apple-blue/50 transition-colors mb-6">
+                        <textarea 
+                          value={searchConfigText}
+                          onChange={(e) => setSearchConfigText(e.target.value)}
+                          placeholder={"saas sales\nb2b marketing\nstartup founders\n..."}
+                          className="w-full h-64 px-4 py-3 bg-transparent text-sm text-primary outline-none resize-y font-mono"
+                          style={{ minHeight: '150px' }}
+                        />
+                        <div className="mt-3 flex justify-between items-center text-xs text-secondary px-1 border-t border-border-default/50 pt-3">
+                          <span>Total detected: <strong className="text-apple-blue">{searchConfigText.split('\n').filter(k => k.trim()).length}</strong> keywords</span>
+                          <span>(One keyword per line)</span>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">💤</span> 
-                          <span><strong>15 mins</strong> between cycles</span>
-                        </div>
-                      </div>
-
-                      {/* Keyword Blocks */}
-                      <div className="space-y-6">
-                        {Array.from({ length: searchTargetCycles }).map((_, cycleIndex) => {
-                          const cycleKeywords = searchConfig[cycleIndex] || [''];
-                          const maxKeywords = 3;
-                          return (
-                            <div key={`search-cycle-${cycleIndex}`} className="dash-recessed p-5 rounded-2xl border-2 border-border-default hover:border-apple-blue/50 transition-colors">
-                              <div className="flex justify-between items-center mb-4">
-                                <div className="flex items-center gap-3">
-                                  <h4 className="text-base font-black text-primary uppercase tracking-widest flex items-center gap-2">
-                                    <span className="bg-apple-blue/20 text-apple-blue w-6 h-6 rounded-full flex items-center justify-center text-xs">
-                                      {cycleIndex + 1}
-                                    </span>
-                                    Cycle {cycleIndex + 1}
-                                  </h4>
-                                  <Badge variant={cycleKeywords.length >= maxKeywords ? "error" : "success"} size="sm">
-                                    {cycleKeywords.length} / {maxKeywords} Keywords
-                                  </Badge>
-                                </div>
-                                <Button 
-                                  type="button" 
-                                  variant="secondary" 
-                                  size="sm" 
-                                  disabled={cycleKeywords.length >= maxKeywords}
-                                  onClick={() => {
-                                    if (cycleKeywords.length >= maxKeywords) return;
-                                    const newConfig = [...searchConfig];
-                                    newConfig[cycleIndex] = [...cycleKeywords, ''];
-                                    setSearchConfig(newConfig);
-                                  }}
-                                  leftIcon={<Plus className="w-3 h-3" />}
-                                >
-                                  Add Keyword
-                                </Button>
-                              </div>
-                              
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                {cycleKeywords.map((kw, kwIndex) => (
-                                  <div key={`cycle-${cycleIndex}-kw-${kwIndex}`} className="flex items-center gap-2 relative bg-surface-elevated rounded-lg p-1 border border-border-default/50 focus-within:border-apple-blue">
-                                    <span className="text-xs font-bold text-secondary pl-3 uppercase tracking-wider">
-                                       KW {kwIndex + 1}:
-                                    </span>
-                                    <input 
-                                      value={kw}
-                                      onChange={(e) => {
-                                        const newConfig = [...searchConfig];
-                                        const newCyc = [...newConfig[cycleIndex]];
-                                        newCyc[kwIndex] = e.target.value;
-                                        newConfig[cycleIndex] = newCyc;
-                                        setSearchConfig(newConfig);
-                                      }}
-                                      placeholder="e.g. b2b outbound"
-                                      className="flex-1 px-3 py-2 bg-transparent text-sm text-primary outline-none" 
-                                    />
-                                    {cycleKeywords.length > 1 && (
-                                      <button 
-                                        type="button"
-                                        onClick={() => {
-                                          const newConfig = [...searchConfig];
-                                          const newCyc = [...newConfig[cycleIndex]];
-                                          newCyc.splice(kwIndex, 1);
-                                          newConfig[cycleIndex] = newCyc;
-                                          setSearchConfig(newConfig);
-                                        }}
-                                        className="text-tertiary hover:text-error transition-colors p-2 rounded-md hover:bg-error/10 mr-1"
-                                      >
-                                        <Trash2 className="w-4 h-4" />
-                                      </button>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })}
                       </div>
 
                       {/* Integrated Search Limits & Pacing */}

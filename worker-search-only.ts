@@ -1147,17 +1147,20 @@ async function getActiveUserSettings(): Promise<WorkerSettings | null> {
 }
 
 async function getActiveKeywords(userId: string): Promise<KeywordData[]> {
-  const keywords = await prisma.keyword.findMany({
-    where: {
-      userId,
-      active: true
+  const settings = await prisma.settings.findUnique({ where: { userId } });
+  if (!settings || !settings.searchConfigJson) return [];
+  
+  try {
+    const parsed = JSON.parse(settings.searchConfigJson);
+    let rawList: string[] = [];
+    if (Array.isArray(parsed)) {
+      rawList = parsed.flat(Infinity);
     }
-  });
-
-  return keywords.map(k => ({
-    id: k.id,
-    keyword: k.keyword
-  }));
+    const cleanList = rawList.filter(k => typeof k === 'string' && k.trim().length > 0);
+    return cleanList.map((k, i) => ({ id: `kw-${i}`, keyword: k.trim() }));
+  } catch(e) {
+    return [];
+  }
 }
 
 async function isSystemStillActive(userId: string): Promise<boolean> {
