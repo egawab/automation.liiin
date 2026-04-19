@@ -20,14 +20,14 @@ const nextConfig: NextConfig = {
     ],
   },
   transpilePackages: ['motion'],
-  // Ensure .rar extension downloads are served with correct headers
+  // Ensure extension download is served with correct headers
   async headers() {
     return [
       {
-        source: '/finalextension.rar',
+        source: '/finalextension.zip',
         headers: [
-          { key: 'Content-Type', value: 'application/x-rar-compressed' },
-          { key: 'Content-Disposition', value: 'attachment; filename="finalextension.rar"' },
+          { key: 'Content-Type', value: 'application/zip' },
+          { key: 'Content-Disposition', value: 'attachment; filename="finalextension.zip"' },
         ],
       },
     ];
