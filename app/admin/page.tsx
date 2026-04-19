@@ -129,6 +129,7 @@ export default function AdminDashboard() {
         body: JSON.stringify({ action: 'DELETE', promoId })
       });
       if (res.ok) { showToast('Deleted'); fetchData(); }
+    } catch (e) {}
     setActionLoading(null);
   };
 
@@ -396,7 +397,7 @@ export default function AdminDashboard() {
                 )}
               </div>
             </motion.div>
-          ) : (
+          ) : activeSection === 'promos' ? (
             <motion.div key="promos" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
               {/* Create Promo Card */}
               <div style={{
