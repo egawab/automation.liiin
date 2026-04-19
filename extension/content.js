@@ -622,6 +622,22 @@ window.__linkedInExtractorReady = true;
     heartbeat('Phase0-Hydration', '⏳ Hydrating page...');
     await wait(1000, 1500);
 
+    // ── Pre-Extraction Identity Binding ──
+    let linkedInProfileId = 'Unknown';
+    try {
+      const meLink = document.querySelector('a.global-nav__primary-link--me');
+      if (meLink && meLink.href) {
+        // e.g. https://www.linkedin.com/in/john-doe-12345/
+        const match = meLink.href.match(/\/in\/([^\/\?]+)/);
+        if (match) {
+          linkedInProfileId = match[1];
+          console.log(`[Ext] 🔗 LinkedIn Profile Auto-Detected: ${linkedInProfileId}`);
+          try { chrome.runtime.sendMessage({ action: 'IDENTITY_DETECTED', linkedInProfileId }); } catch(e) {}
+        }
+      }
+    } catch(e) {}
+    // If we fail to get it from the link, it might be heavily cached. We will pass it as null or Unknown.
+
     if (!window.location.href.includes('/content/')) {
       const btn = Array.from(document.querySelectorAll('button'))
         .find(b => b.innerText.trim() === 'Posts' || b.innerText.includes('Posts'));
@@ -1108,7 +1124,7 @@ window.__linkedInExtractorReady = true;
       console.log(`[Ext] ═══ PHASE 4: Sync & Report ═══`);
       heartbeat('Phase4-Sync', '📤 Phase 4: Syncing results...');
 
-      await syncAllPosts(allPosts, keyword, dashboardUrl, userId, minL, minC);
+      await syncAllPosts(allPosts, keyword, dashboardUrl, userId, minL, minC, linkedInProfileId);
 
       console.log(`[Ext] ═══ PIPELINE v7 COMPLETE: ${commentsPostedThisCycle}/${requiredComments} comments posted ═══`);
 
@@ -1123,7 +1139,7 @@ window.__linkedInExtractorReady = true;
     } else {
       // Search-only mode: just sync posts
       console.log(`[Ext] 📜 Search-only mode. Syncing ${allPosts.length} discovered posts.`);
-      await syncAllPosts(allPosts, keyword, dashboardUrl, userId, minL, minC);
+      await syncAllPosts(allPosts, keyword, dashboardUrl, userId, minL, minC, linkedInProfileId);
       safeSend({
         action: 'JOB_COMPLETED',
         commentsPostedCount: 0,
@@ -1134,7 +1150,7 @@ window.__linkedInExtractorReady = true;
   }
 
   // ─── Sync helper ───
-  async function syncAllPosts(allPosts, keyword, dashboardUrl, userId, minL, minC) {
+  async function syncAllPosts(allPosts, keyword, dashboardUrl, userId, minL, minC, linkedInProfileId) {
     const syncData = allPosts.map(p => ({
       url: p.url,
       likes: p.likes,
@@ -1163,18 +1179,18 @@ window.__linkedInExtractorReady = true;
     }
 
     if (finalSync.length > 0) {
-      await syncToDashboard(finalSync, keyword, dashboardUrl, userId);
+      await syncToDashboard(finalSync, keyword, dashboardUrl, userId, linkedInProfileId);
     } else {
-      await syncToDashboard([], 'DEBUG_FILTER_EMPTY', dashboardUrl, userId, `ALL:${syncData.length}`);
+      await syncToDashboard([], 'DEBUG_FILTER_EMPTY', dashboardUrl, userId, linkedInProfileId, `ALL:${syncData.length}`);
     }
   }
 
-  async function syncToDashboard(posts, keyword, dashboardUrl, userId, debug) {
+  async function syncToDashboard(posts, keyword, dashboardUrl, userId, linkedInProfileId, debug) {
     return new Promise((resolve) => {
       try {
         chrome.runtime.sendMessage({
           action: 'SYNC_RESULTS',
-          posts, keyword, dashboardUrl, userId, debugInfo: debug || null
+          posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo: debug || null
         }, () => {
           if (chrome.runtime.lastError) {}
           resolve();

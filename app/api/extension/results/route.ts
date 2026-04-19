@@ -21,7 +21,33 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { keyword, posts, debugInfo } = body;
+    const { keyword, posts, linkedInProfileId, debugInfo } = body;
+
+    // ── LinkedIn Identity Auto-Binding ──
+    if (linkedInProfileId && linkedInProfileId !== 'Unknown') {
+      try {
+        const user = await prisma.user.findUnique({ where: { id: userId }, select: { linkedInProfileId: true } });
+        if (user && !user.linkedInProfileId) {
+          // First time: bind this LinkedIn identity to this account
+          const existingBinding = await prisma.user.findUnique({ where: { linkedInProfileId } });
+          if (existingBinding && existingBinding.id !== userId) {
+            // Another account already uses this LinkedIn profile
+            return setCorsHeaders(NextResponse.json({
+              error: 'DUPLICATE_IDENTITY',
+              message: 'This LinkedIn profile is already linked to another account.'
+            }, { status: 403 }));
+          }
+          await prisma.user.update({ where: { id: userId }, data: { linkedInProfileId } });
+          console.log(`[Identity] 🔗 Bound LinkedIn "${linkedInProfileId}" to user ${userId}`);
+        } else if (user && user.linkedInProfileId && user.linkedInProfileId !== linkedInProfileId) {
+          // Mismatch: this user is bound to a different LinkedIn profile
+          return setCorsHeaders(NextResponse.json({
+            error: 'IDENTITY_MISMATCH',
+            message: 'Your account is bound to a different LinkedIn profile. Contact support.'
+          }, { status: 403 }));
+        }
+      } catch(e) { console.error('[Identity] Binding error:', e); }
+    }
 
     if (debugInfo) {
       console.log(`[Ext-Diagnostic] User ${userId} reported empty page for ${keyword}. Snippet:`, debugInfo);

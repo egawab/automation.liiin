@@ -743,13 +743,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'IDENTITY_DETECTED') {
+    chrome.storage.local.set({ linkedInProfileId: message.linkedInProfileId });
+    if (sendResponse) sendResponse({ ok: true });
+    return true;
+  }
+
   if (message.action === 'SYNC_RESULTS') {
-    const { posts, keyword, dashboardUrl, userId, debugInfo } = message;
-    console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts...`);
+    const { posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo } = message;
+    console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts... (LinkedIn ID: ${linkedInProfileId || 'N/A'})`);
     fetch(`${dashboardUrl}/api/extension/results`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-      body: JSON.stringify({ keyword, posts, debugInfo })
+      body: JSON.stringify({ keyword, posts, linkedInProfileId, debugInfo })
     }).catch(e => console.error("❌ [Worker] Relay failed:", e));
     if (sendResponse) sendResponse({ ok: true });
     return true;

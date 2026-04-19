@@ -20,6 +20,41 @@ export async function GET(req: Request) {
       return setCorsHeaders(NextResponse.json({ error: 'Unauthorized: Missing User ID header (x-extension-token)' }, { status: 401 }));
     }
 
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { subscriptionStatus: true, trialEndsAt: true, subscriptionEndsAt: true }
+    });
+
+    if (!user) {
+      return setCorsHeaders(NextResponse.json({ error: 'User not found' }, { status: 404 }));
+    }
+
+    // ── Subscription Gatekeeper ──
+    const now = new Date();
+    if (user.subscriptionStatus === 'TRIAL' && user.trialEndsAt && now > user.trialEndsAt) {
+      return setCorsHeaders(NextResponse.json({
+        active: false,
+        subscriptionExpired: true,
+        message: 'Your 30-day free trial has ended. Please contact sddeeoossa@gmail.com to activate your account.'
+      }, { status: 200 }));
+    }
+    if (user.subscriptionStatus === 'EXPIRED') {
+      return setCorsHeaders(NextResponse.json({
+        active: false,
+        subscriptionExpired: true,
+        message: 'Your subscription has expired. Please contact sddeeoossa@gmail.com to renew.'
+      }, { status: 200 }));
+    }
+    if (user.subscriptionStatus === 'ACTIVE' && user.subscriptionEndsAt && now > user.subscriptionEndsAt) {
+      // Auto-expire
+      await prisma.user.update({ where: { id: userId }, data: { subscriptionStatus: 'EXPIRED' } });
+      return setCorsHeaders(NextResponse.json({
+        active: false,
+        subscriptionExpired: true,
+        message: 'Your subscription has expired. Please contact sddeeoossa@gmail.com to renew.'
+      }, { status: 200 }));
+    }
+
     const settings = await prisma.settings.findUnique({
       where: { userId }
     });

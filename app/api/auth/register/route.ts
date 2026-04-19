@@ -21,11 +21,17 @@ export async function POST(req: Request) {
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
+        // Calculate 30-day trial period
+        const trialLimit = new Date();
+        trialLimit.setDate(trialLimit.getDate() + 30);
+
         // Create user with default settings
         const user = await prisma.user.create({
             data: {
                 email,
-                password: hashedPassword
+                password: hashedPassword,
+                subscriptionStatus: "TRIAL",
+                trialEndsAt: trialLimit
             }
         });
 

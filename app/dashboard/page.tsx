@@ -54,6 +54,15 @@ export default function Dashboard() {
   // Wizard State
   const [showWizard, setShowWizard] = useState(false);
 
+  // Subscription State
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string>('TRIAL');
+  const [trialDaysRemaining, setTrialDaysRemaining] = useState<number>(30);
+  const [subscriptionExpired, setSubscriptionExpired] = useState(false);
+  const [activationCode, setActivationCode] = useState('');
+  const [activationLoading, setActivationLoading] = useState(false);
+  const [activationMessage, setActivationMessage] = useState('');
+  const [linkedInProfileId, setLinkedInProfileId] = useState<string | null>(null);
+
   const fetchData = async () => {
     // Fetch Settings
     const setRes = await fetch('/api/settings');
@@ -118,6 +127,18 @@ export default function Dashboard() {
       const apRes = await fetch('/api/autoposts');
       if (apRes.ok) setAutoPosts(await apRes.json());
     }
+
+    // Fetch Subscription Status
+    try {
+      const subRes = await fetch('/api/billing/status');
+      if (subRes.ok) {
+        const subData = await subRes.json();
+        setSubscriptionStatus(subData.status);
+        setTrialDaysRemaining(subData.daysRemaining);
+        setLinkedInProfileId(subData.linkedInProfileId);
+        setSubscriptionExpired(subData.status === 'EXPIRED' || subData.daysRemaining === 0);
+      }
+    } catch(e) {}
   };
 
   useEffect(() => {
@@ -338,6 +359,32 @@ export default function Dashboard() {
     });
     alert('✅ Settings Saved Successfully!');
     fetchData();
+  };
+
+  const handleActivation = async () => {
+    if (!activationCode.trim()) return;
+    setActivationLoading(true);
+    setActivationMessage('');
+    try {
+      const res = await fetch('/api/billing/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: activationCode.trim() })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setActivationMessage('✅ ' + data.message);
+        setSubscriptionExpired(false);
+        setSubscriptionStatus('ACTIVE');
+        setActivationCode('');
+        fetchData();
+      } else {
+        setActivationMessage('❌ ' + (data.error || 'Activation failed'));
+      }
+    } catch(e) {
+      setActivationMessage('❌ Network error. Please try again.');
+    }
+    setActivationLoading(false);
   };
 
   const renderContent = () => {
@@ -1219,10 +1266,113 @@ export default function Dashboard() {
       <div id="nexora-connect-data" data-user-id={settings.userId || ''} data-dashboard-url={typeof window !== 'undefined' ? window.location.origin : ''} style={{ display: 'none' }} />
       <OnboardingWizard isOpen={showWizard} onClose={() => setShowWizard(false)} loadStarterPack={loadStarterPack} isDeployingPack={isDeployingPack} />
 
+      {/* ── Subscription Expiration Overlay ── */}
+      {subscriptionExpired && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div style={{
+            background: 'var(--dash-surface)', borderRadius: '24px',
+            padding: '48px', maxWidth: '520px', width: '90%',
+            border: '1px solid rgba(255,255,255,0.08)',
+            boxShadow: '0 24px 80px rgba(0,0,0,0.5)',
+            textAlign: 'center'
+          }}>
+            <div style={{
+              width: '72px', height: '72px', borderRadius: '50%',
+              background: 'linear-gradient(135deg, #ff6b35, #ff3b30)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              margin: '0 auto 24px', fontSize: '32px'
+            }}>⏰</div>
+            <h2 style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '12px' }}>
+              {subscriptionStatus === 'TRIAL' ? 'Free Trial Ended' : 'Subscription Expired'}
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '15px', lineHeight: 1.6, marginBottom: '28px' }}>
+              Your {subscriptionStatus === 'TRIAL' ? '30-day free trial' : 'yearly subscription'} has expired.
+              To continue using Nexora, please contact us to activate your account.
+            </p>
+            <a href="mailto:sddeeoossa@gmail.com?subject=Nexora%20Account%20Activation&body=Hi%2C%20I%20would%20like%20to%20activate%20my%20Nexora%20account."
+              style={{
+                display: 'inline-block', padding: '14px 32px', borderRadius: '14px',
+                background: 'linear-gradient(135deg, #0a84ff, #5e5ce6)', color: '#fff',
+                fontWeight: 600, fontSize: '15px', textDecoration: 'none',
+                marginBottom: '24px', transition: 'transform 0.2s'
+              }}>
+              📧 Contact Us — sddeeoossa@gmail.com
+            </a>
+
+            <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginTop: '8px' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '12px' }}>
+                Already have an activation code?
+              </p>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  value={activationCode}
+                  onChange={e => setActivationCode(e.target.value.toUpperCase())}
+                  placeholder="Enter activation code"
+                  style={{
+                    flex: 1, padding: '12px 16px', borderRadius: '12px',
+                    background: 'var(--dash-surface-2)', border: '1px solid rgba(255,255,255,0.1)',
+                    color: 'var(--text-primary)', fontSize: '14px', outline: 'none',
+                    fontFamily: 'monospace', letterSpacing: '2px', textTransform: 'uppercase'
+                  }}
+                />
+                <button
+                  onClick={handleActivation}
+                  disabled={activationLoading || !activationCode.trim()}
+                  style={{
+                    padding: '12px 24px', borderRadius: '12px',
+                    background: activationLoading ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #30d158, #34c759)',
+                    color: '#fff', fontWeight: 600, fontSize: '14px', border: 'none', cursor: 'pointer',
+                    opacity: activationLoading || !activationCode.trim() ? 0.5 : 1
+                  }}>
+                  {activationLoading ? '...' : 'Activate'}
+                </button>
+              </div>
+              {activationMessage && (
+                <p style={{
+                  marginTop: '12px', fontSize: '13px',
+                  color: activationMessage.startsWith('✅') ? '#30d158' : '#ff3b30'
+                }}>
+                  {activationMessage}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} systemActive={systemActive} />
 
       <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--dash-bg)' }}>
         <Header title={activeTab} sessionConnected={true} />
+
+        {/* ── Trial Countdown Banner ── */}
+        {!subscriptionExpired && subscriptionStatus === 'TRIAL' && trialDaysRemaining <= 10 && (
+          <div style={{
+            padding: '10px 20px',
+            background: trialDaysRemaining <= 3
+              ? 'linear-gradient(90deg, rgba(255,59,48,0.15), rgba(255,107,53,0.15))'
+              : 'linear-gradient(90deg, rgba(255,214,10,0.12), rgba(255,159,10,0.12))',
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+            fontSize: '13px', fontWeight: 500
+          }}>
+            <span>⚠️</span>
+            <span style={{ color: trialDaysRemaining <= 3 ? '#ff3b30' : '#ff9f0a' }}>
+              {trialDaysRemaining} day{trialDaysRemaining !== 1 ? 's' : ''} remaining in your free trial
+            </span>
+            <span style={{ color: 'var(--text-secondary)' }}>—</span>
+            <a href="mailto:sddeeoossa@gmail.com?subject=Nexora%20Account%20Activation"
+              style={{ color: '#0a84ff', textDecoration: 'none', fontWeight: 600 }}>
+              Upgrade Now
+            </a>
+          </div>
+        )}
+
         <main className="flex-1 overflow-y-auto p-6 md:p-8 relative scrollbar-thin">
           <div className="max-w-[1400px] mx-auto pb-20">
             <AnimatePresence mode="wait">

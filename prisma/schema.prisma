@@ -9,10 +9,14 @@ datasource db {
 }
 
 model User {
-  id         String      @id @default(uuid())
-  email      String      @unique
-  password   String
-  createdAt  DateTime    @default(now())
+  id                 String      @id @default(uuid())
+  email              String      @unique
+  password           String
+  linkedInProfileId  String?     @unique
+  subscriptionStatus String      @default("TRIAL") // TRIAL, ACTIVE, EXPIRED
+  trialEndsAt        DateTime?
+  subscriptionEndsAt DateTime?
+  createdAt          DateTime    @default(now())
   
   settings   Settings?
   keywords   Keyword[]
@@ -136,3 +140,15 @@ model SavedPost {
 
 
 
+
+
+model PromoCode {
+  id            String    @id @default(uuid())
+  code          String    @unique
+  discountType  String    @default("PERCENTAGE") // PERCENTAGE or FIXED (or ACTIVATION for 100% free)
+  discountValue Float     @default(100)
+  maxUses       Int       @default(1)
+  currentUses   Int       @default(0)
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+}
