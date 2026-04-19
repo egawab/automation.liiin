@@ -22,11 +22,35 @@ export async function GET(req: Request) {
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { isAdmin: true, subscriptionStatus: true, trialEndsAt: true, subscriptionEndsAt: true }
+      select: { isAdmin: true, subscriptionStatus: true, trialEndsAt: true, subscriptionEndsAt: true, deviceId: true }
     });
 
     if (!user) {
       return setCorsHeaders(NextResponse.json({ error: 'User not found' }, { status: 404 }));
+    }
+
+    const extDeviceId = req.headers.get('x-device-id');
+    if (extDeviceId && extDeviceId.length > 10 && !extDeviceId.includes('fallback_')) {
+      const conflictingUses = await prisma.user.count({
+          where: { 
+            deviceId: extDeviceId,
+            id: { not: userId }
+          }
+      });
+      if (conflictingUses > 0 && user.subscriptionStatus === 'TRIAL' && !user.isAdmin) {
+         // Auto-expire to prevent "cross-device registration hopping"
+         await prisma.user.update({ where: { id: userId }, data: { subscriptionStatus: 'EXPIRED', deviceId: extDeviceId } });
+         return setCorsHeaders(NextResponse.json({
+           active: false,
+           subscriptionExpired: true,
+           message: 'A free trial was already claimed on this device. Please log in to your original account to upgrade to Pro.'
+         }, { status: 200 }));
+      }
+      
+      // Lazily bind deviceId if user registered without one (e.g. adblocker)
+      if (!user.deviceId && conflictingUses === 0) {
+         await prisma.user.update({ where: { id: userId }, data: { deviceId: extDeviceId } });
+      }
     }
 
     // ── Subscription Gatekeeper (admins are exempt) ──

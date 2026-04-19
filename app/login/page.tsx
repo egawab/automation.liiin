@@ -7,6 +7,7 @@ import { motion } from 'motion/react';
 import { MessageSquare, PenTool, Sparkles, Mail, Lock, ArrowRight, Shield, Sun, Moon } from 'lucide-react';
 import { showToast } from '@/components/ui/Toast';
 import { useTheme } from '@/components/theme-provider';
+import { generateDeviceFingerprint } from '@/lib/fingerprint';
 
 function LoginFormFallback() {
     return (
@@ -27,8 +28,14 @@ function LoginForm() {
     const [loading, setLoading] = useState(false);
     const { theme, toggleTheme } = useTheme();
 
+    const [deviceId, setDeviceId] = useState('');
+
     useEffect(() => {
         setIsLogin(searchParams.get('mode') !== 'register');
+        (async () => {
+            const fp = await generateDeviceFingerprint();
+            setDeviceId(fp);
+        })();
     }, [searchParams]);
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -41,7 +48,7 @@ function LoginForm() {
             const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password }),
+                body: JSON.stringify({ email, password, deviceId }),
                 credentials: 'include'
             });
 

@@ -6,7 +6,7 @@ import { JWT_SECRET } from '@/lib/auth';
 
 export async function POST(req: Request) {
     try {
-        const { email, password } = await req.json();
+        const { email, password, deviceId } = await req.json();
 
         if (!email || !password) {
             return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
@@ -18,6 +18,18 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'User already exists' }, { status: 400 });
         }
 
+        // Anti-Abuse Fingerprint Checking
+        let isTrialVoid = false;
+        if (deviceId && deviceId.length > 10 && !deviceId.includes('fallback_unknown')) {
+            const previousUses = await prisma.user.count({
+                where: { deviceId }
+            });
+            if (previousUses > 0) {
+                isTrialVoid = true;
+                console.log(`[Anti-Abuse] Fingerprint ${deviceId} already claimed a trial. Revoking free trial for ${email}.`);
+            }
+        }
+
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -25,13 +37,14 @@ export async function POST(req: Request) {
         const trialLimit = new Date();
         trialLimit.setDate(trialLimit.getDate() + 30);
 
-        // Create user with default settings
+        // Create user with default settings OR instantly expired if abusing
         const user = await prisma.user.create({
             data: {
                 email,
                 password: hashedPassword,
-                subscriptionStatus: "TRIAL",
-                trialEndsAt: trialLimit
+                deviceId: deviceId && deviceId.length > 5 ? deviceId : null,
+                subscriptionStatus: isTrialVoid ? "EXPIRED" : "TRIAL",
+                trialEndsAt: isTrialVoid ? new Date(0) : trialLimit
             }
         });
 

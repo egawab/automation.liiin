@@ -14,6 +14,38 @@
 console.log("[Worker] ═══ Safety Worker v6 (Stable) Initialized ═══");
 
 // ── Persistent State (chrome.storage.local) ──
+let cachedDeviceFingerprint = null;
+async function getExtensionFingerprint() {
+  if (cachedDeviceFingerprint) return cachedDeviceFingerprint;
+  try {
+    const { extFingerprint } = await chrome.storage.local.get(['extFingerprint']);
+    if (extFingerprint) {
+      cachedDeviceFingerprint = extFingerprint;
+      return cachedDeviceFingerprint;
+    }
+    const offscreen = new OffscreenCanvas(200, 50);
+    const ctx = offscreen.getContext('2d');
+    ctx.textBaseline = "top"; ctx.font = "14px 'Arial'"; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "#f60"; ctx.fillRect(125,1,62,20);
+    ctx.fillStyle = "#069"; ctx.fillText("Nexora \ud83d\ude03", 2, 15);
+    ctx.fillStyle = "rgba(102, 204, 0, 0.7)"; ctx.fillText("Nexora \ud83d\ude03", 4, 17);
+    const blob = await offscreen.convertToBlob();
+    const buffer = await blob.arrayBuffer();
+    const nav = navigator;
+    const rawString = nav.userAgent + '|' + nav.language + '|' + (nav.hardwareConcurrency || '');
+    const txtBuf = new TextEncoder().encode(rawString);
+    const combined = new Uint8Array(buffer.byteLength + txtBuf.byteLength);
+    combined.set(new Uint8Array(buffer), 0);
+    combined.set(txtBuf, buffer.byteLength);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', combined);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    cachedDeviceFingerprint = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    await chrome.storage.local.set({ extFingerprint: cachedDeviceFingerprint });
+    return cachedDeviceFingerprint;
+  } catch(e) {
+    return 'fallback_ext_' + Math.random().toString(36);
+  }
+}
 async function loadState() {
   return chrome.storage.local.get({
     isJobRunning: false,
@@ -228,8 +260,9 @@ async function _checkJobsInner() {
   }
 
   try {
+    const deviceId = await getExtensionFingerprint();
     const response = await fetch(`${dashboardUrl}/api/extension/jobs`, {
-      headers: { 'x-extension-token': userId, 'Cache-Control': 'no-cache' }
+      headers: { 'x-extension-token': userId, 'x-device-id': deviceId, 'Cache-Control': 'no-cache' }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
@@ -728,9 +761,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       showPremiumToast('Comment Posted', `Successfully posted comment #${newDaily}/15 today (${newHourly}/4 this hour)!`, false);
       const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
       if (config.dashboardUrl && config.userId) {
+        const deviceId = await getExtensionFingerprint();
         fetch(`${config.dashboardUrl}/api/extension/action`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-extension-token': config.userId },
+          headers: { 'Content-Type': 'application/json', 'x-extension-token': config.userId, 'x-device-id': deviceId },
           body: JSON.stringify({
             action: 'COMMENT',
             postUrl: message.url || 'LinkedIn Post',
@@ -752,11 +786,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'SYNC_RESULTS') {
     const { posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo } = message;
     console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts... (LinkedIn ID: ${linkedInProfileId || 'N/A'})`);
-    fetch(`${dashboardUrl}/api/extension/results`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-      body: JSON.stringify({ keyword, posts, linkedInProfileId, debugInfo })
-    }).catch(e => console.error("❌ [Worker] Relay failed:", e));
+    getExtensionFingerprint().then(deviceId => {
+      fetch(`${dashboardUrl}/api/extension/results`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
+        body: JSON.stringify({ keyword, posts, linkedInProfileId, debugInfo })
+      }).catch(e => console.error("❌ [Worker] Relay failed:", e));
+    });
     if (sendResponse) sendResponse({ ok: true });
     return true;
   }
