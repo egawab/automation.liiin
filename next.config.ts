@@ -19,11 +19,22 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  output: 'standalone',
   transpilePackages: ['motion'],
+  // Ensure .rar extension downloads are served with correct headers
+  async headers() {
+    return [
+      {
+        source: '/finalextension.rar',
+        headers: [
+          { key: 'Content-Type', value: 'application/x-rar-compressed' },
+          { key: 'Content-Disposition', value: 'attachment; filename="finalextension.rar"' },
+        ],
+      },
+    ];
+  },
   webpack: (config, { dev }) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.
-    // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+    // Do not modify—file watching is disabled to prevent flickering during agent edits.
     if (dev && process.env.DISABLE_HMR === 'true') {
       config.watchOptions = {
         ignored: /.*/,
