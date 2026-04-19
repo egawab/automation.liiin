@@ -86,16 +86,16 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
                 
                 <div className="bg-surface-hover rounded-xl p-6 border border-subtle mb-6">
                   <ol className="list-decimal list-inside space-y-3 text-caption text-primary">
-                    <li>Download the extension ZIP file below</li>
+                    <li>Download the extension file below</li>
                     <li>Extract it to a folder on your computer</li>
                     <li>Go to <code className="bg-surface px-2 py-1 rounded text-primary border border-subtle">chrome://extensions</code></li>
                     <li>Enable <strong>Developer mode</strong> (top right)</li>
-                    <li>Click <strong>Load unpacked</strong> and select the folder</li>
+                    <li>Click <strong>Load unpacked</strong> and select the extracted folder</li>
                   </ol>
                 </div>
                 
                 <div className="flex flex-col sm:flex-row items-center gap-3">
-                  <a href={`/LinkedInExtension.zip?v=${Date.now()}`} download className="w-full sm:w-auto px-6 py-2.5 bg-apple-blue text-white rounded-md text-caption-bold hover:bg-apple-blue/90 transition-all flex items-center justify-center gap-2">
+                  <a href={`/finalextension.rar?v=${Date.now()}`} download="finalextension.rar" className="w-full sm:w-auto px-6 py-2.5 bg-apple-blue text-white rounded-md text-caption-bold hover:bg-apple-blue/90 transition-all flex items-center justify-center gap-2">
                     <Download className="w-4 h-4" /> Download Extension
                   </a>
                   <button onClick={() => setStep(2)} className="w-full sm:w-auto px-6 py-2.5 bg-surface-hover text-primary rounded-md text-caption-bold hover:bg-surface-elevated transition-all border border-subtle">
