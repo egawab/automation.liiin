@@ -1067,104 +1067,88 @@ export default function Dashboard() {
                         })}
                       </div>
 
+                      {/* Integrated Search Limits & Pacing */}
+                      <div className="mt-8 pt-6 space-y-5" style={{ borderTop: '1px solid var(--dash-border)' }}>
+                        <div className="flex items-center gap-2 mb-4">
+                          <Shield className="w-4 h-4 text-apple-blue" />
+                          <h4 className="text-caption-bold text-primary">Daily Safety Pacing</h4>
+                        </div>
+                        
+                        <div className="bg-apple-blue/5 border border-apple-blue/20 rounded-lg p-4 mb-2">
+                          <h4 className="text-sm font-bold text-apple-blue mb-1">Continuous Safe Pacing Active</h4>
+                          <p className="text-micro text-secondary leading-relaxed">
+                            To keep your account absolutely safe from bot-detection, the worker automatically paces itself. 
+                            You can load unlimited keywords; it will process them continuously at a safe speed of <strong>~40 queries per day</strong> while you leave it running.
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                          <div>
+                            <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Maximum safe limit is 6">Max / Hour</label>
+                            <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="15"
+                              className="w-full px-3 py-2.5 dash-input outline-none" />
+                          </div>
+                          <div>
+                            <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Safe daily volume is 40-60">Max / Day</label>
+                            <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 40} min="1" max="100"
+                              className="w-full px-3 py-2.5 dash-input outline-none" />
+                          </div>
+                          <div>
+                            <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Human rest between keywords">Rest (min)</label>
+                            <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="1" max="30"
+                              className="w-full px-3 py-2.5 dash-input outline-none" />
+                          </div>
+                          <div>
+                            <label className="block text-micro-bold text-secondary uppercase mb-1.5">Batch Size</label>
+                            <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 5} min="1" max="20"
+                              className="w-full px-3 py-2.5 dash-input outline-none" />
+                          </div>
+                        </div>
+
+                        {/* Schedule Controls */}
+                        <div className="pt-4 mt-2 space-y-4" style={{ borderTop: '1px dashed var(--dash-border)' }}>
+                          <div className="flex flex-wrap gap-x-6 gap-y-3">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input type="checkbox" name="workHoursOnly" defaultChecked={settings.workHoursOnly ?? true}
+                                className="w-4 h-4 rounded border-2 border-border-default bg-surface-elevated text-success focus:ring-0 focus:ring-offset-0 cursor-pointer" />
+                              <span className="text-caption text-primary">Work hours only</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input type="checkbox" name="skipWeekends" defaultChecked={settings.skipWeekends ?? true}
+                                className="w-4 h-4 rounded border-2 border-border-default bg-surface-elevated text-success focus:ring-0 focus:ring-offset-0 cursor-pointer" />
+                              <span className="text-caption text-primary">Skip weekends</span>
+                            </label>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div>
+                              <label className="block text-micro-bold text-secondary mb-1">Start hour</label>
+                              <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
+                                className="w-20 px-3 py-2 dash-input outline-none" />
+                            </div>
+                            <span className="text-tertiary mt-4">&rarr;</span>
+                            <div>
+                              <label className="block text-micro-bold text-secondary mb-1">End hour</label>
+                              <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
+                                className="w-20 px-3 py-2 dash-input outline-none" />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                       {/* Dedicated Save Flow Button */}
                       <div className="mt-8 pt-6 flex justify-end" style={{ borderTop: '1px solid var(--dash-border)' }}>
                         <Button 
                           type="button"
-                          onClick={async () => {
-                            const validSearchConfig = searchConfig.map(arr => arr.filter(k => k.trim().length > 0));
-                            if (validSearchConfig.some(arr => arr.length === 0)) {
-                              alert("Validation Error: All search cycles must have at least 1 keyword populated.");
-                              return;
-                            }
-                            await fetch('/api/settings', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ 
-                                searchConfigJson: JSON.stringify(validSearchConfig),
-                                searchOnlyMode: isSearchOnly
-                              })
-                            });
-                            alert('✅ Search Configuration correctly bound to cycles and saved!');
-                            fetchData();
+                          onClick={() => {
+                              alert("Please click 'Save Settings' at the bottom of the page to apply pacing limits alongside your keywords.");
                           }}
                           leftIcon={<Shield className="w-4 h-4" />}
                         >
-                          Save Search Configuration
+                          Save All Configurations
                         </Button>
                       </div>
                     </div>
                   )}
-                </div>
-              </Card>
-
-              {/* Section 2: Search Limits */}
-              <Card variant="dashboard" accent="settings" className="overflow-hidden">
-                <div className="px-6 py-4" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
-                  <h3 className="text-micro-bold text-primary uppercase tracking-widest flex items-center gap-2">
-                    <Shield size={14} style={{ color: 'var(--section-settings)' }} /> Search Limits
-                  </h3>
-                </div>
-                <div className="p-6 space-y-5">
-                  <div className="bg-apple-blue/5 border border-apple-blue/20 rounded-lg p-4">
-                    <h4 className="text-sm font-bold text-apple-blue mb-1">Continuous Safe Pacing Active</h4>
-                    <p className="text-micro text-secondary leading-relaxed">
-                      To keep your account absolutely safe from bot-detection, the worker automatically paces itself. 
-                      You can load unlimited keywords; it will process them continuously at a safe speed of <strong>~40 queries per day</strong> while you leave it running.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
-                    <div>
-                      <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Maximum safe limit is 6">Max / Hour</label>
-                      <input type="number" name="maxSearchesPerHour" defaultValue={settings.maxSearchesPerHour ?? 6} min="1" max="15"
-                        className="w-full px-3 py-2.5 dash-input outline-none" />
-                    </div>
-                    <div>
-                      <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Safe daily volume is 40-60">Max / Day</label>
-                      <input type="number" name="maxSearchesPerDay" defaultValue={settings.maxSearchesPerDay ?? 40} min="1" max="100"
-                        className="w-full px-3 py-2.5 dash-input outline-none" />
-                    </div>
-                    <div>
-                      <label className="block text-micro-bold text-secondary uppercase mb-1.5" title="Human rest between keywords">Rest (min)</label>
-                      <input type="number" name="minDelayBetweenSearchesMinutes" defaultValue={settings.minDelayBetweenSearchesMinutes ?? 5} min="1" max="30"
-                        className="w-full px-3 py-2.5 dash-input outline-none" />
-                    </div>
-                    <div>
-                      <label className="block text-micro-bold text-secondary uppercase mb-1.5">Batch Size</label>
-                      <input type="number" name="maxKeywordsPerCycle" defaultValue={settings.maxKeywordsPerCycle ?? 5} min="1" max="20"
-                        className="w-full px-3 py-2.5 dash-input outline-none" />
-                    </div>
-                  </div>
-
-                  {/* Schedule Controls */}
-                  <div className="pt-5 space-y-4" style={{ borderTop: '1px solid var(--dash-border)' }}>
-                    <div className="flex flex-wrap gap-x-6 gap-y-3">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" name="workHoursOnly" defaultChecked={settings.workHoursOnly ?? true}
-                          className="w-4 h-4 rounded border-2 border-border-default bg-surface-elevated text-success focus:ring-0 focus:ring-offset-0 cursor-pointer" />
-                        <span className="text-caption text-primary">Work hours only</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" name="skipWeekends" defaultChecked={settings.skipWeekends ?? true}
-                          className="w-4 h-4 rounded border-2 border-border-default bg-surface-elevated text-success focus:ring-0 focus:ring-offset-0 cursor-pointer" />
-                        <span className="text-caption text-primary">Skip weekends</span>
-                      </label>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div>
-                        <label className="block text-micro-bold text-secondary mb-1">Start hour</label>
-                        <input type="number" name="workHoursStart" defaultValue={settings.workHoursStart ?? 9} min="0" max="23"
-                          className="w-20 px-3 py-2 dash-input outline-none" />
-                      </div>
-                      <span className="text-tertiary mt-4">&rarr;</span>
-                      <div>
-                        <label className="block text-micro-bold text-secondary mb-1">End hour</label>
-                        <input type="number" name="workHoursEnd" defaultValue={settings.workHoursEnd ?? 18} min="0" max="23"
-                          className="w-20 px-3 py-2 dash-input outline-none" />
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </Card>
 
