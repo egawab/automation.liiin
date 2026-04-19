@@ -12,6 +12,7 @@ export async function GET(req: Request) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
+        isAdmin: true,
         subscriptionStatus: true,
         trialEndsAt: true,
         subscriptionEndsAt: true,
@@ -27,8 +28,13 @@ export async function GET(req: Request) {
     const now = new Date();
     let effectiveStatus = user.subscriptionStatus || 'TRIAL';
     let daysRemaining = 0;
+    const isAdmin = user.isAdmin === true;
 
-    if (effectiveStatus === 'TRIAL' && user.trialEndsAt) {
+    // Admins never expire
+    if (isAdmin) {
+      effectiveStatus = 'ACTIVE';
+      daysRemaining = 999;
+    } else if (effectiveStatus === 'TRIAL' && user.trialEndsAt) {
       const diff = user.trialEndsAt.getTime() - now.getTime();
       daysRemaining = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
       if (daysRemaining === 0) {
@@ -45,6 +51,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       status: effectiveStatus,
       daysRemaining,
+      isAdmin,
       trialEndsAt: user.trialEndsAt,
       subscriptionEndsAt: user.subscriptionEndsAt,
       linkedInProfileId: user.linkedInProfileId,

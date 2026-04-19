@@ -55,6 +55,7 @@ export default function Dashboard() {
   const [showWizard, setShowWizard] = useState(false);
 
   // Subscription State
+  const [isAdmin, setIsAdmin] = useState(false);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>('TRIAL');
   const [trialDaysRemaining, setTrialDaysRemaining] = useState<number>(30);
   const [subscriptionExpired, setSubscriptionExpired] = useState(false);
@@ -136,7 +137,8 @@ export default function Dashboard() {
         setSubscriptionStatus(subData.status);
         setTrialDaysRemaining(subData.daysRemaining);
         setLinkedInProfileId(subData.linkedInProfileId);
-        setSubscriptionExpired(subData.status === 'EXPIRED' || subData.daysRemaining === 0);
+        setIsAdmin(subData.isAdmin || false);
+        setSubscriptionExpired(!subData.isAdmin && (subData.status === 'EXPIRED' || subData.daysRemaining === 0));
       }
     } catch(e) {}
   };
@@ -1345,7 +1347,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} systemActive={systemActive} />
+      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} systemActive={systemActive} isAdmin={isAdmin} />
 
       <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--dash-bg)' }}>
         <Header title={activeTab} sessionConnected={true} />

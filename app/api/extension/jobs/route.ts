@@ -22,30 +22,31 @@ export async function GET(req: Request) {
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { subscriptionStatus: true, trialEndsAt: true, subscriptionEndsAt: true }
+      select: { isAdmin: true, subscriptionStatus: true, trialEndsAt: true, subscriptionEndsAt: true }
     });
 
     if (!user) {
       return setCorsHeaders(NextResponse.json({ error: 'User not found' }, { status: 404 }));
     }
 
-    // ── Subscription Gatekeeper ──
+    // ── Subscription Gatekeeper (admins are exempt) ──
     const now = new Date();
-    if (user.subscriptionStatus === 'TRIAL' && user.trialEndsAt && now > user.trialEndsAt) {
+    const isAdmin = user.isAdmin === true;
+    if (!isAdmin && user.subscriptionStatus === 'TRIAL' && user.trialEndsAt && now > user.trialEndsAt) {
       return setCorsHeaders(NextResponse.json({
         active: false,
         subscriptionExpired: true,
         message: 'Your 30-day free trial has ended. Please contact sddeeoossa@gmail.com to activate your account.'
       }, { status: 200 }));
     }
-    if (user.subscriptionStatus === 'EXPIRED') {
+    if (!isAdmin && user.subscriptionStatus === 'EXPIRED') {
       return setCorsHeaders(NextResponse.json({
         active: false,
         subscriptionExpired: true,
         message: 'Your subscription has expired. Please contact sddeeoossa@gmail.com to renew.'
       }, { status: 200 }));
     }
-    if (user.subscriptionStatus === 'ACTIVE' && user.subscriptionEndsAt && now > user.subscriptionEndsAt) {
+    if (!isAdmin && user.subscriptionStatus === 'ACTIVE' && user.subscriptionEndsAt && now > user.subscriptionEndsAt) {
       // Auto-expire
       await prisma.user.update({ where: { id: userId }, data: { subscriptionStatus: 'EXPIRED' } });
       return setCorsHeaders(NextResponse.json({

@@ -3,12 +3,13 @@
 import React from 'react';
 import Link from 'next/link';
 import { motion } from 'motion/react';
-import { LayoutDashboard, Search, Settings, Sparkles, Shield, Bookmark } from 'lucide-react';
+import { LayoutDashboard, Search, Settings, Sparkles, Shield, Bookmark, Crown } from 'lucide-react';
 
 interface SidebarProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
   systemActive: boolean;
+  isAdmin?: boolean;
 }
 
 const navItems = [
@@ -20,7 +21,7 @@ const navItems = [
   { id: 'settings', label: 'Settings', icon: Settings, accent: 'var(--section-settings)' },
 ];
 
-export default function Sidebar({ activeTab, onTabChange, systemActive }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, systemActive, isAdmin }: SidebarProps) {
   return (
     <div className="w-64 dash-sidebar flex flex-col">
       {/* Logo */}
@@ -80,6 +81,15 @@ export default function Sidebar({ activeTab, onTabChange, systemActive }: Sideba
             </button>
           );
         })}
+        
+        {/* Admin Link */}
+        {isAdmin && (
+          <Link href="/admin" className="w-full relative flex items-center gap-3 px-3 py-2.5 mt-4 text-caption rounded-lg transition-all duration-200"
+            style={{ color: '#0a84ff', background: 'rgba(10,132,255,0.1)' }}>
+            <Crown className="w-4 h-4 flex-shrink-0" />
+            <span className="font-bold">Admin Panel</span>
+          </Link>
+        )}
       </div>
 
       {/* User Section */}

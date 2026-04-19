@@ -12,6 +12,7 @@ model User {
   id                 String      @id @default(uuid())
   email              String      @unique
   password           String
+  isAdmin            Boolean     @default(false)
   linkedInProfileId  String?     @unique
   subscriptionStatus String      @default("TRIAL") // TRIAL, ACTIVE, EXPIRED
   trialEndsAt        DateTime?
@@ -136,11 +137,6 @@ model SavedPost {
   @@index([userId, savedAt])
   @@index([userId, keyword])
 }
-
-
-
-
-
 
 model PromoCode {
   id            String    @id @default(uuid())
