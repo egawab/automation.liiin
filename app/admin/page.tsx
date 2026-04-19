@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useRouter } from 'next/navigation';
 import {
   Users, Key, Shield, ArrowLeft, Trash2, UserCheck, UserX,
-  Clock, Plus, Copy, RefreshCw, Crown
+  Clock, Plus, Copy, RefreshCw, Crown, MessageSquare
 } from 'lucide-react';
 
 type User = {
@@ -33,9 +33,10 @@ type PromoCode = {
 
 export default function AdminDashboard() {
   const router = useRouter();
-  const [activeSection, setActiveSection] = useState<'users' | 'promos'>('users');
+  const [activeSection, setActiveSection] = useState<'users' | 'promos' | 'messages'>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [promos, setPromos] = useState<PromoCode[]>([]);
+  const [messages, setMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
@@ -52,9 +53,10 @@ export default function AdminDashboard() {
 
   const fetchData = async () => {
     try {
-      const [usersRes, promosRes] = await Promise.all([
+      const [usersRes, promosRes, msgsRes] = await Promise.all([
         fetch('/api/admin/users'),
-        fetch('/api/admin/promos')
+        fetch('/api/admin/promos'),
+        fetch('/api/admin/messages')
       ]);
       if (usersRes.status === 403) {
         router.push('/dashboard');
@@ -62,6 +64,7 @@ export default function AdminDashboard() {
       }
       if (usersRes.ok) setUsers(await usersRes.json());
       if (promosRes.ok) setPromos(await promosRes.json());
+      if (msgsRes.ok) setMessages(await msgsRes.json());
     } catch (e) {
       showToast('Failed to load data', 'error');
     }
@@ -126,8 +129,18 @@ export default function AdminDashboard() {
         body: JSON.stringify({ action: 'DELETE', promoId })
       });
       if (res.ok) { showToast('Deleted'); fetchData(); }
-    } catch (e) {}
     setActionLoading(null);
+  };
+
+  const deleteMessage = async (msgId: string) => {
+    if (!confirm('Delete this message?')) return;
+    try {
+      const res = await fetch(`/api/admin/messages?id=${msgId}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast('Message deleted');
+        fetchData();
+      }
+    } catch (e) {}
   };
 
   const statusColor = (s: string) => {
@@ -217,6 +230,17 @@ export default function AdminDashboard() {
             display: 'flex', alignItems: 'center', gap: 6
           }}>
             <Key size={15} /> Promo Codes
+          </button>
+          <button onClick={() => setActiveSection('messages')} style={{
+            padding: '8px 20px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+            background: activeSection === 'messages' ? 'rgba(10,132,255,0.15)' : 'rgba(255,255,255,0.06)',
+            color: activeSection === 'messages' ? '#0a84ff' : 'rgba(255,255,255,0.6)',
+            display: 'flex', alignItems: 'center', gap: 6
+          }}>
+            <MessageSquare size={15} /> Messages
+            {messages.length > 0 && (
+              <span style={{ background: '#ff3b30', color: '#fff', fontSize: 10, padding: '2px 6px', borderRadius: 10 }}>{messages.length}</span>
+            )}
           </button>
           <button onClick={fetchData} style={{
             padding: '8px 12px', borderRadius: 10, border: 'none', cursor: 'pointer',
@@ -493,7 +517,52 @@ export default function AdminDashboard() {
                 )}
               </div>
             </motion.div>
-          )}
+          ) : activeSection === 'messages' ? (
+            <motion.div key="messages" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+              <div style={{
+                background: 'rgba(255,255,255,0.03)', borderRadius: 16,
+                border: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden'
+              }}>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: 'minmax(150px, 1fr) 2fr 3fr 150px 80px',
+                  padding: '14px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)',
+                  fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: 1
+                }}>
+                  <span>User</span>
+                  <span>Subject</span>
+                  <span>Message</span>
+                  <span>Date</span>
+                  <span style={{ textAlign: 'right' }}>Actions</span>
+                </div>
+                {messages.map(m => (
+                  <div key={m.id} style={{
+                    display: 'grid', gridTemplateColumns: 'minmax(150px, 1fr) 2fr 3fr 150px 80px',
+                    padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.04)',
+                    alignItems: 'start', fontSize: 13, gap: 12
+                  }}>
+                    <div style={{ color: '#0a84ff', fontWeight: 600 }}>{m.user?.email || 'Unknown'}</div>
+                    <div style={{ fontWeight: 600, color: '#f5f5f7' }}>{m.subject}</div>
+                    <div style={{ color: 'rgba(255,255,255,0.7)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{m.message}</div>
+                    <div style={{ color: 'rgba(255,255,255,0.4)' }}>{new Date(m.createdAt).toLocaleString()}</div>
+                    <div style={{ textAlign: 'right' }}>
+                      <button onClick={() => deleteMessage(m.id)}
+                        style={{
+                          padding: '6px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                          background: 'rgba(255,59,48,0.1)', color: '#ff3b30', fontSize: 11
+                        }}>
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {messages.length === 0 && (
+                  <div style={{ padding: 40, textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 14 }}>
+                    No support messages found.
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          ) : null}
         </AnimatePresence>
       </div>
     </div>

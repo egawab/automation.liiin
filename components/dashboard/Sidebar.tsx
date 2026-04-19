@@ -22,6 +22,7 @@ const navItems = [
   { id: 'extension-connect', label: 'Connect Extension', icon: Shield, accent: 'var(--section-extension)' },
   { id: 'billing', label: 'Billing & Plan', icon: CreditCard, accent: 'var(--section-billing)' },
   { id: 'settings', label: 'Settings', icon: Settings, accent: 'var(--section-settings)' },
+  { id: 'support', label: 'Support / Contact', icon: Search, accent: '#ff3b30' },
 ];
 
 export default function Sidebar({ activeTab, onTabChange, systemActive, isAdmin, subscriptionStatus, trialDaysRemaining }: SidebarProps) {

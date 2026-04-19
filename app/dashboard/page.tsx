@@ -19,6 +19,7 @@ import Chart from '@/components/dashboard/Chart';
 import DailySummaryCard from '@/components/dashboard/DailySummaryCard';
 import { SavedPostsPanel } from '@/components/dashboard/SavedPostsPanel';
 import BillingPanel from '@/components/dashboard/BillingPanel';
+import SupportPanel from '@/components/dashboard/SupportPanel';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Input, { TextArea } from '@/components/ui/Input';
@@ -394,6 +395,9 @@ export default function Dashboard() {
     switch (activeTab) {
       case 'billing':
         return <BillingPanel isAdmin={isAdmin} subscriptionStatus={subscriptionStatus} trialDaysRemaining={trialDaysRemaining} />;
+
+      case 'support':
+        return <SupportPanel />;
 
       case 'saved-posts':
         return <SavedPostsPanel />;

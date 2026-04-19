@@ -25,6 +25,7 @@ model User {
   logs       Log[]
   autoPosts  AutoPost[]
   savedPosts SavedPost[]
+  contactMessages ContactMessage[]
 }
 
 model Settings {
@@ -147,4 +148,15 @@ model PromoCode {
   currentUses   Int       @default(0)
   expiresAt     DateTime?
   createdAt     DateTime  @default(now())
+}
+
+model ContactMessage {
+  id        String   @id @default(uuid())
+  subject   String
+  message   String
+  status    String   @default("OPEN") // OPEN, REVIEWED, RESOLVED
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
