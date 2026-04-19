@@ -1157,8 +1157,9 @@ window.__linkedInExtractorReady = true;
       finalSync = premiumData.slice(0, 100);
       console.log(`[Ext] 📜 Extracted ${finalSync.length} Ultra-Premium results.`);
     } else {
-      finalSync = syncData.slice(0, 100);
-      console.log(`[Ext] 📜 Premium pool critically low. Recovered ${finalSync.length} Best-Effort Alternative results.`);
+      // At bare minimum, NEVER include posts with literal zero reach to ensure quality standards
+      finalSync = syncData.filter(p => (p.likes || 0) + (p.comments || 0) > 0).slice(0, 100);
+      console.log(`[Ext] 📜 Premium pool critically low. Recovered ${finalSync.length} Best-Effort Alternative results (excluding zero-reach).`);
     }
 
     if (finalSync.length > 0) {

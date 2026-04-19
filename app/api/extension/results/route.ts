@@ -50,6 +50,13 @@ export async function POST(req: Request) {
     if (posts && posts.length > 0) {
         await Promise.all(posts.map(async (post) => {
           try {
+            // Quality Gate: Skip zero-engagement posts (both likes AND comments are 0)
+            const postLikes = Number(post.likes || 0);
+            const postComments = Number(post.comments || 0);
+            if (postLikes === 0 && postComments === 0) {
+              return; // Skip saving this post entirely
+            }
+
             // Check for existing post for THIS user
             const existing = await prisma.savedPost.findFirst({
               where: { userId, postUrl: post.url }
@@ -62,8 +69,8 @@ export async function POST(req: Request) {
                   postUrl: post.url,
                   postAuthor: String(post.author || 'Unknown').substring(0, 100),
                   postPreview: String(post.preview || '').substring(0, 1000),
-                  likes: Number(post.likes || 0),
-                  comments: Number(post.comments || 0),
+                  likes: postLikes,
+                  comments: postComments,
                   keyword: String(keyword || 'auto').substring(0, 50),
                   visited: false
                 }
@@ -74,8 +81,8 @@ export async function POST(req: Request) {
               await prisma.savedPost.update({
                 where: { id: existing.id },
                 data: {
-                  likes: Number(post.likes || 0),
-                  comments: Number(post.comments || 0),
+                  likes: postLikes,
+                  comments: postComments,
                   postPreview: post.preview ? String(post.preview).substring(0, 1000) : undefined,
                   savedAt: new Date() // Refresh timestamp to show it was recently seen
                 }
