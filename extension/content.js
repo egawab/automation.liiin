@@ -705,6 +705,12 @@ window.__linkedInExtractorReady = true;
     let previousPostsCount = 0;
     let paginationStalls = 0;
     
+    // Telemetry Diagnostics
+    let totalVisibleContainersFound = 0;
+    let totalUrnsExtracted = 0;
+    let totalPaginationClicks = 0;
+    const initialScrollHeight = scrollTarget.scrollHeight || document.documentElement.scrollHeight || 0;
+    
     while (step < MAX_SCROLLS) {
       // 1. Dual-Scroll: Aggressively scroll both the detected container AND the window
       if (typeof scrollTarget.scrollBy === 'function') {
@@ -751,6 +757,7 @@ window.__linkedInExtractorReady = true;
           console.log(`[Ext] 📄 Stalled on current page. Clicking Pagination "Next"...`);
           nextBtn.click();
           paginationStalls = 0;
+          totalPaginationClicks++;
           await wait(2500, 4000); // give time for the next page to load
         }
       }
@@ -762,9 +769,11 @@ window.__linkedInExtractorReady = true;
           if (!visibleContainers.includes(el)) visibleContainers.push(el);
         });
       }
+      totalVisibleContainersFound = Math.max(totalVisibleContainersFound, visibleContainers.length);
 
       for (const container of visibleContainers) {
         const urn = extractUrn(container);
+        if (urn) totalUrnsExtracted++;
         if (!urn || seenUrns.has(urn)) continue;
         seenUrns.add(urn);
 
@@ -836,51 +845,40 @@ window.__linkedInExtractorReady = true;
     console.log(`[Ext] 📊 Phase 1 complete: Discovered ${allPosts.length} total posts (${highQualityCount} High-Quality).`);
     heartbeat('Phase1-Done', `✅ Discovery complete: ${allPosts.length} posts found.`);
 
-    // ── DIAGNOSTIC: If zero posts found, dump DOM structure to help debug ──
-    if (allPosts.length === 0) {
-      console.warn('[Ext] ⚠️ ZERO POSTS DISCOVERED. Running DOM diagnostic...');
-      console.warn(`[Ext] DIAG: Current URL = ${window.location.href}`);
-      console.warn(`[Ext] DIAG: Page title = ${document.title}`);
-      console.warn(`[Ext] DIAG: Body text length = ${(document.body?.innerText || '').length}`);
-      const diagnosticSelectors = [
-        '.reusable-search__result-container',
-        '[data-view-name="feed-full-update"]',
-        '[data-urn*="activity:"]',
-        '[data-urn*="ugcPost:"]',
-        '.entity-result',
-        '.feed-shared-update-v2',
-        '[role="listitem"]',
-        '.artdeco-card',
-        'li.artdeco-card',
-        '.search-results-container',
-        '.scaffold-layout__main',
-        '[data-chameleon-result-urn]',
-        '.search-reusables__primary-filter',
-        '.search-no-results__container',
-        '.search-results__cluster-bottom-banner',
-      ];
-      for (const sel of diagnosticSelectors) {
-        const count = document.querySelectorAll(sel).length;
-        if (count > 0) console.warn(`[Ext] DIAG: "${sel}" → ${count} elements`);
-      }
-      // Log first 500 chars of any [role=main] or main element
-      const mainEl = document.querySelector('[role="main"], main');
-      if (mainEl) {
-        console.warn(`[Ext] DIAG: main content (500 chars): ${(mainEl.innerText || '').substring(0, 500)}`);
-      }
-      // Check for login wall / restriction
+    // ── PRECISION DIAGNOSTIC TELEMETRY ──
+    if (allPosts.length === 0 || allPosts.length < 5) {
+      console.warn('[Ext] ⚠️ ABNORMAL POST VOLUME DETECTED. Running diagnostic inference...');
+      
+      const finalScrollHeight = scrollTarget.scrollHeight || document.documentElement.scrollHeight || 0;
+      let diagnosticMessage = '';
+
       const bodyText = (document.body?.innerText || '').toLowerCase();
       if (bodyText.includes('sign in') || bodyText.includes('join now') || bodyText.includes('log in')) {
-        console.error('[Ext] DIAG: 🚫 LOGIN WALL DETECTED — LinkedIn is not authenticated in this tab!');
+        diagnosticMessage = '🚫 LOGIN WALL DETECTED: LinkedIn is not authenticated in this browser tab/profile.';
+      } else if (bodyText.includes('no results') || bodyText.includes('لا توجد نتائج')) {
+        diagnosticMessage = '⚠️ NO RESULTS: LinkedIn returned literally 0 results for this search query.';
+      } else if (totalVisibleContainersFound === 0) {
+        diagnosticMessage = `⚠️ CSS FAILURE: Found 0 matching elements. LinkedIn completely changed their DOM layout classes for this account.`;
+      } else if (totalVisibleContainersFound > 0 && totalUrnsExtracted === 0) {
+        diagnosticMessage = `⚠️ EXTRACTION FAILURE: CSS Matched ${totalVisibleContainersFound} posts, but 0 IDs were extracted. LinkedIn stripped data-attributes from this account.`;
+      } else if (totalVisibleContainersFound > 0 && initialScrollHeight === finalScrollHeight && totalPaginationClicks === 0) {
+        diagnosticMessage = `⚠️ SCROLL FAILURE: Page height remained static and no Pagination Next button was detected. Hunt mode stalled.`;
+      } else if (paginationStalls >= 3) {
+        diagnosticMessage = `⚠️ PAGINATION STALL: Engine hit a pagination wall but could not locate the 'Next Page' button structure.`;
+      } else {
+        diagnosticMessage = `⚠️ UNKNOWN DIAGNOSTIC: Found ${totalVisibleContainersFound} containers yielding ${totalUrnsExtracted} IDs. Please check the network tab.`;
       }
-      if (bodyText.includes('no results') || bodyText.includes('لا توجد نتائج')) {
-        console.warn('[Ext] DIAG: LinkedIn returned "No results" for this search query.');
+
+      console.error(`[Ext] ${diagnosticMessage}`);
+
+      // If strictly ZERO posts, abort entirely to prevent cascading bugs
+      if (allPosts.length === 0) {
+        safeSend({ action: 'LIVE_STATUS', text: diagnosticMessage });
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: requiredComments, searchOnlyMode: false });
+        // Dump extra console logs for direct developer debugging
+        console.warn(`[Ext] [DEV-DUMP] InitialScroll:${initialScrollHeight} FinalScroll:${finalScrollHeight} PaginationClicks:${totalPaginationClicks}`);
+        return;
       }
-      safeSend({ action: 'LIVE_STATUS', text: '⚠️ Zero posts discovered. Check console for diagnostics.' });
-      
-      // Early abort to prevent cascading Phase 2/3 errors
-      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: requiredComments, searchOnlyMode: false });
-      return;
     }
 
     // ══════════════════════════════════════════════════════════════
