@@ -167,7 +167,7 @@ window.__linkedInExtractorReady = true;
       // Method 6: Anchor link with /feed/update/
       const link = el.querySelector('a[href*="/feed/update/"], a[href*="urn:li:activity:"], a[href*="urn:li:ugcPost:"]');
       if (link) {
-        const match = link.href.match(/urn:li:(activity|ugcPost):\d+/);
+        const match = link.href.match(/urn:li:(?:activity|ugcPost|share):\d{18,20}/);
         if (match) return match[0];
       }
 
@@ -175,7 +175,7 @@ window.__linkedInExtractorReady = true;
       const allLinks = el.querySelectorAll('a[href]');
       for (const a of allLinks) {
         const href = a.href || '';
-        const m = href.match(/urn:li:(activity|ugcPost|share):\d+/);
+        const m = href.match(/urn:li:(?:activity|ugcPost|share):\d{18,20}/);
         if (m) return m[0];
         // Check for SEO-friendly /posts/ URLs
         if (href.includes('/posts/') || href.includes('-activity-') || href.includes('-ugcPost-')) {
@@ -184,9 +184,13 @@ window.__linkedInExtractorReady = true;
       }
 
       // Method 8: Brute-force innerHTML scan (last resort)
-      const html = el.innerHTML || '';
-      const m = html.match(/urn:li:(activity|ugcPost):\d+/);
+      const html = el.outerHTML || el.innerHTML || '';
+      const m = html.match(/urn:li:(?:activity|ugcPost|share|r_share|r_ugcPost):\d{18,20}/);
       if (m) return m[0];
+      
+      // Method 9: Fallback to searching post URL directly
+      const mPostUrl = html.match(/(https:\/\/(?:www\.)?linkedin\.com\/posts\/[^"'\?&\s]+)/i);
+      if (mPostUrl) return mPostUrl[1];
       
       // If no valid URL can be constructed, we must cleanly abort this node
       // rather than injecting broken fallback hashes into the database.
@@ -323,9 +327,7 @@ window.__linkedInExtractorReady = true;
     '[role="listitem"]',
     '[data-chameleon-result-urn]',
     'li.artdeco-card',
-    '.search-results__cluster',
-    '[data-id]',
-    '.search-result-collection'
+    '[data-id]'
   ];
 
   // ─── Find scroll container ───
@@ -769,6 +771,19 @@ window.__linkedInExtractorReady = true;
           if (!visibleContainers.includes(el)) visibleContainers.push(el);
         });
       }
+      
+      // DEEP FALLBACK: Find ALL comment/like buttons and traverse upwards 
+      // This bulletproofs extraction against unexpected LinkedIn DOM A/B tests
+      try {
+        const actionBtns = document.querySelectorAll('button.comment-button, button[aria-label*="Comment" i], button[aria-label*="تعليق" i], button[aria-label*="Like" i], button[aria-label*="إعجاب" i]');
+        actionBtns.forEach(btn => {
+           const wrapper = btn.closest('li.reusable-search__result-container, div.feed-shared-update-v2, div[data-id], div[data-urn], li.artdeco-card, div.profile-creator-shared-feed-update__container, li.search-results__list-item, div.search-results-container > div, li.scaffold-layout__list-item, article, [role="listitem"]');
+           if (wrapper && !visibleContainers.includes(wrapper)) {
+               visibleContainers.push(wrapper);
+           }
+        });
+      } catch(e) {}
+
       totalVisibleContainersFound = Math.max(totalVisibleContainersFound, visibleContainers.length);
 
       for (const container of visibleContainers) {
