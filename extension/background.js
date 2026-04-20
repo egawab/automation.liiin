@@ -675,14 +675,19 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
 }
 
 // ── Finish Cycle (persists everything) ──
-async function finishCycle(tabId, incrementKeyword = true) {
+async function finishCycle(tabId, incrementKeyword = true, rapidCooldownOverride = false) {
   if (tabId) {
     try { await chrome.tabs.remove(tabId); } catch (e) {}
   }
 
   const state = await loadState();
   const failures = incrementKeyword ? 0 : (state.consecutiveFailures || 0) + 1;
-  const cd = getCooldown(failures);
+  let cd = getCooldown(failures);
+  
+  if (rapidCooldownOverride) {
+      // 10 second rapid cooldown to bypass backend pagination locks by manually flipping pages violently
+      cd = 10000;
+  }
 
   const updates = {
     isJobRunning: false,
@@ -845,7 +850,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    finishCycle(sender.tab?.id, isSuccessfulCycle);
+    let rapidCooldownOverride = false;
+    if (message.searchOnlyMode && message.postsExtracted >= 1 && message.postsExtracted <= 5) {
+       console.log(`[Worker] ⚠️ Feed truncation active (only ${message.postsExtracted} posts). Forcing rapid page flip to maintain volume.`);
+       rapidCooldownOverride = true;
+    }
+
+    finishCycle(sender.tab?.id, isSuccessfulCycle, rapidCooldownOverride);
   }
 });
 

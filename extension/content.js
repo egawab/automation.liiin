@@ -25,7 +25,7 @@
 // ═══════════════════════════════════════════════════════════
 
 if (window.__linkedInExtractorCleanup) {
-  try { window.__linkedInExtractorCleanup(); } catch(e) {}
+  try { window.__linkedInExtractorCleanup(); } catch (e) { }
 }
 window.__linkedInExtractorReady = true;
 
@@ -40,7 +40,7 @@ window.__linkedInExtractorReady = true;
   }
   chrome.runtime.onMessage.addListener(messageHandler);
 
-  window.__startExtraction = function(keyword, settings, comments, dashboardUrl, userId) {
+  window.__startExtraction = function (keyword, settings, comments, dashboardUrl, userId) {
     console.log(`[Ext] ✅ Direct injection start for: "${keyword}"`);
     runExtraction(keyword, settings, comments, dashboardUrl, userId);
   };
@@ -55,7 +55,7 @@ window.__linkedInExtractorReady = true;
     try { await extractPipeline(keyword, settings, comments, dashboardUrl, userId); }
     catch (e) {
       console.error("[Ext] ❌ Fatal:", e);
-      try { chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }, () => { if (chrome.runtime.lastError) {} }); } catch(x){}
+      try { chrome.runtime.sendMessage({ action: 'JOB_FAILED', error: String(e) }, () => { if (chrome.runtime.lastError) { } }); } catch (x) { }
     }
     finally { isExtracting = false; }
   }
@@ -77,7 +77,7 @@ window.__linkedInExtractorReady = true;
   }
 
   function safeSend(msg) {
-    try { chrome.runtime.sendMessage(msg, () => { if (chrome.runtime.lastError) {} }); } catch(e) {}
+    try { chrome.runtime.sendMessage(msg, () => { if (chrome.runtime.lastError) { } }); } catch (e) { }
   }
 
   function heartbeat(phase, statusMessage) {
@@ -101,7 +101,7 @@ window.__linkedInExtractorReady = true;
 
       console.log(`[Ext]    ✅ Text injected (${text.length} chars)`);
       return true;
-    } catch(e) {
+    } catch (e) {
       console.warn('[Ext]    ⚠️ injectTextIntoEditor error:', e.message);
       return false;
     }
@@ -161,7 +161,7 @@ window.__linkedInExtractorReady = true;
               if (urn2) return urn2;
             }
           }
-        } catch(e) { /* tracking scope parse failed, continue */ }
+        } catch (e) { /* tracking scope parse failed, continue */ }
       }
 
       // Method 6: Anchor link with /feed/update/
@@ -187,15 +187,15 @@ window.__linkedInExtractorReady = true;
       const html = el.outerHTML || el.innerHTML || '';
       const m = html.match(/urn:li:(?:activity|ugcPost|share|r_share|r_ugcPost):\d{18,20}/);
       if (m) return m[0];
-      
+
       // Method 9: Fallback to searching post URL directly
       const mPostUrl = html.match(/(https:\/\/(?:www\.)?linkedin\.com\/posts\/[^"'\?&\s]+)/i);
       if (mPostUrl) return mPostUrl[1];
-      
+
       // If no valid URL can be constructed, we must cleanly abort this node
       // rather than injecting broken fallback hashes into the database.
       return null;
-    } catch(e) { return null; }
+    } catch (e) { return null; }
   }
 
   function urnToUrl(urn) {
@@ -229,8 +229,8 @@ window.__linkedInExtractorReady = true;
       for (const el of labels) {
         const l = (el.getAttribute('aria-label') || '').toLowerCase();
         const n = num(l.match(/(\d[\d,]*k?m?)/)?.[0]);
-        if (!likes        && (l.includes('reaction') || l.includes('like')    || l.includes('إعجاب'))) likes = n;
-        if (!postComments && (l.includes('comment')  || l.includes('تعليق'))) postComments = n;
+        if (!likes && (l.includes('reaction') || l.includes('like') || l.includes('إعجاب'))) likes = n;
+        if (!postComments && (l.includes('comment') || l.includes('تعليق'))) postComments = n;
       }
 
       // Try multiple author selectors (different LinkedIn layouts)
@@ -269,20 +269,20 @@ window.__linkedInExtractorReady = true;
         const mComm = text.match(/(\d[\d,]*k?m?)\s*(comments?|تعليق|تعليقات)/i);
         if (mComm) postComments = num(mComm[1]);
       }
-      
+
       // Extract Post Body / Preview text
       try {
         const textEls = container.querySelectorAll('.feed-shared-update-v2__commentary, .update-components-text .break-words, .feed-shared-text, .update-components-text, .feed-shared-update-v2__description, .entity-result__content-summary');
         for (const el of textEls) {
-           if (el.innerText && el.innerText.trim().length > 10) {
-              textSnippet = el.innerText.replace(/[\n\r]+/g, ' ').trim().substring(0, 400);
-              break;
-           }
+          if (el.innerText && el.innerText.trim().length > 10) {
+            textSnippet = el.innerText.replace(/[\n\r]+/g, ' ').trim().substring(0, 400);
+            break;
+          }
         }
         if (!textSnippet) {
-           textSnippet = (container.innerText || '').replace(/[\n\r]+/g, ' ').trim().substring(0, 400);
+          textSnippet = (container.innerText || '').replace(/[\n\r]+/g, ' ').trim().substring(0, 400);
         }
-      } catch(e) {}
+      } catch (e) { }
 
       // Extract Age (Recency)
       const fragments = (container.innerText || '').toLowerCase().split(/(?:•|·|\n|\r)/).map(s => s.trim());
@@ -292,17 +292,17 @@ window.__linkedInExtractorReady = true;
           break;
         }
       }
-      
+
       // If innerText failed, try reading aria-hidden spans directly
       if (ageHours === 9999) {
-         const timeSpans = container.querySelectorAll('.update-components-actor__sub-description span[aria-hidden="true"], .feed-shared-actor__sub-description span[aria-hidden="true"], [class*="timestamp"]');
-         for (const span of timeSpans) {
-            const txt = (span.innerText || '').toLowerCase().trim();
-            if (/^\d+\s*(m|h|d|w|mo|y)[a-z]*/.test(txt)) {
-               ageHours = parseAgeToHours(txt);
-               break;
-            }
-         }
+        const timeSpans = container.querySelectorAll('.update-components-actor__sub-description span[aria-hidden="true"], .feed-shared-actor__sub-description span[aria-hidden="true"], [class*="timestamp"]');
+        for (const span of timeSpans) {
+          const txt = (span.innerText || '').toLowerCase().trim();
+          if (/^\d+\s*(m|h|d|w|mo|y)[a-z]*/.test(txt)) {
+            ageHours = parseAgeToHours(txt);
+            break;
+          }
+        }
       }
 
       // If we completely fail to parse the age, assume it's recent (24h) 
@@ -311,7 +311,7 @@ window.__linkedInExtractorReady = true;
         ageHours = 24;
       }
 
-    } catch(e) {}
+    } catch (e) { }
     return { likes, postComments, author, ageHours, textSnippet };
   }
 
@@ -402,7 +402,7 @@ window.__linkedInExtractorReady = true;
     container.scrollIntoView({ behavior: 'auto', block: 'center' });
     window.dispatchEvent(new Event('scroll'));
     document.querySelectorAll('.scaffold-layout__main, .search-results-container, main').forEach(sc => {
-      try { sc.dispatchEvent(new Event('scroll')); } catch(e) {}
+      try { sc.dispatchEvent(new Event('scroll')); } catch (e) { }
     });
     await wait(1000, 1500);
 
@@ -416,9 +416,9 @@ window.__linkedInExtractorReady = true;
     if (!commentBtn) {
       commentBtn = Array.from(container.querySelectorAll('button')).find(b => {
         const label = (b.getAttribute('aria-label') || '').toLowerCase();
-        const text  = (b.innerText || '').toLowerCase().trim();
+        const text = (b.innerText || '').toLowerCase().trim();
         return label.includes('comment') || text === 'comment' ||
-               label.includes('تعليق')  || text === 'تعليق';
+          label.includes('تعليق') || text === 'تعليق';
       });
     }
 
@@ -459,7 +459,7 @@ window.__linkedInExtractorReady = true;
           parent.querySelector('div[contenteditable="true"].comments-comment-texteditor__content');
         if (editor) {
           editorScope = parent;
-          console.log(`[Ext]    Found editor ${depth+1} levels above container.`);
+          console.log(`[Ext]    Found editor ${depth + 1} levels above container.`);
         }
         parent = parent.parentElement;
       }
@@ -467,7 +467,7 @@ window.__linkedInExtractorReady = true;
 
     if (!editor) {
       console.log('[Ext]    ⏭️ No editor found after clicking comment button.');
-      try { commentBtn.click(); } catch(e) {} // Try to close
+      try { commentBtn.click(); } catch (e) { } // Try to close
       return 'FAILED';
     }
 
@@ -510,7 +510,7 @@ window.__linkedInExtractorReady = true;
           submitBtn = Array.from(parent.querySelectorAll('button')).find(b => {
             const txt = (b.innerText || '').trim().toLowerCase();
             return txt === 'comment' || txt === 'post' || txt === 'نشر' || txt === 'تعليق' ||
-                   txt === 'submit';
+              txt === 'submit';
           });
         }
         parent = parent.parentElement;
@@ -551,10 +551,10 @@ window.__linkedInExtractorReady = true;
     //    LinkedIn clears the editor after a successful comment post, but also on silent errors.
     //    We must physically query the container to ensure the text actually materialized.
     const textWasConsumed = !document.contains(editor) || (editor.innerText || editor.textContent || '').trim().length === 0;
-    
+
     // Safety delay to allow LinkedIn to render the new comment node
     await wait(3000, 5000);
-    
+
     let commentVerifiedInDom = false;
     try {
       // Search all comment nodes within the overarching container
@@ -567,23 +567,23 @@ window.__linkedInExtractorReady = true;
           break;
         }
       }
-      
+
       // Fallback: If LinkedIn's tree structure shifted, search the raw text content of the entire container,
       // but only if the editor itself no longer contains it.
       if (!commentVerifiedInDom && textWasConsumed) {
-         const fullText = (container.innerText || container.textContent || '');
-         if (fullText.includes(textToType.trim())) {
-           commentVerifiedInDom = true;
-         }
+        const fullText = (container.innerText || container.textContent || '');
+        if (fullText.includes(textToType.trim())) {
+          commentVerifiedInDom = true;
+        }
       }
-    } catch(e) {}
+    } catch (e) { }
 
     if (commentVerifiedInDom) {
       console.log(`[Ext]    ✅ Comment PHYISCALLY VERIFIED in DOM on ${postUrl}`);
       safeSend({ action: 'COMMENT_POSTED', url: postUrl });
       return 'SUCCESS';
-    } 
-    
+    }
+
     if (!textWasConsumed && !commentVerifiedInDom) {
       // Retry: try clicking submit once more
       console.warn('[Ext]    ⚠️ Editor still has text — retrying submit...');
@@ -611,7 +611,7 @@ window.__linkedInExtractorReady = true;
           safeSend({ action: 'COMMENT_POSTED', url: postUrl });
           return 'SUCCESS';
         }
-      } catch(e) {}
+      } catch (e) { }
     }
 
     console.warn('[Ext]    ❌ Comment purely failed. It did not appear in the DOM. Marking FAILED.');
@@ -643,10 +643,10 @@ window.__linkedInExtractorReady = true;
         if (match) {
           linkedInProfileId = match[1];
           console.log(`[Ext] 🔗 LinkedIn Profile Auto-Detected: ${linkedInProfileId}`);
-          try { chrome.runtime.sendMessage({ action: 'IDENTITY_DETECTED', linkedInProfileId }); } catch(e) {}
+          try { chrome.runtime.sendMessage({ action: 'IDENTITY_DETECTED', linkedInProfileId }); } catch (e) { }
         }
       }
-    } catch(e) {}
+    } catch (e) { }
     // If we fail to get it from the link, it might be heavily cached. We will pass it as null or Unknown.
 
     if (!window.location.href.includes('/content/')) {
@@ -660,14 +660,14 @@ window.__linkedInExtractorReady = true;
     }
 
     // ── Load comment history ──
-    let commentedHistory    = [];
-    let usedCommentHistory  = [];
+    let commentedHistory = [];
+    let usedCommentHistory = [];
     try {
       const stored = await chrome.storage.local.get(['commentedPosts', 'usedCommentIds']);
-      commentedHistory    = stored.commentedPosts  || [];
-      usedCommentHistory  = stored.usedCommentIds  || [];
-    } catch(e) {}
-    const commentedSet   = new Set(commentedHistory);
+      commentedHistory = stored.commentedPosts || [];
+      usedCommentHistory = stored.usedCommentIds || [];
+    } catch (e) { }
+    const commentedSet = new Set(commentedHistory);
     const usedCommentSet = new Set(usedCommentHistory);
 
     const needsCommenting = !settings.searchOnlyMode && comments && comments.length > 0;
@@ -697,49 +697,52 @@ window.__linkedInExtractorReady = true;
 
     const MAX_SCROLLS = 100; // Increased significantly to guarantee volume
     const SCROLL_AMOUNT = 1200;
-    
+
     // Baseline definition of "High Quality / Proven Performer"
     // At least 10 combined engagements, or matching user's strict min requests if higher.
     const BASELINE_ENGAGEMENT = Math.max(10, minL + minC);
-    
+
     let step = 0;
     let highQualityCount = 0;
-    
+
     let previousPostsCount = 0;
     let paginationStalls = 0;
-    
+
     // Telemetry Diagnostics
     let totalVisibleContainersFound = 0;
     let totalUrnsExtracted = 0;
     let totalPaginationClicks = 0;
     const initialScrollHeight = scrollTarget.scrollHeight || document.documentElement.scrollHeight || 0;
-    
+
     while (step < MAX_SCROLLS) {
-      // 1. Universal Nuclear Scrolling (Bypasses ANY hidden, obscured wrapper universally)
-      const allWebContainers = document.querySelectorAll('div, section, main, ul');
-      allWebContainers.forEach(el => {
-         if (el.scrollHeight > el.clientHeight + 10 && el.clientHeight > 150) {
-            try {
-              if (typeof el.scrollBy === 'function') {
-                el.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
-              } else {
-                el.scrollTop += SCROLL_AMOUNT;
-              }
-              el.dispatchEvent(new Event('scroll'));
-            } catch(e) {}
-         }
+      // 1. Omnidirectional Scroll Bombing (Bypasses hidden overflow wrappers)
+      const scrollCandidates = [
+        window, document.documentElement, document.body,
+        document.querySelector('.scaffold-layout__main'),
+        document.querySelector('.scaffold-layout__list'),
+        document.querySelector('.search-results-container'),
+        document.querySelector('.scaffold-layout__content'),
+        document.querySelector('main')
+      ];
+
+      scrollCandidates.forEach(el => {
+        if (!el) return;
+        try {
+          if (typeof el.scrollBy === 'function') {
+            el.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
+          } else {
+            el.scrollTop += SCROLL_AMOUNT;
+          }
+          el.dispatchEvent(new Event('scroll'));
+        } catch (e) { }
       });
-      // Safety net for standard setups
-      window.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
-      document.documentElement.scrollTop += SCROLL_AMOUNT;
-      window.dispatchEvent(new Event('scroll'));
 
       // Wait (pacing for network requests)
       await wait(1200, 2500);
 
       // Heartbeat every 5 steps
       if (step % 5 === 4) {
-        heartbeat(`Phase1-Scroll-${step+1}/${MAX_SCROLLS}`, `🔍 Hunting: ${step+1}/${MAX_SCROLLS} (Found ${highQualityCount} high-quality / ${allPosts.length} total)...`);
+        heartbeat(`Phase1-Scroll-${step + 1}/${MAX_SCROLLS}`, `🔍 Hunting: ${step + 1}/${MAX_SCROLLS} (Found ${highQualityCount} high-quality / ${allPosts.length} total)...`);
       }
 
       // 2. Bridge Button Annihilation (Unlocks restricted feed containers)
@@ -748,12 +751,12 @@ window.__linkedInExtractorReady = true;
         const text = (el.innerText || '').toLowerCase();
         return bridgeText.some(str => text.includes(str));
       });
-      if (moreObj) { 
-        try { moreObj.click(); } catch(e) {}
-        await wait(600, 1000); 
+      if (moreObj) {
+        try { moreObj.click(); } catch (e) { }
+        await wait(600, 1000);
       }
 
-      // 3. Pagination Autopilot & Fast-Forward Stall Breaker
+      // 3. Pagination Autopilot: Detect if we're stalled on a paginated search layout
       if (allPosts.length === previousPostsCount) {
         paginationStalls++;
       } else {
@@ -761,25 +764,20 @@ window.__linkedInExtractorReady = true;
       }
       previousPostsCount = allPosts.length;
 
+      // If we've stalled for 3 scrolls, try hitting the "Next" page button
       if (paginationStalls >= 3) {
-        const nextBtn = document.querySelector('.artdeco-pagination__button--next') || 
-                        Array.from(document.querySelectorAll('button, a')).find(b => {
-                           const t = (b.innerText || '').toLowerCase();
-                           return t.includes('next') || t.includes('التالي');
-                        });
+        const nextBtn = document.querySelector('.artdeco-pagination__button--next') ||
+          Array.from(document.querySelectorAll('button, a')).find(b => {
+            const t = (b.innerText || '').toLowerCase();
+            return t.includes('next') || t.includes('التالي');
+          });
         if (nextBtn && !nextBtn.disabled && nextBtn.getAttribute('disabled') === null && nextBtn.getAttribute('aria-disabled') !== 'true') {
           console.log(`[Ext] 📄 Stalled on current page. Clicking Pagination "Next"...`);
-          try { nextBtn.click(); } catch(e) {}
+          nextBtn.click();
           paginationStalls = 0;
           totalPaginationClicks++;
-          await wait(2500, 4000); 
+          await wait(2500, 4000); // give time for the next page to load
         }
-      }
-
-      // 4. STALL-BREAK PROTOCOL (If LinkedIn physically restricts the scroll to X posts)
-      if (paginationStalls >= 6) {
-          console.warn(`[Ext] ⚠️ Page physically frozen (No new posts loaded after 6 intervals). Fast-tracking to Phase 2 to prevent dead-loop.`);
-          break; // Break the Hunting while-loop instantly!
       }
 
       // Collect newly visible post containers
@@ -789,27 +787,18 @@ window.__linkedInExtractorReady = true;
           if (!visibleContainers.includes(el)) visibleContainers.push(el);
         });
       }
-      
-      // DEEP FALLBACK: Absolute Programmatic Ascension Traversal
-      // Bypasses static class names entirely; dynamically climbs the DOM until a mathematically valid wrap is hit.
+
+      // DEEP FALLBACK: Find ALL comment/like buttons and traverse upwards 
+      // This bulletproofs extraction against unexpected LinkedIn DOM A/B tests
       try {
         const actionBtns = document.querySelectorAll('button.comment-button, button[aria-label*="Comment" i], button[aria-label*="تعليق" i], button[aria-label*="Like" i], button[aria-label*="إعجاب" i]');
         actionBtns.forEach(btn => {
-          let wrapper = btn.parentElement;
-          while (wrapper && wrapper.tagName !== 'BODY' && wrapper.tagName !== 'MAIN') {
-             if (wrapper.tagName === 'LI' || wrapper.tagName === 'ARTICLE' || 
-                 wrapper.hasAttribute('data-urn') || wrapper.hasAttribute('data-id') || 
-                 wrapper.className.includes('update') || wrapper.className.includes('card')) {
-                 
-                 if (!visibleContainers.includes(wrapper)) {
-                    visibleContainers.push(wrapper);
-                 }
-                 break;
-             }
-             wrapper = wrapper.parentElement;
+          const wrapper = btn.closest('li.reusable-search__result-container, div.feed-shared-update-v2, div[data-id], div[data-urn], li.artdeco-card, div.profile-creator-shared-feed-update__container, li.search-results__list-item, div.search-results-container > div, li.scaffold-layout__list-item, article, [role="listitem"]');
+          if (wrapper && !visibleContainers.includes(wrapper)) {
+            visibleContainers.push(wrapper);
           }
         });
-      } catch(e) {}
+      } catch (e) { }
 
       totalVisibleContainersFound = Math.max(totalVisibleContainersFound, visibleContainers.length);
 
@@ -821,7 +810,7 @@ window.__linkedInExtractorReady = true;
 
         let postUrl = urnToUrl(urn);
         if (!postUrl && urn.startsWith('http')) {
-           postUrl = urn; // Urn extraction returned absolute URL early
+          postUrl = urn; // Urn extraction returned absolute URL early
         }
         if (!postUrl) continue;
 
@@ -836,20 +825,20 @@ window.__linkedInExtractorReady = true;
             container.querySelector('button[aria-label*="Comment"], [role="button"][aria-label*="Comment"]') ||
             container.querySelector('button[aria-label*="comment"], [role="button"][aria-label*="comment"]') ||
             container.querySelector('button[aria-label*="\u062a\u0639\u0644\u064a\u0642"], [role="button"][aria-label*="\u062a\u0639\u0644\u064a\u0642"]');
-            
+
           if (!cBtn) {
             cBtn = Array.from(container.querySelectorAll('button, [role="button"]')).find(b => {
               const label = (b.getAttribute('aria-label') || '').toLowerCase();
-              const text  = (b.innerText || '').toLowerCase().trim();
+              const text = (b.innerText || '').toLowerCase().trim();
               return label.includes('comment') || text === 'comment' ||
-                     label.includes('\u062a\u0639\u0644\u064a\u0642')  || text === '\u062a\u0639\u0644\u064a\u0642';
+                label.includes('\u062a\u0639\u0644\u064a\u0642') || text === '\u062a\u0639\u0644\u064a\u0642';
             });
           }
           // Check if button exists and is not disabled
           if (cBtn && !cBtn.disabled && cBtn.getAttribute('disabled') === null && cBtn.getAttribute('aria-disabled') !== 'true') {
             commentable = true;
           }
-        } catch(e) {}
+        } catch (e) { }
 
         allPosts.push({
           url: postUrl,
@@ -862,25 +851,25 @@ window.__linkedInExtractorReady = true;
           urn: urn,
           commentable: commentable
         });
-        
+
         if (metrics.likes + metrics.postComments >= BASELINE_ENGAGEMENT) {
           highQualityCount++;
         }
       }
-      
+
       // Early exit if we have found extensive, strong volume of PROVEN PERFORMERS
-      const REQUIRED_VOLUME = needsCommenting ? Math.max(requiredComments * 5, 20) : 50; 
+      const REQUIRED_VOLUME = needsCommenting ? Math.max(requiredComments * 5, 20) : 50;
       if (highQualityCount >= REQUIRED_VOLUME && step >= 25) {
         console.log(`[Ext] 🎯 Suitable strong volume found (${highQualityCount} high-quality posts). Concluding Hunt Mode.`);
         break;
       }
-      
+
       const noMoreBtn = document.querySelector('.search-no-results__container');
       if (noMoreBtn) {
         console.log('[Ext] Hit End of Feed bounds.');
         break;
       }
-      
+
       step++;
     }
 
@@ -890,7 +879,7 @@ window.__linkedInExtractorReady = true;
     // ── PRECISION DIAGNOSTIC TELEMETRY ──
     if (allPosts.length === 0 || allPosts.length < 5) {
       console.warn('[Ext] ⚠️ ABNORMAL POST VOLUME DETECTED. Running diagnostic inference...');
-      
+
       const finalScrollHeight = scrollTarget.scrollHeight || document.documentElement.scrollHeight || 0;
       let diagnosticMessage = '';
 
@@ -943,13 +932,13 @@ window.__linkedInExtractorReady = true;
       function rankPosts(a, b) {
         const aBracket = a.ageHours <= 24 ? 1 : (a.ageHours <= 168 ? 2 : 3);
         const bBracket = b.ageHours <= 24 ? 1 : (b.ageHours <= 168 ? 2 : 3);
-        
+
         if (aBracket !== bBracket) return aBracket - bBracket; // Newer bracket first
-        
+
         const aEng = a.likes + a.postComments;
         const bEng = b.likes + b.postComments;
         if (bEng !== aEng) return bEng - aEng; // Highest engagement first
-        
+
         return a.ageHours - b.ageHours; // Exact age tiebreaker
       }
 
@@ -979,7 +968,7 @@ window.__linkedInExtractorReady = true;
 
         // Grab exactly what we need to meet the target count Buffer
         const needed = targetCount - strictMatches.length;
-        
+
         targets = [
           ...strictMatches.sort(rankPosts),
           ...remainingValid.slice(0, needed)
@@ -1004,7 +993,7 @@ window.__linkedInExtractorReady = true;
       // Log target summary
       for (let i = 0; i < targets.length; i++) {
         const t = targets[i];
-        console.log(`[Ext]    Target ${i+1}: ${t.author} | Age: ${t.ageHours < 9999 ? t.ageHours+'h' : 'unk'} | L:${t.likes} C:${t.postComments} | ${t.url.substring(0, 50)}`);
+        console.log(`[Ext]    Target ${i + 1}: ${t.author} | Age: ${t.ageHours < 9999 ? t.ageHours + 'h' : 'unk'} | L:${t.likes} C:${t.postComments} | ${t.url.substring(0, 50)}`);
       }
 
       // ══════════════════════════════════════════════════════════════
@@ -1072,8 +1061,8 @@ window.__linkedInExtractorReady = true;
         }
 
         const commentObj = availableComments[commentIdx];
-        console.log(`[Ext] 🎯 Comment ${commentIdx+1}/${requiredComments} → "${target.author}" (L:${target.likes} C:${target.postComments})`);
-        heartbeat('Phase3-Typing', `⌨️ Comment ${commentIdx+1}/${requiredComments}: Engaging ${target.author}...`);
+        console.log(`[Ext] 🎯 Comment ${commentIdx + 1}/${requiredComments} → "${target.author}" (L:${target.likes} C:${target.postComments})`);
+        heartbeat('Phase3-Typing', `⌨️ Comment ${commentIdx + 1}/${requiredComments}: Engaging ${target.author}...`);
 
         const result = await tryPostComment(target.container, commentObj.text, target.url);
 
@@ -1090,10 +1079,10 @@ window.__linkedInExtractorReady = true;
 
           // Persist immediately
           try {
-            commentedHistory   = [...commentedHistory,   target.url].slice(-200);
+            commentedHistory = [...commentedHistory, target.url].slice(-200);
             usedCommentHistory = [...usedCommentHistory, commentObj.id].slice(-100);
             await chrome.storage.local.set({ commentedPosts: commentedHistory, usedCommentIds: usedCommentHistory });
-          } catch(e) {}
+          } catch (e) { }
 
           console.log(`[Ext] ✅ ${commentsPostedThisCycle}/${requiredComments} comments placed.`);
 
@@ -1137,14 +1126,14 @@ window.__linkedInExtractorReady = true;
                   el.querySelector('button[aria-label*="\u062a\u0639\u0644\u064a\u0642"], [role="button"][aria-label*="\u062a\u0639\u0644\u064a\u0642"]');
                 if (!cBtn) {
                   cBtn = Array.from(el.querySelectorAll('button, [role="button"]')).find(b => {
-                    const text  = (b.innerText || '').toLowerCase().trim();
+                    const text = (b.innerText || '').toLowerCase().trim();
                     return text === 'comment' || text === '\u062a\u0639\u0644\u064a\u0642';
                   });
                 }
                 if (cBtn && !cBtn.disabled && cBtn.getAttribute('disabled') === null && cBtn.getAttribute('aria-disabled') !== 'true') {
                   hasCommentBtn = true;
                 }
-              } catch(e) {}
+              } catch (e) { }
 
               if (hasCommentBtn && metrics.ageHours <= 744) {
                 emergencyPool.push({ container: el, url, ...metrics });
@@ -1168,7 +1157,7 @@ window.__linkedInExtractorReady = true;
           if (commentIdx >= requiredComments) break;
 
           const commentObj = availableComments[commentIdx];
-          console.log(`[Ext]    Emergency: comment ${commentIdx+1} → ${candidate.author} (L:${candidate.likes} C:${candidate.postComments})`);
+          console.log(`[Ext]    Emergency: comment ${commentIdx + 1} → ${candidate.author} (L:${candidate.likes} C:${candidate.postComments})`);
 
           const result = await tryPostComment(candidate.container, commentObj.text, candidate.url);
           if (result === 'BLOCKED') {
@@ -1181,10 +1170,10 @@ window.__linkedInExtractorReady = true;
             commentIdx++;
             commentedSet.add(candidate.url);
             try {
-              commentedHistory   = [...commentedHistory,   candidate.url].slice(-200);
+              commentedHistory = [...commentedHistory, candidate.url].slice(-200);
               usedCommentHistory = [...usedCommentHistory, commentObj.id].slice(-100);
               await chrome.storage.local.set({ commentedPosts: commentedHistory, usedCommentIds: usedCommentHistory });
-            } catch(e) {}
+            } catch (e) { }
             console.log(`[Ext] ✅ Emergency: ${commentsPostedThisCycle}/${requiredComments} comments placed.`);
             if (commentIdx < requiredComments) await wait(8000, 15000);
           }
@@ -1240,7 +1229,7 @@ window.__linkedInExtractorReady = true;
     // v7.8 Quality-First Pipeline: Try to strip generic junk
     const BASELINE_ENGAGEMENT = Math.max(10, minL + minC);
     const premiumData = syncData.filter(p => (p.likes || 0) + (p.comments || 0) >= BASELINE_ENGAGEMENT);
-    
+
     // Best-Effort Recovery: If premium data filtering resulted in an unacceptably low volume (e.g. < 5 posts),
     // default to capturing the absolute best 100 available from the generic pool rather than returning empty.
     let finalSync = [];
@@ -1267,7 +1256,7 @@ window.__linkedInExtractorReady = true;
           action: 'SYNC_RESULTS',
           posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo: debug || null
         }, () => {
-          if (chrome.runtime.lastError) {}
+          if (chrome.runtime.lastError) { }
           resolve();
         });
       } catch (err) { resolve(); }
