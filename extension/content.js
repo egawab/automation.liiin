@@ -715,27 +715,24 @@ window.__linkedInExtractorReady = true;
     const initialScrollHeight = scrollTarget.scrollHeight || document.documentElement.scrollHeight || 0;
 
     while (step < MAX_SCROLLS) {
-      // 1. Omnidirectional Scroll Bombing (Bypasses hidden overflow wrappers)
-      const scrollCandidates = [
-        window, document.documentElement, document.body,
-        document.querySelector('.scaffold-layout__main'),
-        document.querySelector('.scaffold-layout__list'),
-        document.querySelector('.search-results-container'),
-        document.querySelector('.scaffold-layout__content'),
-        document.querySelector('main')
-      ];
-
-      scrollCandidates.forEach(el => {
-        if (!el) return;
-        try {
-          if (typeof el.scrollBy === 'function') {
-            el.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
-          } else {
-            el.scrollTop += SCROLL_AMOUNT;
-          }
-          el.dispatchEvent(new Event('scroll'));
-        } catch (e) { }
+      // 1. Universal Nuclear Scrolling (Bypasses ANY hidden, obscured wrapper universally)
+      const allWebContainers = document.querySelectorAll('div, section, main, ul');
+      allWebContainers.forEach(el => {
+         if (el.scrollHeight > el.clientHeight + 10 && el.clientHeight > 150) {
+            try {
+              if (typeof el.scrollBy === 'function') {
+                el.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
+              } else {
+                el.scrollTop += SCROLL_AMOUNT;
+              }
+              el.dispatchEvent(new Event('scroll'));
+            } catch(e) {}
+         }
       });
+      // Safety net for standard setups
+      window.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
+      document.documentElement.scrollTop += SCROLL_AMOUNT;
+      window.dispatchEvent(new Event('scroll'));
 
       // Wait (pacing for network requests)
       await wait(1200, 2500);
@@ -756,28 +753,36 @@ window.__linkedInExtractorReady = true;
         await wait(600, 1000);
       }
 
-      // 3. Pagination Autopilot: Detect if we're stalled on a paginated search layout
+      // 3. Pagination Autopilot & Fast-Forward Stall Breaker
       if (allPosts.length === previousPostsCount) {
         paginationStalls++;
       } else {
-        paginationStalls = 0;
+        paginationStalls = 0; // Only reset when DOM ACTUALLY yields new posts
       }
       previousPostsCount = allPosts.length;
 
-      // If we've stalled for 3 scrolls, try hitting the "Next" page button
+      // If we hit 3 identical DOM reads, attempt to hit Next button
       if (paginationStalls >= 3) {
         const nextBtn = document.querySelector('.artdeco-pagination__button--next') ||
           Array.from(document.querySelectorAll('button, a')).find(b => {
             const t = (b.innerText || '').toLowerCase();
-            return t.includes('next') || t.includes('التالي');
+            return (t.includes('next') || t.includes('التالي')) && !t.includes('page');
           });
+          
         if (nextBtn && !nextBtn.disabled && nextBtn.getAttribute('disabled') === null && nextBtn.getAttribute('aria-disabled') !== 'true') {
-          console.log(`[Ext] 📄 Stalled on current page. Clicking Pagination "Next"...`);
-          nextBtn.click();
-          paginationStalls = 0;
+          console.log(`[Ext] \ud83d\udcc4 Stalled on current page. Clicking Pagination "Next"...`);
+          try { nextBtn.click(); } catch(e) {}
           totalPaginationClicks++;
-          await wait(2500, 4000); // give time for the next page to load
+          // We DO NOT reset paginationStalls here.
+          // If the button click fails to load posts, the stall counter continues to 6 and trips the Killswitch.
+          await wait(2500, 4000); 
         }
+      }
+
+      // 4. STALL-BREAK PROTOCOL (Killswitch for frozen backend pagination boundaries)
+      if (paginationStalls >= 6) {
+          console.warn(`[Ext] \u26A0\uFE0F Page physically frozen (No new posts loaded after 6 intervals). Fast-tracking to Phase 2 to prevent dead-loop.`);
+          break; // Break the Hunting while-loop instantly!
       }
 
       // Collect newly visible post containers
@@ -788,17 +793,34 @@ window.__linkedInExtractorReady = true;
         });
       }
 
-      // DEEP FALLBACK: Find ALL comment/like buttons and traverse upwards 
-      // This bulletproofs extraction against unexpected LinkedIn DOM A/B tests
+      // DEEP FALLBACK: Absolute Programmatic Ascension Traversal
+      // Bypasses static class names entirely; dynamically climbs the DOM until a mathematically valid wrap is hit.
       try {
         const actionBtns = document.querySelectorAll('button.comment-button, button[aria-label*="Comment" i], button[aria-label*="تعليق" i], button[aria-label*="Like" i], button[aria-label*="إعجاب" i]');
         actionBtns.forEach(btn => {
-          const wrapper = btn.closest('li.reusable-search__result-container, div.feed-shared-update-v2, div[data-id], div[data-urn], li.artdeco-card, div.profile-creator-shared-feed-update__container, li.search-results__list-item, div.search-results-container > div, li.scaffold-layout__list-item, article, [role="listitem"]');
-          if (wrapper && !visibleContainers.includes(wrapper)) {
-            visibleContainers.push(wrapper);
+          let wrapper = btn.parentElement;
+          while (wrapper && wrapper.tagName !== 'BODY' && wrapper.tagName !== 'MAIN') {
+             const cn = (wrapper.className || '').toLowerCase();
+             // Critical: Prevent trapping on tiny UI actionable elements that would strip the URN context
+             if (cn.includes('action') || cn.includes('button')) {
+                wrapper = wrapper.parentElement;
+                continue;
+             }
+             
+             if (wrapper.hasAttribute('data-urn') || wrapper.hasAttribute('data-id') || 
+                 cn.includes('update') || cn.includes('card') || cn.includes('search-result') ||
+                 wrapper.tagName === 'ARTICLE' || 
+                 (wrapper.tagName === 'LI' && cn.length > 0 && !cn.includes('social'))) {
+                 
+                 if (!visibleContainers.includes(wrapper)) {
+                    visibleContainers.push(wrapper);
+                 }
+                 break;
+             }
+             wrapper = wrapper.parentElement;
           }
         });
-      } catch (e) { }
+      } catch(e) {}
 
       totalVisibleContainersFound = Math.max(totalVisibleContainersFound, visibleContainers.length);
 
@@ -1208,7 +1230,8 @@ window.__linkedInExtractorReady = true;
         action: 'JOB_COMPLETED',
         commentsPostedCount: 0,
         assignedCommentsCount: 0,
-        searchOnlyMode: true
+        searchOnlyMode: true,
+        postsExtracted: allPosts.length
       });
     }
   }

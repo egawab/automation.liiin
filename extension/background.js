@@ -851,8 +851,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     let rapidCooldownOverride = false;
-    if (message.searchOnlyMode && message.postsExtracted >= 1 && message.postsExtracted <= 5) {
-       console.log(`[Worker] ⚠️ Feed truncation active (only ${message.postsExtracted} posts). Forcing rapid page flip to maintain volume.`);
+    if (message.searchOnlyMode && message.postsExtracted >= 1 && message.postsExtracted < 25) {
+       console.log(`[Worker] \u26A0\uFE0F Feed truncation active (only ${message.postsExtracted} posts). Forcing rapid page flip to maintain volume.`);
        rapidCooldownOverride = true;
     }
 
