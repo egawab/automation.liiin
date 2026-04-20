@@ -263,9 +263,10 @@ window.__linkedInExtractorReady = true;
       // Engagement fallback: parse from visible text if aria-labels failed
       if (likes === 0 && postComments === 0) {
         const text = (container.innerText || '').replace(/[\n\r]/g, ' ');
-        const mLike = text.match(/(\d[\d,]*)\s*(reactions?|likes?)/i);
+        // Support English and Arabic metrics, K/M denominations
+        const mLike = text.match(/(\d[\d,]*k?m?)\s*(reactions?|likes?|إعجاب|إعجابات)/i);
         if (mLike) likes = num(mLike[1]);
-        const mComm = text.match(/(\d[\d,]*)\s*comments?/i);
+        const mComm = text.match(/(\d[\d,]*k?m?)\s*(comments?|تعليق|تعليقات)/i);
         if (mComm) postComments = num(mComm[1]);
       }
       
@@ -714,19 +715,27 @@ window.__linkedInExtractorReady = true;
     const initialScrollHeight = scrollTarget.scrollHeight || document.documentElement.scrollHeight || 0;
     
     while (step < MAX_SCROLLS) {
-      // 1. Dual-Scroll: Aggressively scroll both the detected container AND the window
-      if (typeof scrollTarget.scrollBy === 'function') {
-        scrollTarget.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
-      } else {
-        scrollTarget.scrollTop += SCROLL_AMOUNT;
-      }
+      // 1. Omnidirectional Scroll Bombing (Bypasses hidden overflow wrappers)
+      const scrollCandidates = [
+        window, document.documentElement, document.body,
+        document.querySelector('.scaffold-layout__main'),
+        document.querySelector('.scaffold-layout__list'),
+        document.querySelector('.search-results-container'),
+        document.querySelector('.scaffold-layout__content'),
+        document.querySelector('main')
+      ];
       
-      if (scrollTarget !== window && scrollTarget !== document.documentElement) {
-        window.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
-      }
-      
-      window.dispatchEvent(new Event('scroll'));
-      scrollTarget.dispatchEvent(new Event('scroll'));
+      scrollCandidates.forEach(el => {
+        if (!el) return;
+        try {
+          if (typeof el.scrollBy === 'function') {
+            el.scrollBy({ top: SCROLL_AMOUNT, behavior: 'auto' });
+          } else {
+            el.scrollTop += SCROLL_AMOUNT;
+          }
+          el.dispatchEvent(new Event('scroll'));
+        } catch(e) {}
+      });
 
       // Wait (pacing for network requests)
       await wait(1200, 2500);
@@ -736,13 +745,16 @@ window.__linkedInExtractorReady = true;
         heartbeat(`Phase1-Scroll-${step+1}/${MAX_SCROLLS}`, `🔍 Hunting: ${step+1}/${MAX_SCROLLS} (Found ${highQualityCount} high-quality / ${allPosts.length} total)...`);
       }
 
-      // 2. Click "Show more" / "See more" buttons (Standard UI)
-      const more = Array.from(document.querySelectorAll('button')).find(b =>
-        b.innerText.toLowerCase().includes('show more') ||
-        b.innerText.toLowerCase().includes('see more')  ||
-        b.innerText.toLowerCase().includes('عرض المزيد')
-      );
-      if (more) { more.click(); await wait(600, 1000); }
+      // 2. Bridge Button Annihilation (Unlocks restricted feed containers)
+      const bridgeText = ['show more', 'see more', 'شوف المزيد', 'عرض المزيد', 'see all', 'view all', 'all results', 'see all posts'];
+      const moreObj = Array.from(document.querySelectorAll('button, a, span.artdeco-button__text')).find(el => {
+        const text = (el.innerText || '').toLowerCase();
+        return bridgeText.some(str => text.includes(str));
+      });
+      if (moreObj) { 
+        try { moreObj.click(); } catch(e) {}
+        await wait(600, 1000); 
+      }
 
       // 3. Pagination Autopilot: Detect if we're stalled on a paginated search layout
       if (allPosts.length === previousPostsCount) {
@@ -754,8 +766,12 @@ window.__linkedInExtractorReady = true;
 
       // If we've stalled for 3 scrolls, try hitting the "Next" page button
       if (paginationStalls >= 3) {
-        const nextBtn = document.querySelector('.artdeco-pagination__button--next, button[aria-label="Next"]');
-        if (nextBtn && !nextBtn.disabled) {
+        const nextBtn = document.querySelector('.artdeco-pagination__button--next') || 
+                        Array.from(document.querySelectorAll('button, a')).find(b => {
+                           const t = (b.innerText || '').toLowerCase();
+                           return t.includes('next') || t.includes('التالي');
+                        });
+        if (nextBtn && !nextBtn.disabled && nextBtn.getAttribute('disabled') === null && nextBtn.getAttribute('aria-disabled') !== 'true') {
           console.log(`[Ext] 📄 Stalled on current page. Clicking Pagination "Next"...`);
           nextBtn.click();
           paginationStalls = 0;
