@@ -734,8 +734,8 @@ window.__linkedInExtractorReady = true;
       document.documentElement.scrollTop += SCROLL_AMOUNT;
       window.dispatchEvent(new Event('scroll'));
 
-      // Wait (pacing for network requests)
-      await wait(1200, 2500);
+      // Wait longer (pacing for complex DOM loading and delayed intersection observers)
+      await wait(2000, 3500);
 
       // Heartbeat every 5 steps
       if (step % 5 === 4) {
@@ -807,11 +807,18 @@ window.__linkedInExtractorReady = true;
                 continue;
              }
              
-             if (wrapper.hasAttribute('data-urn') || wrapper.hasAttribute('data-id') || 
-                 cn.includes('update') || cn.includes('card') || cn.includes('search-result') ||
-                 wrapper.tagName === 'ARTICLE' || 
-                 (wrapper.tagName === 'LI' && cn.length > 0 && !cn.includes('social'))) {
-                 
+             // DETERMINISTIC ASCENSION: Execute strict ID check
+             // Mathematically guarantees we don't stop ascending until we encapsulate an area containing the Post ID
+             const forcedUrn = extractUrn(wrapper);
+             if (forcedUrn) {
+                 if (!visibleContainers.includes(wrapper)) {
+                    visibleContainers.push(wrapper);
+                 }
+                 break;
+             }
+
+             // If ID check functionally fails, fallback to major structural boundaries
+             if (wrapper.tagName === 'ARTICLE' || cn.includes('search-result') || cn.includes('feed-shared-update')) {
                  if (!visibleContainers.includes(wrapper)) {
                     visibleContainers.push(wrapper);
                  }
