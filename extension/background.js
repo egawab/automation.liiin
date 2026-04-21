@@ -706,6 +706,17 @@ async function finishCycle(tabId, incrementKeyword = true, rapidCooldownOverride
     updates.keywordSearchPages = searchPages;
 
     // Search-Only State Machine Advance
+    const maxPagesPerKeyword = 5;
+    const currentPageNum = searchPages[state.currentKeyword] + 1;
+
+    // Apply strict limit to Rapid Override to prevent infinite loops on garbage keywords
+    if (rapidCooldownOverride && currentPageNum > maxPagesPerKeyword) {
+        console.warn(`[Worker] 🛑 Keyword "${state.currentKeyword}" exceeded ${maxPagesPerKeyword} rapid pages. Terminating rapid override to prevent dead-loop.`);
+        rapidCooldownOverride = false;
+        updates.cooldownMs = getCooldown(failures); // Revert back to 15min rest 
+        cd = updates.cooldownMs; // Sync logging variable
+    }
+
     // If not doing rapid bypass, advance to the NEXT keyword in the Search-Only Campaign
     if (!rapidCooldownOverride) {
       if (incrementKeyword) {
