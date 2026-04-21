@@ -356,7 +356,7 @@ async function _checkJobsInner() {
     const allComments = data.comments || [];
 
     // ═══════════════════════════════════════════════════════════
-    // SEARCH-ONLY MODE: Emulate cycle tracking driven by config
+    // SEARCH-ONLY MODE: State Machine Driven Background Limits
     // ═══════════════════════════════════════════════════════════
     if (settings.searchOnlyMode) {
       let searchConfig = [];
@@ -382,75 +382,66 @@ async function _checkJobsInner() {
         if (!state.isPaused) {
           await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: CYCLE_COOLDOWN_MS });
           console.log("⏸️ [Worker] AUTO-PAUSED: All search cycles completed.");
-          // Also set dashboard active to false
           try {
             await fetch(`${dashboardUrl}/api/settings`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
               body: JSON.stringify({ systemActive: false })
             });
-            console.log("✅ [Worker] Dashboard systemActive set to FALSE.");
           } catch(e) {}
         }
         return;
       }
       
       const keywordsToSearch = searchConfig[currentCycleNum] || [];
-      // Clean empty keywords
       const cleanKeywords = keywordsToSearch.filter(k => (typeof k === 'string' && k.trim().length > 0));
 
-      console.log(`🔍 [Worker] SEARCH-ONLY CYCLE ${currentCycleNum + 1}/${targetSearchCycles}: Processing ${cleanKeywords.length} keyword(s)...`);
+      if (cleanKeywords.length === 0) {
+        await saveState({ currentSearchCycle: currentCycleNum + 1 });
+        return;
+      }
+
+      const kwIndex = state.currentSearchKeywordIndex || 0;
+
+      // Finish Search Cycle & trigger cooldown if all keywords are done
+      if (kwIndex >= cleanKeywords.length) {
+        await saveState({
+          isJobRunning: false,
+          activeTabId: null,
+          cycleStartTime: 0,
+          lastJobTime: Date.now(),
+          cooldownMs: CYCLE_COOLDOWN_MS,
+          currentKeyword: null,
+          currentSearchKeywordIndex: 0,
+          currentSearchCycle: currentCycleNum + 1, // Advance cycle
+          liveStatusText: ''
+        });
+
+        const cdMin = Math.round(CYCLE_COOLDOWN_MS / 60000);
+        console.log(`[Worker] Search cycle ${currentCycleNum + 1} done. Cooldown: ${cdMin} min.`);
+        showPremiumToast('Search Complete', `✅ Search cycle ${currentCycleNum + 1} completed. Next in ${cdMin} min.`, false);
+        return;
+      }
+
+      // ── Process current keyword ──
+      const kwStr = cleanKeywords[kwIndex];
+      const searchPages = state.keywordSearchPages || {};
+      const pageNum = (searchPages[kwStr] || 0) + 1;
+
+      console.log(`🔍 [Worker] Search-only keyword ${kwIndex+1}/${cleanKeywords.length}: "${kwStr}" (Page ${pageNum})`);
+      showPremiumToast('Search Mode', `Searching: "${kwStr}" (${kwIndex+1}/${cleanKeywords.length})`, false);
+
       await saveState({
         isJobRunning: true,
         cycleStartTime: Date.now(),
-        liveStatusText: `🔍 Search cycle ${currentCycleNum + 1}: Processing ${cleanKeywords.length} keywords...`
+        currentKeyword: kwStr,
+        liveStatusText: `🔍 Searching "${kwStr}" (${kwIndex+1}/${cleanKeywords.length})...`
       });
 
-      if (cleanKeywords.length > 0) {
-        for (let ki = 0; ki < cleanKeywords.length; ki++) {
-          const kwStr = cleanKeywords[ki];
-          const searchPages = (await loadState()).keywordSearchPages || {};
-          const pageNum = (searchPages[kwStr] || 0) + 1;
-
-          console.log(`🔍 [Worker] Search-only keyword ${ki+1}/${cleanKeywords.length}: "${kwStr}" (Page ${pageNum})`);
-          showPremiumToast('Search Mode', `Searching: "${kwStr}" (${ki+1}/${cleanKeywords.length})`, false);
-
-          await saveState({
-            currentKeyword: kwStr,
-            liveStatusText: `🔍 Searching "${kwStr}" (${ki+1}/${cleanKeywords.length})...`
-          });
-
-          // Phase 1 mode bypasses comment arrays
-          await startScrapingCycle(kwStr, settings, [], dashboardUrl, userId, currentCycleNum + 1, pageNum);
-
-          // Wait 3-5 min between keywords within a cycle (unless it's the last one)
-          if (ki < cleanKeywords.length - 1) {
-            const interKeywordDelay = 180000 + Math.floor(Math.random() * 120000); // 3-5 min
-            const delayMin = Math.round(interKeywordDelay / 60000);
-            console.log(`⏳ [Worker] Waiting ${delayMin} min before next keyword...`);
-            await saveState({ liveStatusText: `⏳ Cooling down ${delayMin} min before next keyword...` });
-            await sleep(interKeywordDelay);
-          }
-        }
-      } else {
-        console.log(`⚠️ [Worker] Cycle ${currentCycleNum + 1} has zero keywords. Skipping...`);
-      }
-
-      // Finish Search Cycle & trigger cooldown
-      await saveState({
-        isJobRunning: false,
-        activeTabId: null,
-        cycleStartTime: 0,
-        lastJobTime: Date.now(),
-        cooldownMs: CYCLE_COOLDOWN_MS,
-        currentKeyword: null,
-        currentSearchCycle: currentCycleNum + 1, // Advance cycle
-        liveStatusText: ''
-      });
-
-      const cdMin = Math.round(CYCLE_COOLDOWN_MS / 60000);
-      console.log(`[Worker] Search cycle ${currentCycleNum + 1} done. Cooldown: ${cdMin} min.`);
-      showPremiumToast('Search Complete', `✅ Search cycle ${currentCycleNum + 1} completed. Next in ${cdMin} min.`, false);
+      // Launch cycle async. It will call finishCycle when done.
+      startScrapingCycle(kwStr, settings, [], dashboardUrl, userId, currentCycleNum + 1, pageNum);
+      
+      // Do NOT sleep here. Exit and wait for `content.js` to signal completion.
       return;
     }
 
@@ -713,7 +704,17 @@ async function finishCycle(tabId, incrementKeyword = true, rapidCooldownOverride
     searchPages[state.currentKeyword] = (searchPages[state.currentKeyword] || 0) + 1;
     console.log(`[Worker] Keyword "${state.currentKeyword}" search page incremented to ${searchPages[state.currentKeyword] + 1}.`);
     updates.keywordSearchPages = searchPages;
-    updates.currentKeyword = null;
+
+    // Search-Only State Machine Advance
+    // If not doing rapid bypass, advance to the NEXT keyword in the Search-Only Campaign
+    if (!rapidCooldownOverride) {
+      if (incrementKeyword) {
+         updates.currentSearchKeywordIndex = (state.currentSearchKeywordIndex || 0) + 1;
+      }
+      updates.currentKeyword = null;
+    } else {
+      console.log(`[Worker] Rapid Override Active. Keeping "${state.currentKeyword}" locked for immediate consecutive execution.`);
+    }
   }
 
   await saveState(updates);
@@ -728,7 +729,7 @@ let _lastContentHeartbeat = 0;
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'START_POLLING') {
     console.log("🚀 [Worker] Received START command from dashboard. Resetting system limits and waking up.");
-    saveState({ isPaused: false, keywordCycles: {}, cooldownMs: 0, cycleStartTime: 0, consecutiveFailures: 0, hourlyCommentsMade: 0, currentSearchCycle: 0 }).then(() => {
+    saveState({ isPaused: false, keywordCycles: {}, cooldownMs: 0, cycleStartTime: 0, consecutiveFailures: 0, hourlyCommentsMade: 0, currentSearchCycle: 0, currentSearchKeywordIndex: 0 }).then(() => {
       checkJobs();
     });
     if (sendResponse) sendResponse({ ok: true });

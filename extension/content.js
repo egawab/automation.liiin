@@ -927,7 +927,7 @@ window.__linkedInExtractorReady = true;
       // If strictly ZERO posts, abort entirely to prevent cascading bugs
       if (allPosts.length === 0) {
         safeSend({ action: 'LIVE_STATUS', text: diagnosticMessage });
-        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: requiredComments, searchOnlyMode: false });
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: requiredComments, searchOnlyMode: settings.searchOnlyMode, postsExtracted: 0 });
         // Dump extra console logs for direct developer debugging
         console.warn(`[Ext] [DEV-DUMP] InitialScroll:${initialScrollHeight} FinalScroll:${finalScrollHeight} PaginationClicks:${totalPaginationClicks}`);
         return;
