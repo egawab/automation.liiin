@@ -817,17 +817,16 @@ window.__linkedInExtractorReady = true;
     console.log('[v18] Initial harvest: +' + initCount + ' (total=' + allPosts.length + ', real=' + countReal(allPosts) + ')');
     heartbeat('Phase1-Init', '✅ Initial: ' + countReal(allPosts) + ' real posts');
 
-    // ── Step 4: Scroll loop — CAPPED AT 150 COLLECTED POSTS ──
+    // ── Step 4: Scroll loop — CAPPED AT 150 SCANNED RESULTS ──
     const STALL_LIMIT = 8;
-    const ABSOLUTE_SAFETY_LIMIT = 400; // Physical scroll step safety stop
-    const COLLECTED_POSTS_LIMIT = 150; // Strict limit: 150 VALID posts collected per keyword
-    const MAX_URLS_SCANNED = 500; // Hard safety cap on total URLs seen (prevents runaway)
+    const ABSOLUTE_SAFETY_LIMIT = 400; // Physical safety stop
+    const SCANNED_RESULTS_LIMIT = 150; // Strict limit: 150 items scanned per keyword
     let stallCount = 0;
     let step = 0;
 
-    heartbeat('Phase1-Scroll', '📜 Scrolling until 150 posts collected or feed exhaustion...');
+    heartbeat('Phase1-Scroll', '📜 Scrolling until 150 results scanned or feed exhaustion...');
 
-    while (step < ABSOLUTE_SAFETY_LIMIT && allPosts.length < COLLECTED_POSTS_LIMIT && seenUrls.size < MAX_URLS_SCANNED) {
+    while (step < ABSOLUTE_SAFETY_LIMIT && seenUrls.size < SCANNED_RESULTS_LIMIT) {
       const scrollAmt = 700 + Math.floor(Math.random() * 500);
       aggressiveScroll(scrollAmt);
 
@@ -858,8 +857,8 @@ window.__linkedInExtractorReady = true;
       }
 
       const real = countReal(allPosts);
-      console.log('[v18] Scroll ' + (step + 1) + ' | URLs: ' + currentSeenSize + ' | Collected: ' + allPosts.length + '/' + COLLECTED_POSTS_LIMIT + ' | Real: ' + real + ' | Stall: ' + stallCount + '/' + STALL_LIMIT);
-      if (step % 5 === 0) heartbeat('Phase1-Scroll', '📜 Scrolled ' + step + ' | ' + allPosts.length + '/' + COLLECTED_POSTS_LIMIT + ' collected');
+      console.log('[v18] Scroll ' + (step + 1) + ' | Scanned URLs: ' + currentSeenSize + ' | Saved: ' + real + ' | Stall: ' + stallCount + '/' + STALL_LIMIT);
+      if (step % 5 === 0) heartbeat('Phase1-Scroll', '📜 Scrolled ' + step + ' times | ' + real + ' real posts');
 
       // Stall handling
       if (stallCount >= STALL_LIMIT) {
@@ -894,12 +893,9 @@ window.__linkedInExtractorReady = true;
       }
       step++;
       
-      if (allPosts.length >= COLLECTED_POSTS_LIMIT) {
-        console.log('[v18] ✅ Limit reached: ' + allPosts.length + ' posts collected (from ' + seenUrls.size + ' URLs scanned). Finishing keyword.');
-        heartbeat('Phase1-Limit', '✅ ' + allPosts.length + ' posts collected. Moving to next keyword.');
-      } else if (seenUrls.size >= MAX_URLS_SCANNED) {
-        console.log('[v18] ⚠️ Safety cap: ' + seenUrls.size + ' URLs scanned. Collected ' + allPosts.length + ' posts. Finishing keyword.');
-        heartbeat('Phase1-Limit', '⚠️ URL cap reached. ' + allPosts.length + ' posts collected.');
+      if (seenUrls.size >= SCANNED_RESULTS_LIMIT) {
+        console.log('[v18] Limit reached: 150 results scanned. Finishing keyword.');
+        heartbeat('Phase1-Limit', '✅ 150 results scanned. Moving to next keyword.');
       }
       
       // ── INCREMENTAL SAVE (CRASH PROTECTOR) ──
