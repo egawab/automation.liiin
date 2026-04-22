@@ -71,17 +71,14 @@ export async function POST(req: Request) {
 
     let savedCount = 0;
     let updatedCount = 0;
+    let errors: string[] = [];
     
     // Process posts in parallel for maximum performance
     if (posts && posts.length > 0) {
-        await Promise.all(posts.map(async (post) => {
-          try {
-            // Quality Gate: Skip zero-engagement posts (both likes AND comments are 0)
+        const results = await Promise.allSettled(posts.map(async (post) => {
+            // Quality Gate: Relaxed to allow all real extracted posts through.
             const postLikes = Number(post.likes || 0);
             const postComments = Number(post.comments || 0);
-            if (postLikes === 0 && postComments === 0) {
-              return; // Skip saving this post entirely
-            }
 
             // Check for existing post for THIS user
             const existing = await prisma.savedPost.findFirst({
@@ -101,7 +98,7 @@ export async function POST(req: Request) {
                   visited: false
                 }
               });
-              savedCount++;
+              return 'saved';
             } else {
               // OPTIMIZATION: Update reach metrics for existing post to show "Action"
               await prisma.savedPost.update({
@@ -113,18 +110,35 @@ export async function POST(req: Request) {
                   savedAt: new Date() // Refresh timestamp to show it was recently seen
                 }
               });
-              updatedCount++;
+              return 'updated';
             }
-          } catch (err) {
-            console.warn(`[API] Failed to process post ${post.url}:`, err);
-          }
         }));
+
+        // Analyze results
+        const rejected = results.filter(r => r.status === 'rejected');
+        if (rejected.length > 0) {
+            rejected.forEach((r: any) => {
+                const errStr = r.reason?.message || String(r.reason);
+                console.error(`[API] Prisma Error:`, errStr);
+                errors.push(errStr);
+            });
+
+            // STRICT REQUIREMENT: If ALL posts failed to save, the API MUST throw a 500 error
+            // so the extension knows it failed and doesn't log a "fake success".
+            if (rejected.length === posts.length) {
+                throw new Error(`CRITICAL PRISMA FAILURE: All ${posts.length} posts failed to save. First error: ${errors[0]}`);
+            }
+        }
+
+        savedCount = results.filter(r => r.status === 'fulfilled' && r.value === 'saved').length;
+        updatedCount = results.filter(r => r.status === 'fulfilled' && r.value === 'updated').length;
     }
 
     return setCorsHeaders(NextResponse.json({ 
       success: true, 
       savedCount, 
       updatedCount, 
+      errors,
       message: `Processed ${posts.length} posts. ${savedCount} New, ${updatedCount} Refreshed.` 
     }, { status: 200 }));
 

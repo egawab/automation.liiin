@@ -1,17 +1,27 @@
 // ═══════════════════════════════════════════════════════════
-// LinkedIn Safety Worker v6 — Stable & Deterministic
+// LinkedIn Safety Worker v10 — Deep Extraction Support
 // ═══════════════════════════════════════════════════════════
-// v6 Changes:
-//   - Fixed 15-minute cooldown between cycles (no randomness)
-//   - cycleIndex is strictly 1-based (matching dashboard)
-//   - Enforces exactly 2 comments per cycle
-//   - Search-only mode iterates ALL keywords per cycle
-//   - Per-hour comment cap: 4 comments/hour
-//   - Exponential backoff on failed cycles
-//   - First-cycle warm-up delay
+// v10 Changes from v9:
+//
+//   FIX 1 — STALE_TIMEOUT and WATCHDOG raised to 30 min:
+//     content.js v14 runs up to 120 main scroll steps (was 60) +
+//     3 expansion rounds of 40-60 steps each + time-filter injections.
+//     Total worst-case runtime: ~25-28 min. Raised both the stale
+//     job guard and the watchdog timer to 30 min to allow complete runs.
+//
+//   FIX 2 — SEARCH_INTER_KEYWORD_MS raised to 20s:
+//     v14 extraction takes longer per keyword due to deeper scrolling.
+//     Giving 20s between keywords in the same group (was 15s) avoids
+//     overlapping tab creation.
+//
+//   All v9 architecture preserved:
+//     - 3-keyword cooldown grouping
+//     - Single START_POLLING listener
+//     - Mutex-safe checkJobs
+//     - Comment mode unchanged
 // ═══════════════════════════════════════════════════════════
 
-console.log("[Worker] ═══ Safety Worker v6 (Stable) Initialized ═══");
+console.log("[Worker] ═══ Safety Worker v11 (Multi-Pass Deep Extraction) Initialized ═══");
 
 // ── Persistent State (chrome.storage.local) ──
 let cachedDeviceFingerprint = null;
@@ -26,9 +36,9 @@ async function getExtensionFingerprint() {
     const offscreen = new OffscreenCanvas(200, 50);
     const ctx = offscreen.getContext('2d');
     ctx.textBaseline = "top"; ctx.font = "14px 'Arial'"; ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = "#f60"; ctx.fillRect(125,1,62,20);
-    ctx.fillStyle = "#069"; ctx.fillText("Nexora \ud83d\ude03", 2, 15);
-    ctx.fillStyle = "rgba(102, 204, 0, 0.7)"; ctx.fillText("Nexora \ud83d\ude03", 4, 17);
+    ctx.fillStyle = "#f60"; ctx.fillRect(125, 1, 62, 20);
+    ctx.fillStyle = "#069"; ctx.fillText("Nexora 😃", 2, 15);
+    ctx.fillStyle = "rgba(102, 204, 0, 0.7)"; ctx.fillText("Nexora 😃", 4, 17);
     const blob = await offscreen.convertToBlob();
     const buffer = await blob.arrayBuffer();
     const nav = navigator;
@@ -42,10 +52,11 @@ async function getExtensionFingerprint() {
     cachedDeviceFingerprint = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     await chrome.storage.local.set({ extFingerprint: cachedDeviceFingerprint });
     return cachedDeviceFingerprint;
-  } catch(e) {
+  } catch (e) {
     return 'fallback_ext_' + Math.random().toString(36);
   }
 }
+
 async function loadState() {
   return chrome.storage.local.get({
     isJobRunning: false,
@@ -64,6 +75,7 @@ async function loadState() {
     keywordSearchPages: {},
     consecutiveFailures: 0,
     currentSearchCycle: 0,
+    currentSearchKeywordIndex: 0,
     activityLog: []
   });
 }
@@ -81,11 +93,7 @@ async function updateBadge() {
     color = '#10b981';
   } else {
     const elapsed = Date.now() - (s.lastJobTime || 0);
-    if (s.lastJobTime > 0 && elapsed < (s.cooldownMs || 0)) {
-      color = '#f59e0b';
-    } else {
-      color = '#6b7280';
-    }
+    color = (s.lastJobTime > 0 && elapsed < (s.cooldownMs || 0)) ? '#f59e0b' : '#6b7280';
   }
 
   chrome.action.setBadgeText({ text });
@@ -166,14 +174,34 @@ async function showPremiumToast(title, message, isError = false) {
 // ── Helpers ──
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// Fixed 15-minute cooldown between cycles for predictability and safety
-const CYCLE_COOLDOWN_MS = 900000; // 15 minutes exactly
+// ── Cooldown Config ──
+// v9 FIX 2: 3-keyword grouping cooldown system
+// SEARCH_INTER_KEYWORD_MS: short pause between keywords within a group of 3
+// SEARCH_KEYWORD_COOLDOWN_MS: cooldown applied after every 3 keywords
+// SEARCH_FULL_CYCLE_COOLDOWN_MS: cooldown after all keywords are done
+const SEARCH_INTER_KEYWORD_MS = 20000;       // 20s between keywords within a group
+const SEARCH_KEYWORD_COOLDOWN_MS = 900000;   // 15 min cooldown every 3 keywords (User requested rule)
+const SEARCH_FULL_CYCLE_COOLDOWN_MS = 1200000; // 20 min after all keywords done
+const COMMENT_CYCLE_COOLDOWN_MS = 900000;    // 15 min (comment mode — unchanged)
 
-function getCooldown(consecutiveFailures = 0) {
-  // Exponential backoff: 15 min → 20 min → 30 min on consecutive failures
-  if (consecutiveFailures >= 2) return 1800000; // 30 min
-  if (consecutiveFailures >= 1) return 1200000; // 20 min
-  return CYCLE_COOLDOWN_MS; // 15 min
+// v9 FIX 2: Determine cooldown based on keyword position
+function getCooldown(kwIndex, totalKeywords, consecutiveFailures = 0, searchOnlyMode = false) {
+  if (searchOnlyMode) {
+    // Apply group cooldown every 3 keywords
+    const isGroupBoundary = kwIndex > 0 && kwIndex % 3 === 0;
+    if (isGroupBoundary || consecutiveFailures >= 2) {
+      const base = SEARCH_KEYWORD_COOLDOWN_MS;
+      if (consecutiveFailures >= 2) return base * 2;
+      if (consecutiveFailures >= 1) return Math.round(base * 1.5);
+      return base;
+    }
+    // Within a group: short inter-keyword pause
+    return SEARCH_INTER_KEYWORD_MS;
+  }
+  // Comment mode: exponential backoff as before
+  if (consecutiveFailures >= 2) return 1800000;
+  if (consecutiveFailures >= 1) return 1200000;
+  return COMMENT_CYCLE_COOLDOWN_MS;
 }
 
 function waitForTabLoad(tabId, timeoutMs = 20000) {
@@ -191,11 +219,21 @@ function waitForTabLoad(tabId, timeoutMs = 20000) {
   });
 }
 
+async function tabExists(tabId) {
+  if (!tabId) return false;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return !!tab;
+  } catch (e) {
+    return false;
+  }
+}
+
 // ── Main Poll (with mutex) ──
 let checkJobsLock = false;
 
 async function checkJobs() {
-  if (checkJobsLock) return;
+  if (checkJobsLock) return; // v9 FIX 4: reentrant-safe
   checkJobsLock = true;
   try {
     await _checkJobsInner();
@@ -209,20 +247,27 @@ async function _checkJobsInner() {
 
   // Gate 1: Already running
   if (state.isJobRunning) {
-    // FIX-1 + FIX-5: Use cycleStartTime (stamped when we open the tab) for stale detection.
-    // The real pipeline worst-case: 7s hydration + 87s scrolling + ~60s commenting = ~155s.
-    // We allow 10 minutes (600000ms) before declaring a job stale.
-    const STALE_TIMEOUT_MS = 600000; // 10 minutes
+    // v10: Raised STALE_TIMEOUT to 30 min for deep multi-round extraction (content.js v14)
+    const STALE_TIMEOUT_MS = 1800000; // 30 min
     const runningTime = Date.now() - (state.cycleStartTime || state.lastJobTime || 0);
+
     if (runningTime < STALE_TIMEOUT_MS) {
-      console.log(`⏳ [Worker] Job in progress (${Math.round(runningTime/1000)}s), skipping poll.`);
-      return;
+      const alive = await tabExists(state.activeTabId);
+      if (!alive && state.activeTabId !== null) {
+        console.warn(`🧹 [Worker] Active tab ${state.activeTabId} no longer exists. Cleaning up early.`);
+        await saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
+        // Fall through to restart cycle
+      } else {
+        console.log(`⏳ [Worker] Job in progress (${Math.round(runningTime / 1000)}s), skipping poll.`);
+        return;
+      }
+    } else {
+      console.log("🧹 [Worker] Stale job detected (15min+). Cleaning up...");
+      if (state.activeTabId) {
+        try { await chrome.tabs.remove(state.activeTabId); } catch (e) { }
+      }
+      await saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
     }
-    console.log("🧹 [Worker] Stale job detected (10min+). Cleaning up...");
-    if (state.activeTabId) {
-      try { await chrome.tabs.remove(state.activeTabId); } catch (e) {}
-    }
-    await saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
   }
 
   // Gate 2: Cooldown timer
@@ -233,21 +278,18 @@ async function _checkJobsInner() {
     return;
   }
 
-  // Gate 3: Auto-pause check
+  // Gate 3: Paused
   if (state.isPaused) {
     const trickleMs = 600000;
     if (elapsed < trickleMs) {
-      console.log(`⏸️ [Worker] PAUSED. Trickle mode: ${Math.ceil((trickleMs - elapsed) / 60000)} min left.`);
+      console.log(`⏸️ [Worker] PAUSED. Trickle: ${Math.ceil((trickleMs - elapsed) / 60000)} min left.`);
       return;
     }
   }
 
-  // Gate 4: Clean any stale tab
+  // Gate 4: Clean any stale tab (safety net)
   if (state.activeTabId !== null) {
-    try {
-      await chrome.tabs.remove(state.activeTabId);
-      console.log(`🧹 [Worker] Cleaned stale tab ${state.activeTabId}.`);
-    } catch (e) {}
+    try { await chrome.tabs.remove(state.activeTabId); console.log(`🧹 [Worker] Cleaned stale tab ${state.activeTabId}.`); } catch (e) { }
     await saveState({ activeTabId: null });
   }
 
@@ -267,19 +309,20 @@ async function _checkJobsInner() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
 
-    // Dashboard Start/Stop detection
     const isActive = data.active === true;
     if (state.wasDashboardActive === false && isActive) {
-      console.log("🔄 [Worker] Dashboard turned active. Resetting cycles and daily limits.");
+      console.log("🔄 [Worker] Dashboard turned active. Full reset.");
       await saveState({
         keywordCycles: {},
-        keywordSearchPages: {}, // Ensure pure isolated state
+        keywordSearchPages: {},
         isPaused: false,
         wasDashboardActive: true,
         lastJobTime: 0,
         dailyCommentsMade: 0,
         currentSearchCycle: 0,
-        cycleStartTime: 0
+        currentSearchKeywordIndex: 0,
+        cycleStartTime: 0,
+        consecutiveFailures: 0
       });
       state.keywordCycles = {};
       state.keywordSearchPages = {};
@@ -288,6 +331,7 @@ async function _checkJobsInner() {
       state.lastJobTime = 0;
       state.dailyCommentsMade = 0;
       state.currentSearchCycle = 0;
+      state.currentSearchKeywordIndex = 0;
     } else {
       await saveState({ wasDashboardActive: isActive });
     }
@@ -300,40 +344,31 @@ async function _checkJobsInner() {
     }
 
     if (!settings.searchOnlyMode) {
-      // ═══════════════════════════════════════════════════════════
-      // LEGACY COMMENT MODE: Restrict payload using comment keyword cycles
-      // ═══════════════════════════════════════════════════════════
       if (!data.keywords?.length) {
         console.log(`😴 [Worker] Idle: Comment campaigns missing.`);
         return;
       }
-      
       const kc = (await loadState()).keywordCycles || {};
       const availableKeywords = data.keywords.filter(k => (kc[k.keyword] || 0) < (k.targetCycles || 1));
 
-      // Auto-pause if all comment keywords hit limit
       if (availableKeywords.length === 0) {
         if (!state.isPaused) {
-          const fallbackCooldown = 900000 + Math.floor(Math.random() * 300000); // 15-20 min
+          const fallbackCooldown = COMMENT_CYCLE_COOLDOWN_MS + Math.floor(Math.random() * 300000);
           await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: fallbackCooldown, dailyCommentsMade: 0 });
-          console.log("⏸️ [Worker] AUTO-PAUSED: All comment keywords completed their target cycles.");
+          console.log("⏸️ [Worker] AUTO-PAUSED: All comment keywords completed.");
           try {
             await fetch(`${dashboardUrl}/api/settings`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
               body: JSON.stringify({ systemActive: false })
             });
-            console.log("✅ [Worker] Dashboard systemActive set to FALSE.");
-          } catch(e) {}
+          } catch (e) { }
         }
         return;
       }
-      
-      // Inject availableKeywords into data for traditional loop access below
-      data.availableKeywords = availableKeywords; 
+      data.availableKeywords = availableKeywords;
     }
 
-    // Unpause if new valid jobs exist
     if (state.isPaused) {
       await saveState({ isPaused: false });
     }
@@ -341,153 +376,129 @@ async function _checkJobsInner() {
     // ── Safety Limit Resets ──
     const today = new Date().toDateString();
     const currentHour = new Date().getHours();
-    if (state.lastCommentDate !== today) {
-      state.dailyCommentsMade = 0;
-      state.hourlyCommentsMade = 0;
+    const freshState = await loadState();
+    if (freshState.lastCommentDate !== today) {
       await saveState({ dailyCommentsMade: 0, hourlyCommentsMade: 0, lastCommentDate: today, lastCommentHour: currentHour });
-      console.log("📅 [Worker] New day started. Reset daily comment quota.");
+      console.log("📅 [Worker] New day. Reset daily comment quota.");
     }
-    if (state.lastCommentHour !== currentHour) {
-      state.hourlyCommentsMade = 0;
+    if (freshState.lastCommentHour !== currentHour) {
       await saveState({ hourlyCommentsMade: 0, lastCommentHour: currentHour });
-      console.log("🕐 [Worker] New hour started. Reset hourly comment quota.");
+      console.log("🕐 [Worker] New hour. Reset hourly comment quota.");
     }
 
     const allComments = data.comments || [];
 
     // ═══════════════════════════════════════════════════════════
-    // SEARCH-ONLY MODE: State Machine Driven Background Limits
+    // SEARCH-ONLY MODE — Sequential Keyword Queue (v9)
     // ═══════════════════════════════════════════════════════════
     if (settings.searchOnlyMode) {
-      let searchConfig = [];
+      let allKeywords = [];
       try {
-        const rawList = JSON.parse(settings.searchConfigJson || "[]").flat(Infinity).filter(k => typeof k === 'string' && k.trim().length > 0);
-        for (let i = 0; i < rawList.length; i += 3) {
-          searchConfig.push(rawList.slice(i, i + 3));
-        }
+        allKeywords = JSON.parse(settings.searchConfigJson || "[]")
+          .flat(Infinity)
+          .filter(k => typeof k === 'string' && k.trim().length > 0)
+          .map(k => k.trim());
       } catch (e) {
-        console.warn("⚠️ [Worker] Failed to parse searchConfigJson", e);
+        console.warn("⚠️ [Worker] Failed to parse searchConfigJson:", e.message);
       }
-      
-      const targetSearchCycles = searchConfig.length;
-      
-      if (targetSearchCycles === 0) {
-        console.warn("⚠️ [Worker] Search-Only mode active but no cycles configured. Waiting...");
-        return;
-      }
-      
-      const currentCycleNum = state.currentSearchCycle || 0;
-      
-      if (currentCycleNum >= targetSearchCycles) {
-        if (!state.isPaused) {
-          await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: CYCLE_COOLDOWN_MS });
-          console.log("⏸️ [Worker] AUTO-PAUSED: All search cycles completed.");
-          try {
-            await fetch(`${dashboardUrl}/api/settings`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-              body: JSON.stringify({ systemActive: false })
-            });
-          } catch(e) {}
-        }
-        return;
-      }
-      
-      const keywordsToSearch = searchConfig[currentCycleNum] || [];
-      const cleanKeywords = keywordsToSearch.filter(k => (typeof k === 'string' && k.trim().length > 0));
 
-      if (cleanKeywords.length === 0) {
-        await saveState({ currentSearchCycle: currentCycleNum + 1 });
+      if (allKeywords.length === 0) {
+        console.warn("⚠️ [Worker] Search-Only: no keywords configured.");
         return;
       }
 
-      const kwIndex = state.currentSearchKeywordIndex || 0;
+      const kwIndex = (await loadState()).currentSearchKeywordIndex || 0;
 
-      // Finish Search Cycle & trigger cooldown if all keywords are done
-      if (kwIndex >= cleanKeywords.length) {
+      // All keywords done → full cycle complete
+      if (kwIndex >= allKeywords.length) {
+        const cyclesDone = ((await loadState()).currentSearchCycle || 0) + 1;
         await saveState({
           isJobRunning: false,
           activeTabId: null,
           cycleStartTime: 0,
           lastJobTime: Date.now(),
-          cooldownMs: CYCLE_COOLDOWN_MS,
+          cooldownMs: SEARCH_FULL_CYCLE_COOLDOWN_MS,
           currentKeyword: null,
           currentSearchKeywordIndex: 0,
-          currentSearchCycle: currentCycleNum + 1, // Advance cycle
+          currentSearchCycle: cyclesDone,
+          keywordSearchPages: {},
+          isPaused: true,
           liveStatusText: ''
         });
-
-        const cdMin = Math.round(CYCLE_COOLDOWN_MS / 60000);
-        console.log(`[Worker] Search cycle ${currentCycleNum + 1} done. Cooldown: ${cdMin} min.`);
-        showPremiumToast('Search Complete', `✅ Search cycle ${currentCycleNum + 1} completed. Next in ${cdMin} min.`, false);
+        const cdMin = Math.round(SEARCH_FULL_CYCLE_COOLDOWN_MS / 60000);
+        console.log(`[Worker] ✅ All ${allKeywords.length} keywords done. Cycle ${cyclesDone} complete. Pausing ${cdMin} min.`);
+        showPremiumToast('All Keywords Done', `✅ Cycle ${cyclesDone} complete! ${allKeywords.length} keywords searched. Resuming in ${cdMin} min.`, false);
+        try {
+          await fetch(`${dashboardUrl}/api/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
+            body: JSON.stringify({ systemActive: false })
+          });
+        } catch (e) { }
         return;
       }
 
-      // ── Process current keyword ──
-      const kwStr = cleanKeywords[kwIndex];
-      const searchPages = state.keywordSearchPages || {};
-      const pageNum = (searchPages[kwStr] || 0) + 1;
+      const kwStr = allKeywords[kwIndex];
+      const pageNum = 1; // content.js handles all pagination internally
 
-      console.log(`🔍 [Worker] Search-only keyword ${kwIndex+1}/${cleanKeywords.length}: "${kwStr}" (Page ${pageNum})`);
-      showPremiumToast('Search Mode', `Searching: "${kwStr}" (${kwIndex+1}/${cleanKeywords.length})`, false);
+      // v9 FIX 2: Log group position for visibility
+      const groupNum = Math.floor(kwIndex / 3) + 1;
+      const posInGroup = (kwIndex % 3) + 1;
+      console.log(`🔍 [Worker] Search-only: keyword ${kwIndex + 1}/${allKeywords.length} (Group ${groupNum}, #${posInGroup}/3): "${kwStr}"`);
+      showPremiumToast('Search Mode', `🔍 Keyword ${kwIndex + 1}/${allKeywords.length}: "${kwStr}"`, false);
 
       await saveState({
         isJobRunning: true,
         cycleStartTime: Date.now(),
         currentKeyword: kwStr,
-        liveStatusText: `🔍 Searching "${kwStr}" (${kwIndex+1}/${cleanKeywords.length})...`
+        liveStatusText: `🔍 Searching "${kwStr}" (${kwIndex + 1}/${allKeywords.length})...`
       });
+      // Save settings for PASS_DONE handler
+      await chrome.storage.local.set({ jobSettings: settings, jobComments: [] });
 
-      // Launch cycle async. It will call finishCycle when done.
-      startScrapingCycle(kwStr, settings, [], dashboardUrl, userId, currentCycleNum + 1, pageNum);
-      
-      // Do NOT sleep here. Exit and wait for `content.js` to signal completion.
+      const currentCycle = ((await loadState()).currentSearchCycle || 0) + 1;
+      startScrapingCycle(kwStr, settings, [], dashboardUrl, userId, currentCycle, pageNum, 0, []);
       return;
     }
 
-
     // ═══════════════════════════════════════════════════════════
-    // COMMENT MODE: Pick one keyword, enforce exactly 2 comments
+    // COMMENT MODE (unchanged from v8)
     // ═══════════════════════════════════════════════════════════
     const available = data.availableKeywords || [];
     if (available.length === 0) return;
-    
+
     const kwObj = available[Math.floor(Math.random() * available.length)];
     const kw = kwObj.keyword;
     const kc = (await loadState()).keywordCycles || {};
     const cycleNum = (kc[kw] || 0) + 1;
 
-    // Strictly 1-based cycleIndex (matching dashboard: cycleIndex = Math.floor(i / 2) + 1)
     const keywordComments = allComments.filter(c =>
       c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum
     );
-    console.log(`[Worker] Comments for "${kw}" cycle #${cycleNum}: ${keywordComments.length} found (cycleIndex=${cycleNum}, keywordId=${kwObj.id})`);
+    console.log(`[Worker] Comments for "${kw}" cycle #${cycleNum}: ${keywordComments.length} found`);
 
-    // ── Enforce exactly 2 comments per cycle ──
     if (keywordComments.length !== 2) {
-      console.error(`[Worker] ❌ VALIDATION FAILED: Expected exactly 2 comments for cycle #${cycleNum} of "${kw}", but found ${keywordComments.length}. Skipping cycle.`);
-      console.error(`[Worker] Available comment cycleIndexes for this keyword:`, allComments.filter(c => c.keywordId === kwObj.id).map(c => `id=${c.id} cycleIndex=${c.cycleIndex}`));
-      showPremiumToast('Configuration Error', `❌ Keyword "${kw}" cycle #${cycleNum} needs exactly 2 comments, found ${keywordComments.length}. Fix in Campaign Builder.`, true);
+      console.error(`[Worker] ❌ VALIDATION FAILED: Expected 2 comments for cycle #${cycleNum} of "${kw}", found ${keywordComments.length}.`);
+      showPremiumToast('Configuration Error', `❌ "${kw}" cycle #${cycleNum} needs exactly 2 comments, found ${keywordComments.length}.`, true);
       return;
     }
 
-    // ── Per-hour comment cap: max 4 comments/hour ──
-    if (state.hourlyCommentsMade >= 4) {
-      console.warn("🛡️ [Worker] Hourly comment cap (4/hour) reached. Waiting for next hour.");
-      showPremiumToast('Safety Limit', '🛡️ Hourly comment limit reached (4/hr). Cooling down.', false);
-      await saveState({ cooldownMs: CYCLE_COOLDOWN_MS, lastJobTime: Date.now() });
+    const cState = await loadState();
+
+    if (cState.hourlyCommentsMade >= 4) {
+      console.warn("🛡️ [Worker] Hourly comment cap (4/hr) reached.");
+      showPremiumToast('Safety Limit', '🛡️ Hourly limit reached. Cooling down.', false);
+      await saveState({ cooldownMs: COMMENT_CYCLE_COOLDOWN_MS, lastJobTime: Date.now() });
       return;
     }
 
-    // ── Daily comment cap: max 15/day ──
-    if (state.dailyCommentsMade >= 15) {
-      console.warn("🛡️ [Worker] Daily comment limit (15) reached! Pausing until tomorrow.");
-      showPremiumToast('Daily Limit', '🛡️ Daily comment limit reached (15/day). Resuming tomorrow.', false);
+    if (cState.dailyCommentsMade >= 15) {
+      console.warn("🛡️ [Worker] Daily comment limit (15) reached.");
+      showPremiumToast('Daily Limit', '🛡️ Daily limit reached. Resuming tomorrow.', false);
       await saveState({ isPaused: true, cooldownMs: 3600000, lastJobTime: Date.now() });
       return;
     }
 
-    // Stamp cycleStartTime before tab opens for stale detection
     await saveState({
       isJobRunning: true,
       currentKeyword: kw,
@@ -498,8 +509,8 @@ async function _checkJobsInner() {
     const searchPages = (await loadState()).keywordSearchPages || {};
     const pageNum = (searchPages[kw] || 0) + 1;
 
-    console.log(`🚀 [Worker] Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}" with ${keywordComments.length} comments assigned. (Search Page: ${pageNum})`);
-    showPremiumToast('Nexora Engine Started', `Starting cycle #${cycleNum}/${kwObj.targetCycles || 1} for "${kw}" (Pg ${pageNum})`, false);
+    console.log(`🚀 [Worker] Comment cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}" (Page ${pageNum})`);
+    showPremiumToast('Nexora Engine', `Starting cycle #${cycleNum} for "${kw}" (Pg ${pageNum})`, false);
     await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId, cycleNum, pageNum);
 
   } catch (error) {
@@ -511,38 +522,35 @@ async function _checkJobsInner() {
   }
 }
 
-// ── Scraping Cycle (Navigation-Resilient v4 — Background-Throttle-Safe) ──
-async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId, cycleNum = 1, pageNum = 1) {
-  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&page=${pageNum}`;
+// ── Scraping Cycle (Single-Tab, Navigation-Resilient) ──
+// passIndex: 0 = relevance URL (all time ranges), 1 = date URL (recent)
+// priorPosts: serialized posts from pass 0, forwarded to content.js for pass 1
+async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId, cycleNum = 1, pageNum = 1, passIndex = 0, priorPosts = []) {
+  // Pass 0: relevance sort (all time ranges, maximum reach)
+  // Pass 1: date sort (recent posts)
+  const searchUrl = passIndex === 0
+    ? `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`
+    : `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
   let injectionCount = 0;
   const MAX_INJECTIONS = 3;
 
   try {
-    // CRITICAL FIX: Create the window with focused: true.
-    // Chrome throttles setTimeout/setInterval to 1Hz minimum in background tabs.
-    // A tab that is NEVER focused gets throttled from the first moment, meaning
-    // wait(800, 1200) actually takes 1000ms minimum per call — acceptable — but
-    // wait(2000, 3500) was taking up to 35 seconds per step because the old code
-    // used those ranges. With focused:true the tab gets normal timer resolution.
-    // We minimize the window immediately after injection starts so it doesn't
-    // steal the user's screen, but by then the JS engine is already running at
-    // full speed and Chrome won't throttle it back for several seconds.
+    // Open ONE focused window — prevents timer throttling
     const win = await chrome.windows.create({
       url: searchUrl,
       type: 'normal',
       state: 'normal',
-      focused: true,   // ← must be true to prevent timer throttling
+      focused: true,
       width: 1100,
       height: 900
     });
     const tab = win.tabs[0];
     await saveState({ activeTabId: tab.id });
 
-    console.log(`💉 [Worker] Tab ${tab.id} created. Waiting for page load...`);
+    console.log(`💉 [Worker] Tab ${tab.id} created for "${keyword}". Waiting for load...`);
     await waitForTabLoad(tab.id, 20000);
-    await sleep(1000); // Quick hydration buffer
+    await sleep(1500);
 
-    // ── Helper: Inject and Start ──
     async function injectAndStart() {
       injectionCount++;
       console.log(`🛠️ [Worker] Injection attempt #${injectionCount}/${MAX_INJECTIONS}...`);
@@ -552,31 +560,31 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
         currentTab = await chrome.tabs.get(tab.id);
       } catch (e) {
         console.warn("⚠️ [Worker] Tab lost before injection.");
-        await finishCycle(null, false);
+        await finishCycle(null, false, settings.searchOnlyMode);
         return false;
       }
 
       if (!currentTab.url || !currentTab.url.includes('linkedin.com')) {
-        console.warn(`⚠️ [Worker] Tab URL is no longer LinkedIn: ${currentTab.url}`);
-        chrome.tabs.remove(tab.id).catch(() => {});
-        await finishCycle(null, false);
+        console.warn(`⚠️ [Worker] Tab URL not LinkedIn: ${currentTab.url}`);
+        chrome.tabs.remove(tab.id).catch(() => { });
+        await finishCycle(null, false, settings.searchOnlyMode);
         return false;
       }
 
-      console.log(`📍 [Worker] Tab URL verified: ${currentTab.url.substring(0, 80)}...`);
+      console.log(`📍 [Worker] Tab verified: ${currentTab.url.substring(0, 80)}...`);
 
       try {
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
       } catch (e) {
         console.error("❌ [Worker] Inject failed:", e.message);
-        chrome.tabs.remove(tab.id).catch(() => {});
-        await finishCycle(null, false);
+        chrome.tabs.remove(tab.id).catch(() => { });
+        await finishCycle(null, false, settings.searchOnlyMode);
         return false;
       }
 
-      await sleep(1500); // Let script register listener
+      await sleep(1500);
 
-      console.log("🚀 [Worker] Starting extraction via direct execution...");
+      console.log("🚀 [Worker] Starting extraction...");
       try {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
@@ -587,20 +595,20 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
               throw new Error("Extractor function not defined on window.");
             }
           },
-          args: [keyword, settings, comments, dashboardUrl, userId]
+          args: [keyword, { ...settings, passIndex, priorPosts }, comments, dashboardUrl, userId]
         });
-        console.log("✅ [Worker] Content script successfully started.");
+        console.log("✅ [Worker] Content script started.");
         _lastContentHeartbeat = Date.now();
         return true;
       } catch (e) {
         console.error(`❌ [Worker] Comm error on attempt #${injectionCount}:`, e.message);
         if (injectionCount < MAX_INJECTIONS) {
-          console.log("🔄 [Worker] Will retry injection after navigation settles...");
+          console.log("🔄 [Worker] Retrying injection...");
           await sleep(5000);
-          return injectAndStart(); // Retry
+          return injectAndStart();
         }
-        chrome.tabs.remove(tab.id).catch(() => {});
-        await finishCycle(null, false);
+        chrome.tabs.remove(tab.id).catch(() => { });
+        await finishCycle(null, false, settings.searchOnlyMode);
         return false;
       }
     }
@@ -608,27 +616,51 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
     const started = await injectAndStart();
     if (!started) return;
 
-    // Minimize the window now that the content script is running.
-    // The JS engine keeps full timer resolution once a window has been focused
-    // at least once. Minimizing AFTER injection does NOT re-enable throttling.
-    // We give the script 2 seconds to start its first await before minimizing.
-    setTimeout(() => {
-      chrome.windows.update(win.id, { state: 'minimized' }).catch(() => {});
-      console.log(`🪟 [Worker] Window ${win.id} minimized. Script running at full speed.`);
-    }, 2000);
+    // CRITICAL: Do NOT minimize — minimized tabs have document.visibilityState='hidden'
+    // which disables IntersectionObserver, killing LinkedIn's infinite scroll loader.
+    // Instead: shrink the window and unfocus it. It stays "visible" to Chrome's engine
+    // so IntersectionObserver fires and LinkedIn loads new post cards.
+    setTimeout(async () => {
+      try {
+        await chrome.windows.update(win.id, {
+          state: 'normal',
+          focused: false,
+          width: 800,
+          height: 600
+        });
+        console.log(`🪟 [Worker] Window ${win.id} unfocused (800x600, visible to renderer).`);
+      } catch(e) {
+        console.log(`🪟 [Worker] Window unfocus failed (non-fatal):`, e.message);
+      }
+    }, 3000);
 
-    // ── Tab navigation listener: re-inject if LinkedIn re-renders ──
+    // Re-inject on tab navigation
+    // IMPORTANT: Do NOT re-inject for pass-driven navigations — those are handled
+    // by the PASS_DONE message handler which injects content.js itself.
+    // Only re-inject on unexpected navigations (e.g. LinkedIn redirects).
+    let backgroundNavigating = false; // set true when background drives navigation
     const navListener = async (tabId, changeInfo) => {
       if (tabId !== tab.id) return;
-      if (changeInfo.status === 'complete' && injectionCount < MAX_INJECTIONS) {
-        console.log("🔄 [Worker] Tab re-navigated! Re-injecting content script...");
-        await sleep(3000);
-        await injectAndStart();
+      if (changeInfo.status === 'complete' && !backgroundNavigating && injectionCount < MAX_INJECTIONS) {
+        const newTab = await chrome.tabs.get(tabId).catch(() => null);
+        if (!newTab) return;
+        // Only re-inject if URL looks like an unexpected navigation (not our pass URL)
+        const isPassUrl = newTab.url && (
+          newTab.url.includes('/search/results/content/') &&
+          newTab.url.includes('origin=GLOBAL_SEARCH_HEADER')
+        );
+        if (!isPassUrl) {
+          console.log("🔄 [Worker] Unexpected navigation detected. Re-injecting...");
+          await sleep(3000);
+          await injectAndStart();
+        } else {
+          console.log("🔄 [Worker] Pass navigation detected — skipping auto re-inject (PASS_DONE handles this).");
+        }
       }
     };
     chrome.tabs.onUpdated.addListener(navListener);
 
-    // ── Heartbeat monitor: re-inject if content script dies silently ──
+    // Heartbeat monitor
     const heartbeatInterval = setInterval(async () => {
       const s = await loadState();
       if (!s.isJobRunning || s.activeTabId !== tab.id) {
@@ -637,48 +669,61 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
         return;
       }
       const timeSinceHeartbeat = Date.now() - _lastContentHeartbeat;
-      if (timeSinceHeartbeat > 60000 && injectionCount < MAX_INJECTIONS) {
-        console.warn(`💀 [Worker] No heartbeat for ${Math.round(timeSinceHeartbeat/1000)}s. Re-injecting...`);
+      if (timeSinceHeartbeat > 90000 && injectionCount < MAX_INJECTIONS) {
+        // v9: Raised re-inject threshold from 60s to 90s (content.js v10 pauses up to 3.5s/step × 5 = 17s between heartbeats)
+        console.warn(`💀 [Worker] No heartbeat for ${Math.round(timeSinceHeartbeat / 1000)}s. Re-injecting...`);
         await injectAndStart();
       }
-    }, 15000);
+    }, 20000);
 
-    // FIX-4: Watchdog raised to 10 minutes.
-    // Worst-case pipeline: ~155s scrolling + ~60s commenting + margin = ~300s.
-    // 10 minutes (600000ms) is safe and won't fire during a healthy run.
-    const WATCHDOG_MS = 600000;
+    // v10: Watchdog raised to 30 min for deep multi-round extraction (content.js v14)
+    const WATCHDOG_MS = 1800000;
     const watchdogTabId = tab.id;
     setTimeout(async () => {
       clearInterval(heartbeatInterval);
       chrome.tabs.onUpdated.removeListener(navListener);
       const s = await loadState();
       if (s.isJobRunning && s.activeTabId === watchdogTabId) {
-        console.warn("⏱️ [Worker] WATCHDOG: 10-min timeout. Force-killing tab.");
-        chrome.tabs.remove(watchdogTabId).catch(() => {});
-        await finishCycle(null, false);
+        console.warn("⏱️ [Worker] WATCHDOG: 30-min timeout reached. Triggering emergency memory flush...");
+        
+        try {
+          // Force content.js to dump all un-synced posts to the backend API before dying
+          await chrome.scripting.executeScript({
+            target: { tabId: watchdogTabId },
+            func: () => { if (window.__emergencySync) window.__emergencySync(); }
+          });
+          // Give the fetch operation inside background.js a few seconds to buffer the incoming DB write
+          await sleep(4000); 
+        } catch(e) {
+          console.warn("⏱️ [Worker] Error during emergency sync:", e.message);
+        }
+
+        console.warn("⏱️ [Worker] WATCHDOG: Emergency sync complete. Force-killing tab.");
+        chrome.tabs.remove(watchdogTabId).catch(() => { });
+        await finishCycle(null, false, settings.searchOnlyMode);
       }
     }, WATCHDOG_MS);
 
   } catch (err) {
     console.error("❌ [Worker] Cycle failed:", err.message);
-    await finishCycle(null, false);
+    await finishCycle(null, false, settings.searchOnlyMode);
   }
 }
 
-// ── Finish Cycle (persists everything) ──
-async function finishCycle(tabId, incrementKeyword = true, rapidCooldownOverride = false) {
+// ── Finish Cycle ──
+// v9 FIX 2: Uses position-aware cooldown (3-keyword grouping for search mode)
+async function finishCycle(tabId, incrementKeyword = true, searchOnlyMode = false) {
   if (tabId) {
-    try { await chrome.tabs.remove(tabId); } catch (e) {}
+    try { await chrome.tabs.remove(tabId); } catch (e) { }
   }
 
   const state = await loadState();
   const failures = incrementKeyword ? 0 : (state.consecutiveFailures || 0) + 1;
-  let cd = getCooldown(failures);
-  
-  if (rapidCooldownOverride) {
-      // 10 second rapid cooldown to bypass backend pagination locks by manually flipping pages violently
-      cd = 10000;
-  }
+
+  // Get next keyword index for cooldown calculation
+  const nextKwIndex = (state.currentSearchKeywordIndex || 0) + 1;
+
+  const cd = getCooldown(nextKwIndex, 999 /* totalKeywords not needed for grouping */, failures, searchOnlyMode);
 
   const updates = {
     isJobRunning: false,
@@ -690,66 +735,84 @@ async function finishCycle(tabId, incrementKeyword = true, rapidCooldownOverride
     liveStatusText: ''
   };
 
-  if (incrementKeyword && state.currentKeyword) {
-    const kc = state.keywordCycles || {};
-    kc[state.currentKeyword] = (kc[state.currentKeyword] || 0) + 1;
-    console.log(`[Worker] Keyword "${state.currentKeyword}" cycle ${kc[state.currentKeyword]} complete.`);
-    updates.keywordCycles = kc;
-    updates.consecutiveFailures = 0; // Reset on success
-  }
-
-  // Always increment the LinkedIn search page so the next attempt doesn't get stuck on an exhausted page
   if (state.currentKeyword) {
-    const searchPages = state.keywordSearchPages || {};
-    searchPages[state.currentKeyword] = (searchPages[state.currentKeyword] || 0) + 1;
-    console.log(`[Worker] Keyword "${state.currentKeyword}" search page incremented to ${searchPages[state.currentKeyword] + 1}.`);
-    updates.keywordSearchPages = searchPages;
-
-    // Search-Only State Machine Advance
-    const maxPagesPerKeyword = 5;
-    const currentPageNum = searchPages[state.currentKeyword] + 1;
-
-    // Apply strict limit to Rapid Override to prevent infinite loops on garbage keywords
-    if (rapidCooldownOverride && currentPageNum > maxPagesPerKeyword) {
-        console.warn(`[Worker] 🛑 Keyword "${state.currentKeyword}" exceeded ${maxPagesPerKeyword} rapid pages. Terminating rapid override to prevent dead-loop.`);
-        rapidCooldownOverride = false;
-        updates.cooldownMs = getCooldown(failures); // Revert back to 15min rest 
-        cd = updates.cooldownMs; // Sync logging variable
-    }
-
-    // If not doing rapid bypass, advance to the NEXT keyword in the Search-Only Campaign
-    if (!rapidCooldownOverride) {
-      if (incrementKeyword) {
-         updates.currentSearchKeywordIndex = (state.currentSearchKeywordIndex || 0) + 1;
-      }
+    if (searchOnlyMode) {
+      updates.currentSearchKeywordIndex = nextKwIndex;
       updates.currentKeyword = null;
+      const searchPages = state.keywordSearchPages || {};
+      delete searchPages[state.currentKeyword];
+      updates.keywordSearchPages = searchPages;
+
+      // Log with group context
+      const groupBoundary = nextKwIndex > 0 && nextKwIndex % 3 === 0;
+      const cdSec = Math.round(cd / 1000);
+      const cdLabel = cd >= 60000 ? `${Math.round(cd / 60000)} min` : `${cdSec}s`;
+      console.log(`[Worker] ✅ "${state.currentKeyword}" done. → Keyword ${nextKwIndex}. Cooldown: ${cdLabel}${groupBoundary ? ' (GROUP BOUNDARY)' : ''}.`);
     } else {
-      console.log(`[Worker] Rapid Override Active. Keeping "${state.currentKeyword}" locked for immediate consecutive execution.`);
+      // Comment mode
+      updates.currentSearchKeywordIndex = nextKwIndex;
+      updates.currentKeyword = null;
+      const searchPages = state.keywordSearchPages || {};
+      delete searchPages[state.currentKeyword];
+      updates.keywordSearchPages = searchPages;
+
+      if (incrementKeyword) {
+        const kc = state.keywordCycles || {};
+        kc[state.currentKeyword] = (kc[state.currentKeyword] || 0) + 1;
+        updates.keywordCycles = kc;
+        updates.consecutiveFailures = 0;
+        console.log(`[Worker] ✅ "${state.currentKeyword}" cycle → ${kc[state.currentKeyword]}.`);
+      }
     }
   }
 
   await saveState(updates);
   const cdMin = Math.round(cd / 60000);
-  console.log(`[Worker] Cycle done. Next cooldown: ${cdMin} min${failures > 0 ? ` (backoff level ${failures})` : ''}.`);
-  showPremiumToast('Cycle Complete', `✅ Cycle complete! Cooling down for ${cdMin} minutes...`, false);
+  const cdSec = Math.round(cd / 1000);
+  const cdLabel = cd >= 60000 ? `${cdMin} min` : `${cdSec}s`;
+  console.log(`[Worker] Cycle done. Cooldown: ${cdLabel}${failures > 0 ? ` (backoff level ${failures})` : ''}.`);
+  showPremiumToast('Cycle Complete', `✅ Done! Cooling ${cdLabel} before next keyword...`, false);
 }
 
 // ── Message Router ──
+// v9 FIX 3: Single listener handles all message types including both START_POLLING sources
 let _lastContentHeartbeat = 0;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  // ── START_POLLING (from popup OR from dashboard-bridge) ──
   if (message.action === 'START_POLLING') {
-    console.log("🚀 [Worker] Received START command from dashboard. Resetting system limits and waking up.");
-    saveState({ isPaused: false, keywordCycles: {}, cooldownMs: 0, cycleStartTime: 0, consecutiveFailures: 0, hourlyCommentsMade: 0, currentSearchCycle: 0, currentSearchKeywordIndex: 0 }).then(() => {
-      checkJobs();
-    });
-    if (sendResponse) sendResponse({ ok: true });
+    console.log("🚀 [Worker] START command received.");
+    if (sendResponse) sendResponse({ ok: true, ack: true });
+
+    const triggerStart = () => {
+      chrome.storage.local.set({
+        isPaused: false,
+        keywordCycles: {},
+        keywordSearchPages: {},
+        cooldownMs: 0,
+        cycleStartTime: 0,
+        consecutiveFailures: 0,
+        hourlyCommentsMade: 0,
+        currentSearchCycle: 0,
+        currentSearchKeywordIndex: 0,
+        wasDashboardActive: false
+      }, () => {
+        setTimeout(() => checkJobs(), 50);
+      });
+    };
+
+    if (message.dashboardUrl && message.userId) {
+      chrome.storage.sync.set({ dashboardUrl: message.dashboardUrl, userId: message.userId }, triggerStart);
+    } else {
+      triggerStart();
+    }
     return true;
   }
 
   if (message.action === 'HEARTBEAT') {
     _lastContentHeartbeat = Date.now();
-    console.log(`💓 [Worker] Heartbeat from content script (Phase: ${message.phase || '?'})`);
+    console.log(`💓 [Worker] Heartbeat (Phase: ${message.phase || '?'})`);
     return;
   }
 
@@ -763,9 +826,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     try {
       chrome.runtime.sendMessage({ action: 'EXTENSION_LIVE_STATUS', text: message.text }, () => {
-        if (chrome.runtime.lastError) { /* popup closed, ignore */ }
+        if (chrome.runtime.lastError) { /* popup closed */ }
       });
-    } catch(e){}
+    } catch (e) { }
     return;
   }
 
@@ -774,20 +837,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const newDaily = (s.dailyCommentsMade || 0) + 1;
       const newHourly = (s.hourlyCommentsMade || 0) + 1;
       await saveState({ dailyCommentsMade: newDaily, hourlyCommentsMade: newHourly });
-      console.log(`💬 [Worker] Comment posted successfully. Daily: ${newDaily}/15 | Hourly: ${newHourly}/4`);
-      showPremiumToast('Comment Posted', `Successfully posted comment #${newDaily}/15 today (${newHourly}/4 this hour)!`, false);
+      console.log(`💬 [Worker] Comment posted. Daily: ${newDaily}/15 | Hourly: ${newHourly}/4`);
+      showPremiumToast('Comment Posted', `Comment #${newDaily}/15 today (${newHourly}/4 this hour)!`, false);
       const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
       if (config.dashboardUrl && config.userId) {
         const deviceId = await getExtensionFingerprint();
         fetch(`${config.dashboardUrl}/api/extension/action`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-extension-token': config.userId, 'x-device-id': deviceId },
-          body: JSON.stringify({
-            action: 'COMMENT',
-            postUrl: message.url || 'LinkedIn Post',
-            comment: 'Commented successfully on targeted post.'
-          })
-        }).catch(e => console.error("❌ [Worker] Action Log relay failed:", e));
+          body: JSON.stringify({ action: 'COMMENT', postUrl: message.url || 'LinkedIn Post', comment: 'Commented successfully.' })
+        }).catch(e => console.error("❌ [Worker] Action log failed:", e));
       }
       if (sendResponse) sendResponse({ ok: true });
     });
@@ -802,13 +861,110 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'SYNC_RESULTS') {
     const { posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo } = message;
-    console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts... (LinkedIn ID: ${linkedInProfileId || 'N/A'})`);
-    getExtensionFingerprint().then(deviceId => {
-      fetch(`${dashboardUrl}/api/extension/results`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
-        body: JSON.stringify({ keyword, posts, linkedInProfileId, debugInfo })
-      }).catch(e => console.error("❌ [Worker] Relay failed:", e));
+    console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts for "${keyword}"...`);
+    
+    getExtensionFingerprint().then(async deviceId => {
+      let success = false;
+      let lastError = null;
+      
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          console.log(`[Worker] Sync attempt ${attempt}/3...`);
+          const response = await fetch(`${dashboardUrl}/api/extension/results`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
+            body: JSON.stringify({ keyword, posts, linkedInProfileId, debugInfo })
+          });
+          
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${await response.text().catch(()=>'')}`);
+          }
+          
+          const result = await response.json().catch(() => ({}));
+          console.log(`✅ [Worker] Database sync successful. ${result.savedCount || 0} NEW + ${result.updatedCount || 0} UPDATED = ${posts?.length || 0} total relayed.`);
+          if (result.errors && result.errors.length > 0) {
+              console.error(`❌ [Worker] API reported ${result.errors.length} Prisma errors:`, result.errors);
+          }
+          success = true;
+          break; // Exit retry loop on success
+        } catch (e) {
+          lastError = e;
+          console.error(`⚠️ [Worker] Sync attempt ${attempt} failed:`, e.message);
+          if (attempt < 3) await sleep(2000 * attempt); // exponential backoff
+        }
+      }
+      
+      if (!success) {
+        console.error("❌ [Worker] CRITICAL SYNC FAILURE. Data could not be saved to dashboard:", lastError);
+      }
+    });
+    
+    if (sendResponse) sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.action === 'PASS_DONE') {
+    // v11: Multi-pass support (up to 4 passes)
+    // Pass 0 = relevance, Pass 1 = date sort, Pass 2 = past-month, Pass 3 = past-quarter
+    // Content.js may send a filterParam (e.g. 'r2592000') for time-filtered navigation
+    const { passIndex, posts, keyword, linkedInProfileId, filterParam } = message;
+    const realCount = (posts || []).filter(p => p.url && !p.url.includes('synthetic:')).length;
+    const highConf = (posts || []).filter(p => (p.likes||0) + (p.postComments||0) > 0).length;
+    console.log(`📄 [Worker] PASS_DONE pass=${passIndex} | ${posts?.length || 0} total (${realCount} real, ${highConf} high-conf) | filterParam=${filterParam || 'none'}`);
+
+    loadState().then(async s => {
+      if (!s.isJobRunning) { console.warn('[Worker] PASS_DONE received but job not running. Ignoring.'); return; }
+      const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
+      const settingsData = await chrome.storage.local.get(['jobSettings', 'jobComments']);
+      const jobSettings = settingsData.jobSettings || {};
+      const jobComments = settingsData.jobComments || [];
+
+      const tabId = s.activeTabId;
+      if (!tabId) { console.warn('[Worker] PASS_DONE: no active tab.'); return; }
+
+      const nextPass = passIndex + 1;
+
+      // Build URL for next pass
+      let nextUrl;
+      if (nextPass === 1) {
+        // Pass 1: date sort
+        nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
+      } else if (filterParam) {
+        // Pass 2/3: time-filtered (past-month or past-quarter)
+        nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted&f_TPR=${filterParam}`;
+      } else {
+        // No filter param and past pass 1 — skip to final sync
+        console.log(`[Worker] PASS_DONE: no filterParam for pass ${nextPass}. Treating as final.`);
+        await finishCycle(tabId, true, jobSettings.searchOnlyMode);
+        return;
+      }
+
+      console.log(`[Worker] PASS_DONE: navigating tab ${tabId} to Pass ${nextPass} URL...`);
+
+      try {
+        await chrome.tabs.update(tabId, { url: nextUrl });
+        await waitForTabLoad(tabId, 20000);
+        await sleep(1500);
+
+        // Inject content.js fresh onto the new page
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+        await sleep(1500);
+
+        // Start next pass with accumulated posts
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: (k, s, c, du, u) => {
+            if (window.__startExtraction) window.__startExtraction(k, s, c, du, u);
+            else throw new Error('Extractor not defined');
+          },
+          args: [keyword, { ...jobSettings, passIndex: nextPass, priorPosts: posts || [] }, jobComments, config.dashboardUrl, config.userId]
+        });
+        _lastContentHeartbeat = Date.now();
+        console.log(`[Worker] ✅ Pass ${nextPass} started on tab ${tabId}`);
+      } catch (err) {
+        console.error(`[Worker] PASS_DONE navigation failed: ${err.message}`);
+        await finishCycle(tabId, false, jobSettings.searchOnlyMode);
+      }
     });
     if (sendResponse) sendResponse({ ok: true });
     return true;
@@ -819,79 +975,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const posted = message.commentsPostedCount || 0;
     const assigned = message.assignedCommentsCount || 0;
     const blocked = message.linkedinBlocked || false;
-    console.log(`🏁 [Worker] Job ${status}. Comments: ${posted}/${assigned} | SearchOnly: ${message.searchOnlyMode} | Blocked: ${blocked}`);
+    const isSearchOnly = message.searchOnlyMode === true;
+
+    console.log(`🏁 [Worker] Job ${status}. Real posts extracted: ${message.postsExtracted || 'N/A'} | SearchOnly: ${isSearchOnly} | Blocked: ${blocked}`);
 
     let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
 
-    // v7.1: Smarter partial-cycle handling with LinkedIn restriction awareness.
-    if (isSuccessfulCycle && message.searchOnlyMode === false) {
+    if (isSuccessfulCycle && !isSearchOnly) {
       if (assigned > 0 && posted === 0) {
-        console.warn(`[Worker] ❌ Cycle posted 0/${assigned} comments. NOT consuming cycle slot. Will retry on next search page after cooldown.`);
+        console.warn(`[Worker] ❌ 0/${assigned} comments posted. NOT consuming cycle slot.`);
         isSuccessfulCycle = false;
-        showPremiumToast(
-          'Cycle Failed',
-          `❌ 0/${assigned} comments posted. Retrying on fresh page after cooldown...`,
-          true
-        );
+        showPremiumToast('Cycle Failed', `❌ 0/${assigned} comments. Retrying after cooldown...`, true);
       } else if (assigned > 0 && posted < assigned) {
-        console.warn(`[Worker] ⚠️ Partial cycle: ${posted}/${assigned} comments posted. Consuming cycle slot to avoid retry loop.`);
-        isSuccessfulCycle = true; // Still count as success to advance
-        showPremiumToast(
-          'Partial Cycle',
-          `⚠️ ${posted}/${assigned} comments posted. Moving to next cycle.`,
-          true
-        );
-      } else if (assigned > 0 && posted >= assigned) {
-        console.log(`[Worker] ✅ All ${posted}/${assigned} comments posted. Cycle complete.`);
+        console.warn(`[Worker] ⚠️ Partial: ${posted}/${assigned} comments. Consuming slot.`);
+        showPremiumToast('Partial Cycle', `⚠️ ${posted}/${assigned} comments. Moving on.`, true);
       }
     }
 
-    // If LinkedIn blocked commenting, use a longer cooldown (30 min)
-    // and pause the system to avoid burning the account.
     if (blocked) {
-      console.error(`[Worker] 🚫 LINKEDIN RESTRICTION DETECTED. Pausing system for 30 minutes.`);
-      showPremiumToast(
-        '🚫 Account Restricted',
-        `LinkedIn is blocking comments on this account. Pausing for 30 minutes to protect your account.`,
-        true
-      );
-      isSuccessfulCycle = false;
-      // Override cooldown to 30 minutes
-      finishCycle(sender.tab?.id, false);
-      saveState({ cooldownMs: 1800000 }); // 30 min cooldown
+      console.error(`[Worker] 🚫 LINKEDIN RESTRICTION DETECTED. Pausing 30 min.`);
+      showPremiumToast('🚫 Account Restricted', `LinkedIn blocking comments. Pausing 30 min.`, true);
+      finishCycle(sender.tab?.id, false, isSearchOnly);
+      saveState({ cooldownMs: 1800000 });
       return;
     }
 
-    let rapidCooldownOverride = false;
-    if (message.searchOnlyMode && message.postsExtracted >= 1 && message.postsExtracted < 25) {
-       console.log(`[Worker] \u26A0\uFE0F Feed truncation active (only ${message.postsExtracted} posts). Forcing rapid page flip to maintain volume.`);
-       rapidCooldownOverride = true;
-    }
-
-    finishCycle(sender.tab?.id, isSuccessfulCycle, rapidCooldownOverride);
-  }
-});
-
-// ── Instant Start Listener ──
-// The dashboard-bridge.js sends START_POLLING when the user clicks START.
-// Without this listener, the worker waits up to 60s for the next alarm tick.
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.action === 'START_POLLING') {
-    console.log("🚀 [Worker] Received instant START_POLLING from dashboard bridge!");
-    sendResponse({ ack: true });
-    
-    const triggerStart = () => {
-       // Force a 100% clean reset because a human clicked start
-       chrome.storage.local.set({ wasDashboardActive: false, currentSearchCycle: 0, isPaused: false, keywordCycles: {} }, () => {
-         setTimeout(() => checkJobs(), 50);
-       });
-    };
-
-    if (msg.dashboardUrl && msg.userId) {
-      chrome.storage.sync.set({ dashboardUrl: msg.dashboardUrl, userId: msg.userId }, triggerStart);
-    } else {
-      triggerStart();
-    }
+    finishCycle(sender.tab?.id, isSuccessfulCycle, isSearchOnly);
   }
 });
 
@@ -902,7 +1011,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("🚀 [Worker] Safety Worker v6 installed.");
+  console.log("🚀 [Worker] v11 installed.");
   saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0, consecutiveFailures: 0 });
   setTimeout(() => checkJobs(), 5000);
 });
