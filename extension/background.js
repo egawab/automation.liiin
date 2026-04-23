@@ -883,11 +883,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'SYNC_RESULTS') {
     const { posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo } = message;
-    console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts for "${keyword}"...`);
+    
+    // Global in-memory deduplication across the worker's lifetime
+    if (typeof self.globalSyncedUrls === 'undefined') self.globalSyncedUrls = new Set();
+    const uniquePosts = posts.filter(p => {
+       if (!p.url) return false;
+       const clean = p.url.split('?')[0];
+       if (self.globalSyncedUrls.has(clean)) return false;
+       self.globalSyncedUrls.add(clean);
+       return true;
+    });
+
+    console.log(`📤 [Worker] Relaying ${uniquePosts.length} unique posts (filtered from ${posts.length}) for "${keyword}"...`);
     
     // Empty batch prevention
-    if (!posts || posts.length === 0) {
-        console.warn(`[Worker] SYNC_RESULTS received with 0 posts. Skipping relay.`);
+    if (uniquePosts.length === 0) {
+        console.warn(`[Worker] SYNC_RESULTS received 0 unique posts. Skipping relay.`);
         if (sendResponse) sendResponse({ ok: true, savedCount: 0 });
         return true;
     }
@@ -904,7 +915,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const response = await fetch(`${dashboardUrl}/api/extension/results`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
-              body: JSON.stringify({ keyword, posts, linkedInProfileId, debugInfo })
+              body: JSON.stringify({ keyword, posts: uniquePosts, linkedInProfileId, debugInfo })
             });
             
             if (!response.ok) {

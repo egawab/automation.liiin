@@ -228,32 +228,16 @@ window.__linkedInExtractorReady = true;
     if (!card) return null;
 
     try {
-      // ── URN-PRESERVING EXTRACTION (v21) ──
-      // CRITICAL: LinkedIn uses both urn:li:activity: and urn:li:ugcPost: for different posts.
-      // Accessing a ugcPost via an activity URN returns "This post cannot be displayed".
-      // All methods MUST preserve the original URN type from the source data.
       const WIDE_URN_REGEX = /urn:li:(activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{18,22})/i;
 
-      // Helper: Build URL preserving the original URN type
       function buildPostUrl(urnType, digits) {
-        // Normalize: fsd_update/fs_updateV2/update/share all resolve via activity
         const t = urnType.toLowerCase();
         if (t === 'ugcpost') return 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + digits;
         return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
       }
 
-      // Method 1: Explicit URN data attributes (MOST RELIABLE - STRICTLY PREVENTS GHOST POSTS)
-      const urnEls = [card, ...card.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn],[data-search-result-urn]')];
-      for (const el of urnEls) {
-        for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn','data-search-result-urn']) {
-          const val = el.getAttribute(attr);
-          if (!val) continue;
-          const m = val.match(WIDE_URN_REGEX);
-          if (m) return buildPostUrl(m[1], m[2]);
-        }
-      }
-
-      // Method 2: Standard anchor links (preserve URN from href)
+      // Method 1: Standard anchor links (100% RELIABLE - PREVENTS GHOST POSTS)
+      // We prioritize explicit timestamp links because they never point to tracking chameleon URNs
       for (const a of card.querySelectorAll('a[href]')) {
         const href = a.href || '';
         if (href.includes('/feed/update/')) {
@@ -266,7 +250,7 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // Method 3: "Copy link to post" or "Share" buttons
+      // Method 2: "Copy link to post" or "Share" buttons
       for (const btn of card.querySelectorAll('[data-clipboard-text], [data-share-url], .feed-shared-control-menu__item, button')) {
         const url = btn.getAttribute('data-clipboard-text') || btn.getAttribute('data-share-url');
         if (url && (url.includes('linkedin.com/posts/') || url.includes('linkedin.com/feed/'))) {
@@ -274,7 +258,23 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // innerHTML regex matching removed to strictly prevent tracking URNs from creating Ghost Posts.
+      // Method 3: Explicit URN data attributes ON ROOT ELEMENTS ONLY
+      // We restore data-id to fix the 0-post stalling issue, but restrict it strictly to 
+      // the root card or its immediate primary wrappers to avoid grabbing comment URNs.
+      const safeRootEls = [card, ...card.querySelectorAll(':scope > div, .feed-shared-update-v2, .search-entity, .reusable-search__result-container')];
+      for (const el of safeRootEls) {
+        for (const attr of ['data-urn', 'data-id', 'data-chameleon-result-urn', 'data-entity-urn', 'data-update-urn', 'data-search-result-urn']) {
+          const val = el.getAttribute(attr);
+          if (!val) continue;
+          
+          // Explicitly reject if this looks like a comment URN or tracking metadata
+          if (val.includes('comment') || val.includes('control_name')) continue;
+          
+          const m = val.match(WIDE_URN_REGEX);
+          if (m) return buildPostUrl(m[1], m[2]);
+        }
+      }
+
     } catch(e) {}
 
     return null;
