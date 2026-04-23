@@ -927,6 +927,7 @@ window.__linkedInExtractorReady = true;
       return count;
     }
 
+    let qualitySoFar = 0;
     heartbeat('Phase1-Scroll', '📜 Scrolling until 100-150 results scanned or 10+ quality posts...');
 
     while (seenUrls.size < SCANNED_RESULTS_LIMIT) {
@@ -935,7 +936,7 @@ window.__linkedInExtractorReady = true;
         break;
       }
       
-      const qualitySoFar = previousSaved + countQualityPosts(allPosts);
+      qualitySoFar = previousSaved + countQualityPosts(allPosts);
       const ABSOLUTE_SAFETY_LIMIT = (qualitySoFar < MIN_QUALITY_TARGET) ? 150 : 100;
 
       if (step >= ABSOLUTE_SAFETY_LIMIT) {
@@ -1028,7 +1029,7 @@ window.__linkedInExtractorReady = true;
 
       // ── QUALITY-AWARE EARLY EXIT ──
       // If we already have 10+ high/mid quality posts, we can stop scrolling early
-      const qualitySoFar = previousSaved + countQualityPosts(allPosts);
+      qualitySoFar = previousSaved + countQualityPosts(allPosts);
       if (qualitySoFar >= MIN_QUALITY_TARGET && allPosts.length >= 1) { // At least 1 to send
         console.log('[v18] ✅ Quality target reached: ' + qualitySoFar + ' high/mid posts across passes. Stopping scroll early.');
         heartbeat('Phase1-Quality', '✅ ' + qualitySoFar + ' total quality posts reached. Proceeding to validation...');
