@@ -710,6 +710,60 @@ window.__linkedInExtractorReady = true;
   }
 
   // ═══════════════════════════════════════════════════════════
+  // ACTIVE HTTP VALIDATION
+  // ═══════════════════════════════════════════════════════════
+  async function validatePostsConcurrently(posts) {
+      console.log(`[v18] Starting active HTTP validation for ${posts.length} posts...`);
+      const validPosts = [];
+      const batchSize = 10;
+      
+      for (let i = 0; i < posts.length; i += batchSize) {
+          const batch = posts.slice(i, i + batchSize);
+          const validations = await Promise.all(batch.map(async (p) => {
+              try {
+                  const res = await fetch(p.url, { method: 'GET', headers: { 'Accept': 'text/html' } });
+                  
+                  // If LinkedIn redirects a post to the feed or a 404 page, it means the post is restricted/broken
+                  if (res.redirected && (res.url.endsWith('/feed/') || res.url.includes('/404'))) {
+                      console.log('[v18] Validation rejected (redirect):', p.url);
+                      return null;
+                  }
+                  
+                  const text = await res.text();
+                  const titleMatch = text.match(/<title>(.*?)<\/title>/i);
+                  const title = titleMatch ? titleMatch[1].trim() : '';
+
+                  // Server-side Title Validation (Bypasses SPA Rendering)
+                  // Valid posts have a title like "John Doe on LinkedIn: Hello world"
+                  // Broken posts have exactly "LinkedIn" or "Page not found | LinkedIn" or "Security Verification | LinkedIn"
+                  if (title === 'LinkedIn' || title.includes('Page not found') || title.includes('Security Verification')) {
+                      console.log('[v18] Validation rejected (title match):', p.url, 'Title:', title);
+                      return null;
+                  }
+                  
+                  // Fallback string checks for React-rendered error states just in case
+                  if (text.includes('This post cannot be displayed') || 
+                      text.includes('You do not have permission to access this post')) {
+                      console.log('[v18] Validation rejected (body match):', p.url);
+                      return null;
+                  }
+
+                  return p;
+              } catch(e) {
+                  console.log('[v18] Validation failed (network error):', p.url);
+                  return null; 
+              }
+          }));
+          
+          validations.forEach(v => { if (v) validPosts.push(v); });
+          await new Promise(r => setTimeout(r, 200)); 
+      }
+      
+      console.log(`[v18] Validation complete. Retained ${validPosts.length} valid, proven posts out of ${posts.length}.`);
+      return validPosts;
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // MAIN PIPELINE
   // ═══════════════════════════════════════════════════════════
   async function extractPipeline(keyword, settings, comments, dashboardUrl, userId) {
@@ -922,25 +976,26 @@ window.__linkedInExtractorReady = true;
       
       // ── INCREMENTAL SAVE (CRASH PROTECTOR) ──
       if (step > 0 && step % 15 === 0) {
-        console.log('[v18] 💾 Incremental Backup: Saving progress at Step ' + step);
-        heartbeat('Phase1-Backup', '💾 Syncing partial progress...');
-        // Non-destructive push. Backend UPSERT dynamically handles exact-key overwriting gracefully.
-        try { await syncPosts(allPosts, keyword, dashboardUrl, userId, linkedInProfileId, false); } catch(e) {}
+        console.log('[v18] 💾 Incremental Backup: Delaying sync to ensure active validation runs first.');
+        heartbeat('Phase1-Backup', '💾 Buffering partial progress...');
       }
     }
 
-    // ── Step 5: Results ──
-    const totalReal = countReal(allPosts);
-    const newPosts = allPosts.length - priorPosts.length;
-    console.log('[v18] ══ FINAL: ' + totalReal + ' real / ' + allPosts.length + ' total (' + newPosts + ' new this pass) ══');
-    heartbeat('Phase1-Done', '✅ Pass ' + (passIndex + 1) + ': ' + totalReal + ' real posts');
+    // ── Step 5: Active HTTP Validation ──
+    heartbeat('Phase1-Validate', `🛡️ Actively verifying ${allPosts.length} posts...`);
+    const validPosts = await validatePostsConcurrently(allPosts);
+
+    const totalReal = countReal(validPosts);
+    const newPosts = validPosts.length - priorPosts.length;
+    console.log('[v18] ══ FINAL: ' + totalReal + ' real / ' + validPosts.length + ' total (' + newPosts + ' new this pass) ══');
+    heartbeat('Phase1-Done', '✅ Pass ' + (passIndex + 1) + ': ' + totalReal + ' valid posts');
 
     if (totalReal < 5) {
-      heartbeat('Phase1-Low', '⚠️ Low yield: ' + totalReal + ' posts');
+      heartbeat('Phase1-Low', '⚠️ Low yield: ' + totalReal + ' valid posts');
     }
 
     // ── Step 6: Serialize ──
-    const serializedPosts = allPosts.map(p => ({
+    const serializedPosts = validPosts.map(p => ({
       url: p.url, likes: p.likes, postComments: p.postComments,
       author: p.author, textSnippet: p.textSnippet,
       commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false
@@ -971,7 +1026,7 @@ window.__linkedInExtractorReady = true;
       const requiredComments = availableComments.length;
       heartbeat('Phase2', '📊 Selecting targets...');
 
-      const pool = allPosts.filter(p =>
+      const pool = validPosts.filter(p =>
         p.container && document.contains(p.container) &&
         !commentedSet.has(p.url) && p.commentable
       );
