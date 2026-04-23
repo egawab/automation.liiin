@@ -322,16 +322,20 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
     await broadcastLog(`Searching for: "${keyword.keyword}"`);
 
     // =========================================================================
-    // 🔥 MAX-EXTRACTION MODE
+    // CONSTRAINT-DRIVEN EXTRACTION WITH INTELLIGENT FALLBACK
     // =========================================================================
-    // We do a single comprehensive deep-search per keyword, saving everything found.
+    const SETTINGS_MIN_LIKES = settings.minLikes || 0;
+    const SETTINGS_MAX_LIKES = settings.maxLikes || Infinity;
+    const SETTINGS_MIN_COMMENTS = settings.minComments || 0;
+    const SETTINGS_MAX_COMMENTS = settings.maxComments || Infinity;
+    console.log(`\n[Constraints] Likes [${SETTINGS_MIN_LIKES}, ${SETTINGS_MAX_LIKES}] | Comments [${SETTINGS_MIN_COMMENTS}, ${SETTINGS_MAX_COMMENTS}]`);
 
     let allAggregatedPosts: PostCandidate[] = [];
     const seenUrls = new Set<string>();
     let totalSavedCount = 0;
 
     console.log(`\n🔄 Searching "${keyword.keyword}" (Top/Relevant)...`);
-    await broadcastLog(`Starting deep search for "${keyword.keyword}"`);
+    await broadcastLog(`Starting search for "${keyword.keyword}"`);
     
     try {
       const postsRaw = await searchLinkedInPosts(keyword.keyword, null);
@@ -343,31 +347,83 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
         }
       }
       
-      console.log(`✅ Scanned ${postsRaw.length} total posts.\n`);
-
-      if (allAggregatedPosts.length > 0) {
-          // Sort to prioritize high engagement posts first
-          allAggregatedPosts.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
-          
-          const saveResults = await Promise.allSettled(
-            allAggregatedPosts.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
-          );
-          
-          totalSavedCount = saveResults.filter(
-            r => r.status === 'fulfilled' && r.value === true
-          ).length;
-
-          console.log(`💾 Saved ${totalSavedCount} new posts to dashboard\n`);
-      }
-
+      console.log(`✅ Discovered ${allAggregatedPosts.length} unique posts.\n`);
     } catch(err) {
       console.error(`❌ Search failed:`, err);
+    }
+
+    if (allAggregatedPosts.length > 0) {
+      // Step 1: Exact constraint matches
+      const exactMatches = allAggregatedPosts.filter(p =>
+        p.likes >= SETTINGS_MIN_LIKES && p.likes <= SETTINGS_MAX_LIKES &&
+        p.comments >= SETTINGS_MIN_COMMENTS && p.comments <= SETTINGS_MAX_COMMENTS
+      );
+
+      let postsToSave: PostCandidate[];
+
+      if (exactMatches.length > 0) {
+        postsToSave = [...exactMatches];
+        console.log(`✅ ${exactMatches.length} posts EXACTLY match constraints.`);
+
+        // Supplement with closest-match if sparse
+        if (exactMatches.length < 10) {
+          const exactUrls = new Set(exactMatches.map(p => p.url));
+          const remaining = allAggregatedPosts.filter(p => !exactUrls.has(p.url));
+          const scored = remaining.map(p => {
+            let dev = 0;
+            if (p.likes < SETTINGS_MIN_LIKES) dev += SETTINGS_MIN_LIKES - p.likes;
+            else if (p.likes > SETTINGS_MAX_LIKES && isFinite(SETTINGS_MAX_LIKES)) dev += p.likes - SETTINGS_MAX_LIKES;
+            if (p.comments < SETTINGS_MIN_COMMENTS) dev += SETTINGS_MIN_COMMENTS - p.comments;
+            else if (p.comments > SETTINGS_MAX_COMMENTS && isFinite(SETTINGS_MAX_COMMENTS)) dev += p.comments - SETTINGS_MAX_COMMENTS;
+            return { ...p, _dev: dev };
+          }).sort((a, b) => a._dev - b._dev);
+
+          const maxDev = Math.max(SETTINGS_MIN_LIKES, SETTINGS_MIN_COMMENTS, 5) * 0.5;
+          const fallbacks = scored.filter(p => p._dev <= maxDev).slice(0, 10 - exactMatches.length);
+          if (fallbacks.length > 0) {
+            postsToSave.push(...fallbacks);
+            console.log(`🔄 Added ${fallbacks.length} closest-match fallback posts.`);
+          }
+        }
+      } else {
+        // Zero exact matches — intelligent fallback
+        console.log(`⚠️ 0 exact matches. Applying closest-match approximation...`);
+        const scored = allAggregatedPosts.map(p => {
+          let dev = 0;
+          if (p.likes < SETTINGS_MIN_LIKES) dev += SETTINGS_MIN_LIKES - p.likes;
+          else if (p.likes > SETTINGS_MAX_LIKES && isFinite(SETTINGS_MAX_LIKES)) dev += p.likes - SETTINGS_MAX_LIKES;
+          if (p.comments < SETTINGS_MIN_COMMENTS) dev += SETTINGS_MIN_COMMENTS - p.comments;
+          else if (p.comments > SETTINGS_MAX_COMMENTS && isFinite(SETTINGS_MAX_COMMENTS)) dev += p.comments - SETTINGS_MAX_COMMENTS;
+          return { ...p, _dev: dev };
+        }).sort((a, b) => a._dev - b._dev);
+
+        const maxDev = Math.max(SETTINGS_MIN_LIKES, SETTINGS_MIN_COMMENTS, 10);
+        postsToSave = scored.filter(p => p._dev <= maxDev);
+        if (postsToSave.length === 0) {
+          postsToSave = scored.slice(0, 10);
+          console.log(`⚠️ No posts within fallback tolerance. Taking top ${postsToSave.length} closest.`);
+        } else {
+          console.log(`🔄 Selected ${postsToSave.length} via closest-match fallback.`);
+        }
+      }
+
+      // Sort final batch by engagement (highest first)
+      postsToSave.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
+
+      const saveResults = await Promise.allSettled(
+        postsToSave.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
+      );
+      totalSavedCount = saveResults.filter(
+        r => r.status === 'fulfilled' && r.value === true
+      ).length;
+
+      console.log(`💾 Saved ${totalSavedCount} posts to dashboard\n`);
     }
 
     // Log this search for rate limit tracking
     await logSearch(settings.userId, keyword.keyword);
 
-    console.log(`🎯 SUCCESS: Secured ${totalSavedCount} posts for "${keyword.keyword}".\n`);
+    console.log(`🎯 Secured ${totalSavedCount} posts for "${keyword.keyword}".\n`);
     await broadcastLog(`Secured ${totalSavedCount} posts for "${keyword.keyword}"`);
 
   } catch (error: any) {

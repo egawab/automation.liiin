@@ -793,7 +793,14 @@ window.__linkedInExtractorReady = true;
     const seenUrls = new Set(priorPosts.map(p => p.url).filter(Boolean));
     const seenCards = new WeakSet();
     const allPosts = [...priorPosts];
-    let lastSyncedIndex = priorPosts.length; // Track how many posts have been incrementally synced
+    let lastSyncedIndex = priorPosts.length;
+
+    // ── Settings-Driven Constraints ──
+    const SETTINGS_MIN_LIKES = Number(settings.minLikes) || 0;
+    const SETTINGS_MAX_LIKES = Number(settings.maxLikes) || Infinity;
+    const SETTINGS_MIN_COMMENTS = Number(settings.minComments) || 0;
+    const SETTINGS_MAX_COMMENTS = Number(settings.maxComments) || Infinity;
+    console.log(`[v22] Constraints: Likes [${SETTINGS_MIN_LIKES}, ${SETTINGS_MAX_LIKES}] | Comments [${SETTINGS_MIN_COMMENTS}, ${SETTINGS_MAX_COMMENTS}]`);
 
     console.log('[v18] ══ Pipeline: "' + keyword + '" pass=' + passIndex + ' prior=' + priorPosts.length + ' ══');
     heartbeat('Phase0', '⏳ Starting pass ' + (passIndex + 1) + ' for "' + keyword + '"...');
@@ -1021,9 +1028,8 @@ window.__linkedInExtractorReady = true;
     const validPosts = await validatePostsConcurrently(allPosts);
 
     const totalReal = countReal(validPosts);
-    const totalReal = countReal(validPosts);
     const newPosts = validPosts.length - priorPosts.length;
-    console.log('[v18] ══ FINAL: ' + totalReal + ' real / ' + validPosts.length + ' total (' + newPosts + ' new this pass) ══');
+    console.log('[v22] ══ FINAL: ' + totalReal + ' real / ' + validPosts.length + ' total (' + newPosts + ' new this pass) ══');
     heartbeat('Phase1-Done', '✅ Extraction finished: ' + totalReal + ' real posts');
 
     // ── Step 6: Serialize with discoveryIndex for position-based quality boosting ──
@@ -1053,7 +1059,7 @@ window.__linkedInExtractorReady = true;
 
       let availableComments = comments.filter(c => !usedCommentSet.has(c.id));
       if (availableComments.length === 0) {
-        await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
+        await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
         safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: comments.length, assignedCommentsCount: comments.length, searchOnlyMode: false });
         return;
       }
@@ -1068,7 +1074,7 @@ window.__linkedInExtractorReady = true;
       const targets = pool.sort((a, b) => (b.likes + b.postComments) - (a.likes + a.postComments)).slice(0, requiredComments * 3);
 
       if (targets.length === 0) {
-        await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
+        await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
         safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: requiredComments, searchOnlyMode: false });
         return;
       }
@@ -1093,7 +1099,7 @@ window.__linkedInExtractorReady = true;
       }
 
       heartbeat('Phase4', '📤 Syncing...');
-      await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
+      await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
       
       // ISSUE 2 FIX: Single-Pass Coverage
       // Complete extraction locally within 100 scrolls.
@@ -1102,7 +1108,7 @@ window.__linkedInExtractorReady = true;
 
     } else {
       heartbeat('Phase4', '📤 Final sync: ' + totalReal + ' validated posts...');
-      const savedThisPass = await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
+      const savedThisPass = await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
       
       console.log(`[v21] ✅ Saved ${savedThisPass} posts this pass.`);
       safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: savedThisPass });
@@ -1190,7 +1196,11 @@ window.__linkedInExtractorReady = true;
   // ═══════════════════════════════════════════════════════════
   // SYNC TO DASHBOARD
   // ═══════════════════════════════════════════════════════════
-  async function syncPosts(posts, keyword, dashboardUrl, userId, linkedInProfileId, isFinal = false) {
+  async function syncPosts(posts, keyword, dashboardUrl, userId, linkedInProfileId, isFinal = false, constraints = {}) {
+    const SETTINGS_MIN_LIKES = constraints.SETTINGS_MIN_LIKES || 0;
+    const SETTINGS_MAX_LIKES = constraints.SETTINGS_MAX_LIKES || Infinity;
+    const SETTINGS_MIN_COMMENTS = constraints.SETTINGS_MIN_COMMENTS || 0;
+    const SETTINGS_MAX_COMMENTS = constraints.SETTINGS_MAX_COMMENTS || Infinity;
     const realPosts = posts.filter(p => p.hasRealUrl || (p.url && !p.url.startsWith('discovered:') && !p.url.includes('synthetic:')));
 
     const labeled = realPosts.map(p => {
@@ -1229,9 +1239,89 @@ window.__linkedInExtractorReady = true;
       return (a.discoveryIndex || 999) - (b.discoveryIndex || 999); // Earlier discovered = higher priority
     });
     
-    // NO STRICT QUALITY FILTERING
-    // We send all posts, prioritizing the high/mid reach posts at the top of the batch.
-    let final = labeled;
+    // ═══════════════════════════════════════════════════════════
+    // CONSTRAINT-DRIVEN SELECTION WITH INTELLIGENT FALLBACK
+    // ═══════════════════════════════════════════════════════════
+    // Step 1: Select posts that EXACTLY match the settings constraints
+    const exactMatches = labeled.filter(p => {
+      const likes = p.likes || 0;
+      const comms = p.postComments || p.comments || 0;
+      return likes >= SETTINGS_MIN_LIKES && likes <= SETTINGS_MAX_LIKES &&
+             comms >= SETTINGS_MIN_COMMENTS && comms <= SETTINGS_MAX_COMMENTS;
+    });
+
+    let final;
+    if (exactMatches.length > 0) {
+      // We have exact matches — use them as the primary batch
+      final = exactMatches;
+      console.log(`[v22] ✅ ${exactMatches.length} posts EXACTLY match constraints (Likes ${SETTINGS_MIN_LIKES}-${SETTINGS_MAX_LIKES}, Comments ${SETTINGS_MIN_COMMENTS}-${SETTINGS_MAX_COMMENTS}).`);
+
+      // If exact matches are sparse, supplement with closest-match fallback
+      if (exactMatches.length < 10) {
+        const exactUrls = new Set(exactMatches.map(p => p.url));
+        const remaining = labeled.filter(p => !exactUrls.has(p.url));
+
+        // Score each remaining post by how close it is to the constraints
+        const scored = remaining.map(p => {
+          const likes = p.likes || 0;
+          const comms = p.postComments || p.comments || 0;
+          // Calculate deviation: 0 = perfect match, higher = further from constraints
+          let likesDev = 0;
+          if (likes < SETTINGS_MIN_LIKES) likesDev = SETTINGS_MIN_LIKES - likes;
+          else if (likes > SETTINGS_MAX_LIKES && SETTINGS_MAX_LIKES !== Infinity) likesDev = likes - SETTINGS_MAX_LIKES;
+          let commsDev = 0;
+          if (comms < SETTINGS_MIN_COMMENTS) commsDev = SETTINGS_MIN_COMMENTS - comms;
+          else if (comms > SETTINGS_MAX_COMMENTS && SETTINGS_MAX_COMMENTS !== Infinity) commsDev = comms - SETTINGS_MAX_COMMENTS;
+          return { ...p, _deviation: likesDev + commsDev };
+        });
+
+        // Sort by deviation (closest to constraints first)
+        scored.sort((a, b) => a._deviation - b._deviation);
+
+        // Take only posts with reasonable deviation (within 50% of the min thresholds)
+        const maxAcceptableDev = Math.max(SETTINGS_MIN_LIKES, SETTINGS_MIN_COMMENTS, 5) * 0.5;
+        const fallbacks = scored.filter(p => p._deviation <= maxAcceptableDev);
+        const needed = Math.min(fallbacks.length, 10 - exactMatches.length);
+
+        if (needed > 0) {
+          final = [...exactMatches, ...fallbacks.slice(0, needed)];
+          console.log(`[v22] 🔄 Added ${needed} closest-match fallback posts (max deviation: ${maxAcceptableDev.toFixed(1)}).`);
+        }
+      }
+    } else {
+      // Zero exact matches — apply intelligent approximation
+      console.log(`[v22] ⚠️ 0 exact matches. Falling back to closest-match approximation...`);
+
+      const scored = labeled.map(p => {
+        const likes = p.likes || 0;
+        const comms = p.postComments || p.comments || 0;
+        let likesDev = 0;
+        if (likes < SETTINGS_MIN_LIKES) likesDev = SETTINGS_MIN_LIKES - likes;
+        else if (likes > SETTINGS_MAX_LIKES && SETTINGS_MAX_LIKES !== Infinity) likesDev = likes - SETTINGS_MAX_LIKES;
+        let commsDev = 0;
+        if (comms < SETTINGS_MIN_COMMENTS) commsDev = SETTINGS_MIN_COMMENTS - comms;
+        else if (comms > SETTINGS_MAX_COMMENTS && SETTINGS_MAX_COMMENTS !== Infinity) commsDev = comms - SETTINGS_MAX_COMMENTS;
+        return { ...p, _deviation: likesDev + commsDev };
+      });
+
+      scored.sort((a, b) => a._deviation - b._deviation);
+
+      // Accept a wider deviation band when there are no exact matches,
+      // but still bounded: max 100% of the min thresholds
+      const maxFallbackDev = Math.max(SETTINGS_MIN_LIKES, SETTINGS_MIN_COMMENTS, 10);
+      final = scored.filter(p => p._deviation <= maxFallbackDev);
+
+      if (final.length === 0) {
+        // Absolute last resort: take top 10 closest, regardless of deviation
+        final = scored.slice(0, 10);
+        console.log(`[v22] ⚠️ No posts within fallback tolerance. Sending top ${final.length} closest posts.`);
+      } else {
+        console.log(`[v22] 🔄 Selected ${final.length} posts via closest-match fallback (tolerance: ${maxFallbackDev}).`);
+      }
+    }
+
+    // Clean up internal scoring field before sending
+    final = final.map(p => { const { _deviation, ...clean } = p; return clean; });
 
     if (final.length === 0) {
       console.log('[v18] ⚠️ 0 valid posts met the strict criteria. Skipping sync to prevent empty batches.');
