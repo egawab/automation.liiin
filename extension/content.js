@@ -229,33 +229,44 @@ window.__linkedInExtractorReady = true;
 
     try {
       // Method 1: Explicit URN attributes
-      const urnEls = [card, ...card.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn],[data-search-result-urn]')];
+      const urnEls = [card, ...card.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn],[data-search-result-urn],[data-id]')];
       for (const el of urnEls) {
         for (const attr of el.attributes) { // Check all attributes natively
           if (!attr.value) continue;
           const v = attr.value;
-          const m = v.match(/urn:li:(?:activity|ugcPost|share|update):\d{18,22}/i);
-          if (m) return 'https://www.linkedin.com/feed/update/' + m[0];
+          // Match standard and internal URNs (fsd_update, fs_updateV2)
+          const m = v.match(/urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):\d{18,22}/i);
+          if (m) {
+             const digits = m[0].match(/\d{18,22}/)[0];
+             return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
+          }
           
           if (v.match(/^(?:activity|ugcPost|share|update):\d{18,22}$/i)) {
-            return 'https://www.linkedin.com/feed/update/urn:li:' + v;
+            const digits = v.match(/\d{18,22}/)[0];
+            return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
           }
         }
       }
 
-      // Method 2: Standard anchor links
+      // Method 2: Standard anchor links (including the timestamp link)
       for (const a of card.querySelectorAll('a[href]')) {
         const href = a.href || '';
-        if (href.includes('/feed/update/')) {
-          const m = href.match(/\/feed\/update\/(urn:li:[^?&#\s"']+)/);
-          if (m) return cleanUrl('https://www.linkedin.com/feed/update/' + decodeURIComponent(m[1]));
+        if (href.includes('/feed/update/') || href.includes('/feed/update/urn:li:')) {
+          const m = href.match(/urn:li:[^?&#\s"']+/);
+          if (m) {
+             const digitsMatch = m[0].match(/\d{18,22}/);
+             if (digitsMatch) return cleanUrl('https://www.linkedin.com/feed/update/urn:li:activity:' + digitsMatch[0]);
+          }
         }
         if (href.includes('/posts/')) {
           const m = href.match(/(https?:\/\/(?:www\.)?linkedin\.com\/posts\/[^?&#\s"']+)/);
           if (m) return cleanUrl(m[1]);
         }
-        const urnM = href.match(/urn:li:(?:activity|ugcPost|share|update):\d{18,22}/i);
-        if (urnM) return 'https://www.linkedin.com/feed/update/' + urnM[0];
+        const urnM = href.match(/urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):\d{18,22}/i);
+        if (urnM) {
+             const digits = urnM[0].match(/\d{18,22}/)[0];
+             return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
+        }
       }
 
       // Method 3: "Copy link to post" or "Share" buttons
@@ -274,12 +285,9 @@ window.__linkedInExtractorReady = true;
            if (attr.value && attr.value.length >= 18) {
               const v = attr.value.toLowerCase();
               // ONLY match post-level URNs
-              if (v.includes('activity') || v.includes('ugcpost') || v.includes('share') || v.includes('update')) {
-                 const m = v.match(/urn:li:(activity|ugcpost|share|update):(\d{18,22})/i);
-                 if (m) return 'https://www.linkedin.com/feed/update/urn:li:' + m[1] + ':' + m[2];
-                 
+              if (v.includes('activity') || v.includes('ugcpost') || v.includes('share') || v.includes('update') || v.includes('fsd_update') || v.includes('fs_updatev2')) {
                  const m19 = v.match(regex19);
-                 if (m19 && v.includes('activity')) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + m19[1];
+                 if (m19) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + m19[1];
               }
            }
         }
@@ -287,11 +295,11 @@ window.__linkedInExtractorReady = true;
 
       // Method 5: Aggressive innerHTML match 
       const html = card.innerHTML || '';
-      const urnRegex = /urn:li:(activity|ugcPost|share|update):(\d{18,22})/gi;
+      const urnRegex = /urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{18,22})/i; // removed 'g' flag to prevent stateful index issues
       let match = urnRegex.exec(html);
-      if (match) return 'https://www.linkedin.com/feed/update/urn:li:' + match[1] + ':' + match[2];
+      if (match) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + match[1];
 
-      const bareRegex = /(?:activity|ugcPost|share|update)[^a-zA-Z0-9]?(\d{18,22})/gi;
+      const bareRegex = /(?:activity|ugcPost|share|update|fsd_update|fs_updateV2)[^a-zA-Z0-9]?(\d{18,22})/i;
       match = bareRegex.exec(html);
       if (match) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + match[1];
 
@@ -478,16 +486,10 @@ window.__linkedInExtractorReady = true;
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
-        // V19 FIX: If LinkedIn hides the URL, but the card has a "Comment" button, it's a valid post!
-        if (!cleanedUrl) {
-            const hasCommentBtn = Array.from(card.querySelectorAll('button')).find(b => 
-                (b.getAttribute('aria-label') || '').toLowerCase().includes('comment') || 
-                (b.innerText || '').toLowerCase().includes('comment')
-            );
-            if (hasCommentBtn) {
-                cleanedUrl = `discovered:post_${Date.now()}_${Math.floor(Math.random()*100000)}`;
-            }
-        }
+        // V20 FIX: STRICT FILTER. If we cannot extract a real post URL, this is almost certainly
+        // a COMMENT container or invalid entity. We MUST reject it.
+        // The fallback `discovered:` URL breaks 1:1 dashboard identity mapping.
+        if (!cleanedUrl) return;
 
         // If we found a real or synthetic URL, this is definitively a post card
         if (cleanedUrl) {
@@ -538,19 +540,8 @@ window.__linkedInExtractorReady = true;
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
-        // V19 FIX: Fallback for hidden URLs. We only accept it if it has a "Comment" button.
-        // Comments on posts only have "Like" and "Reply", so checking for "Comment" prevents comment-ballooning.
-        if (!cleanedUrl) {
-            const hasCommentBtn = Array.from(card.querySelectorAll('button')).find(b => 
-                (b.getAttribute('aria-label') || '').toLowerCase().includes('comment') || 
-                (b.innerText || '').toLowerCase().includes('comment')
-            );
-            if (hasCommentBtn) {
-                cleanedUrl = `discovered:post_${Date.now()}_${Math.floor(Math.random()*100000)}`;
-            } else {
-                continue;
-            }
-        }
+        // V20 FIX: STRICT FILTER. 
+        if (!cleanedUrl) continue;
 
         // Skip if we've seen this URL
         if (seenUrls.has(cleanedUrl)) {
