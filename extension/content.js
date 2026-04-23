@@ -228,35 +228,36 @@ window.__linkedInExtractorReady = true;
     if (!card) return null;
 
     try {
-      // ── AGGRESSIVE EXTRACTION ──
-      const WIDE_URN_REGEX = /urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{18,22})/i;
-      const DIGIT_ONLY_REGEX = /(\d{18,22})/;
+      // ── URN-PRESERVING EXTRACTION (v21) ──
+      // CRITICAL: LinkedIn uses both urn:li:activity: and urn:li:ugcPost: for different posts.
+      // Accessing a ugcPost via an activity URN returns "This post cannot be displayed".
+      // All methods MUST preserve the original URN type from the source data.
+      const WIDE_URN_REGEX = /urn:li:(activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{18,22})/i;
 
-      // Method 1: Explicit URN attributes
+      // Helper: Build URL preserving the original URN type
+      function buildPostUrl(urnType, digits) {
+        // Normalize: fsd_update/fs_updateV2/update/share all resolve via activity
+        const t = urnType.toLowerCase();
+        if (t === 'ugcpost') return 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + digits;
+        return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
+      }
+
+      // Method 1: Explicit URN data attributes (MOST RELIABLE)
       const urnEls = [card, ...card.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn],[data-search-result-urn],[data-id]')];
       for (const el of urnEls) {
         for (const attr of el.attributes) {
           if (!attr.value) continue;
           const m = attr.value.match(WIDE_URN_REGEX);
-          if (m) {
-             const digits = m[0].match(DIGIT_ONLY_REGEX)[0];
-             // Always force activity or ugcPost, let active validation test it
-             return attr.value.includes('ugcPost') ? 
-                'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + digits :
-                'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
-          }
+          if (m) return buildPostUrl(m[1], m[2]);
         }
       }
 
-      // Method 2: Standard anchor links
+      // Method 2: Standard anchor links (preserve URN from href)
       for (const a of card.querySelectorAll('a[href]')) {
         const href = a.href || '';
-        if (href.includes('/feed/update/') || href.includes('/feed/update/urn:li:')) {
+        if (href.includes('/feed/update/')) {
           const m = href.match(WIDE_URN_REGEX);
-          if (m) {
-             const digits = m[0].match(DIGIT_ONLY_REGEX)[0];
-             return cleanUrl('https://www.linkedin.com/feed/update/urn:li:activity:' + digits);
-          }
+          if (m) return cleanUrl(buildPostUrl(m[1], m[2]));
         }
         if (href.includes('/posts/')) {
           const m = href.match(/(https?:\/\/(?:www\.)?linkedin\.com\/posts\/[^?&#\s"']+)/);
@@ -272,31 +273,14 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // Method 4: Aggressive DOM Attribute Scan
-      const allEls = card.querySelectorAll('*');
-      for (const el of allEls) {
-        for (const attr of el.attributes) {
-           if (attr.value && attr.value.length >= 18) {
-              const v = attr.value.toLowerCase();
-              if (v.includes('activity') || v.includes('ugcpost') || v.includes('share') || v.includes('update')) {
-                 const m19 = v.match(DIGIT_ONLY_REGEX);
-                 if (m19) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + m19[1];
-              }
-           }
-        }
-      }
+      // Method 4: REMOVED — Aggressive DOM attribute scan was matching tracking IDs,
+      // session data, and comment URNs, producing ghost URLs that show
+      // "This post cannot be displayed". Methods 1-3 and 5 are sufficient.
 
-      // Method 5: Aggressive innerHTML match 
+      // Method 5: innerHTML URN match (preserves URN type)
       const html = card.innerHTML || '';
       let match = html.match(WIDE_URN_REGEX);
-      if (match) {
-         const digits = match[0].match(DIGIT_ONLY_REGEX)[0];
-         return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
-      }
-      
-      const bareRegex = /(?:activity|ugcPost|share|update|fsd_update|fs_updateV2)[^a-zA-Z0-9]?(\d{18,22})/i;
-      match = bareRegex.exec(html);
-      if (match) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + match[1];
+      if (match) return buildPostUrl(match[1], match[2]);
 
     } catch(e) {}
 
@@ -713,53 +697,88 @@ window.__linkedInExtractorReady = true;
   // ACTIVE HTTP VALIDATION
   // ═══════════════════════════════════════════════════════════
   async function validatePostsConcurrently(posts) {
-      console.log(`[v18] Starting active HTTP validation for ${posts.length} posts...`);
+      console.log(`[v21] Starting active HTTP validation for ${posts.length} posts...`);
       const validPosts = [];
-      const batchSize = 10;
+      const batchSize = 8; // Slightly smaller batches to avoid rate limiting
       
       for (let i = 0; i < posts.length; i += batchSize) {
           const batch = posts.slice(i, i + batchSize);
           const validations = await Promise.all(batch.map(async (p) => {
               try {
+                  // Skip non-LinkedIn URLs
+                  if (!p.url || !p.url.includes('linkedin.com')) {
+                      console.log('[v21] Validation rejected (not LinkedIn):', p.url);
+                      return null;
+                  }
+
                   const res = await fetch(p.url, { method: 'GET', headers: { 'Accept': 'text/html' } });
                   
+                  // Reject non-200 responses
+                  if (!res.ok) {
+                      console.log('[v21] Validation rejected (HTTP ' + res.status + '):', p.url);
+                      return null;
+                  }
+
                   // If LinkedIn redirects a post to the feed or a 404 page, it means the post is restricted/broken
-                  if (res.redirected && (res.url.endsWith('/feed/') || res.url.includes('/404'))) {
-                      console.log('[v18] Validation rejected (redirect):', p.url);
+                  if (res.redirected && (res.url.endsWith('/feed/') || res.url.includes('/404') || res.url.includes('/login'))) {
+                      console.log('[v21] Validation rejected (redirect to ' + res.url + '):', p.url);
                       return null;
                   }
                   
                   const text = await res.text();
+
+                  // ── NEGATIVE SIGNALS: Reject known broken patterns ──
                   const titleMatch = text.match(/<title>(.*?)<\/title>/i);
                   const title = titleMatch ? titleMatch[1].trim() : '';
 
-                  // Server-side Title Validation (Bypasses SPA Rendering)
-                  // Valid posts have a title like "John Doe on LinkedIn: Hello world"
-                  // Broken posts have exactly "LinkedIn" or "Page not found | LinkedIn" or "Security Verification | LinkedIn"
                   if (title === 'LinkedIn' || title.includes('Page not found') || title.includes('Security Verification')) {
-                      console.log('[v18] Validation rejected (title match):', p.url, 'Title:', title);
+                      console.log('[v21] Validation rejected (bad title):', p.url, 'Title:', title);
                       return null;
                   }
                   
-                  // Fallback string checks for React-rendered error states just in case
                   if (text.includes('This post cannot be displayed') || 
-                      text.includes('You do not have permission to access this post')) {
-                      console.log('[v18] Validation rejected (body match):', p.url);
+                      text.includes('You do not have permission to access this post') ||
+                      text.includes('this content isn')) {
+                      console.log('[v21] Validation rejected (error in body):', p.url);
                       return null;
+                  }
+
+                  // ── POSITIVE PROOF: Require og:title pattern for /feed/update/ URLs ──
+                  // Valid LinkedIn posts have og:title like "John Doe on LinkedIn: Hello world"
+                  // or "John Doe posted on the topic of..." 
+                  // Broken/ghost posts have og:title = "LinkedIn" or empty
+                  if (p.url.includes('/feed/update/')) {
+                      const ogTitleMatch = text.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                          || text.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+                      const ogTitle = ogTitleMatch ? ogTitleMatch[1].trim() : '';
+                      
+                      if (!ogTitle || ogTitle === 'LinkedIn' || ogTitle.length < 10) {
+                          console.log('[v21] Validation rejected (no valid og:title):', p.url, 'og:title:', ogTitle || '(empty)');
+                          return null;
+                      }
+                      
+                      // Must contain "on LinkedIn" or "LinkedIn" with author name
+                      const hasPostSignature = ogTitle.toLowerCase().includes('on linkedin') || 
+                                               ogTitle.toLowerCase().includes('posted on') ||
+                                               ogTitle.includes('|');
+                      if (!hasPostSignature) {
+                          console.log('[v21] Validation rejected (og:title missing post signature):', p.url, 'og:title:', ogTitle);
+                          return null;
+                      }
                   }
 
                   return p;
               } catch(e) {
-                  console.log('[v18] Validation failed (network error):', p.url);
+                  console.log('[v21] Validation failed (network error):', p.url, e.message);
                   return null; 
               }
           }));
           
           validations.forEach(v => { if (v) validPosts.push(v); });
-          await new Promise(r => setTimeout(r, 200)); 
+          await new Promise(r => setTimeout(r, 300)); // Slightly longer delay between batches
       }
       
-      console.log(`[v18] Validation complete. Retained ${validPosts.length} valid, proven posts out of ${posts.length}.`);
+      console.log(`[v21] Validation complete. ${validPosts.length}/${posts.length} posts verified as accessible.`);
       return validPosts;
   }
 
@@ -773,6 +792,7 @@ window.__linkedInExtractorReady = true;
     const seenUrls = new Set(priorPosts.map(p => p.url).filter(Boolean));
     const seenCards = new WeakSet();
     const allPosts = [...priorPosts];
+    let lastSyncedIndex = priorPosts.length; // Track how many posts have been incrementally synced
 
     console.log('[v18] ══ Pipeline: "' + keyword + '" pass=' + passIndex + ' prior=' + priorPosts.length + ' ══');
     heartbeat('Phase0', '⏳ Starting pass ' + (passIndex + 1) + ' for "' + keyword + '"...');
@@ -882,14 +902,29 @@ window.__linkedInExtractorReady = true;
     console.log('[v18] Initial harvest: +' + initCount + ' (total=' + allPosts.length + ', real=' + countReal(allPosts) + ')');
     heartbeat('Phase1-Init', '✅ Initial: ' + countReal(allPosts) + ' real posts');
 
-    // ── Step 4: Scroll loop — CAPPED AT 150 SCANNED RESULTS ──
+    // ── Step 4: Scroll loop — CAPPED AT 100 SCANNED RESULTS ──
     const STALL_LIMIT = 15; // Increased from 8 to 15 to prevent premature stopping on slow connections
     const ABSOLUTE_SAFETY_LIMIT = 500; // Physical safety stop
-    const SCANNED_RESULTS_LIMIT = 150; // Strict limit: 150 items scanned per keyword
+    const SCANNED_RESULTS_LIMIT = 100; // Strict limit: 100 items scanned per keyword
+    const MIN_QUALITY_TARGET = 10; // Minimum high/mid reach posts to aim for
     let stallCount = 0;
     let step = 0;
 
-    heartbeat('Phase1-Scroll', '📜 Scrolling until 150 results scanned or feed exhaustion...');
+    // Inline quality counter: count high/mid tier posts using same thresholds as syncPosts
+    function countQualityPosts(posts) {
+      let count = 0;
+      for (let i = 0; i < posts.length; i++) {
+        const p = posts[i];
+        const eng = (p.likes || 0) + (p.postComments || 0);
+        const pos = p.discoveryIndex ?? 999;
+        if (eng >= 5) { count++; continue; } // mid or high by engagement
+        if (eng > 0 && pos < 10) { count++; continue; } // position-boosted to mid
+        if (eng === 0 && pos < 40) { count++; continue; } // position-based mid/high
+      }
+      return count;
+    }
+
+    heartbeat('Phase1-Scroll', '📜 Scrolling until 100 results scanned or 10+ quality posts...');
 
     while (step < ABSOLUTE_SAFETY_LIMIT && seenUrls.size < SCANNED_RESULTS_LIMIT) {
       const scrollAmt = 700 + Math.floor(Math.random() * 500);
@@ -922,8 +957,9 @@ window.__linkedInExtractorReady = true;
       }
 
       const real = countReal(allPosts);
-      console.log('[v18] Scroll ' + (step + 1) + ' | Scanned URLs: ' + currentSeenSize + ' | Saved: ' + real + ' | Stall: ' + stallCount + '/' + STALL_LIMIT);
-      if (step % 5 === 0) heartbeat('Phase1-Scroll', '📜 Scrolled ' + step + ' times | ' + real + ' real posts');
+      const qualityCount = countQualityPosts(allPosts);
+      console.log('[v18] Scroll ' + (step + 1) + ' | Scanned: ' + currentSeenSize + ' | Real: ' + real + ' | Quality(H+M): ' + qualityCount + '/' + MIN_QUALITY_TARGET + ' | Stall: ' + stallCount + '/' + STALL_LIMIT);
+      if (step % 5 === 0) heartbeat('Phase1-Scroll', '📜 Scrolled ' + step + ' | ' + real + ' posts | ' + qualityCount + '/' + MIN_QUALITY_TARGET + ' quality');
 
       // Stall handling
       if (stallCount >= STALL_LIMIT) {
@@ -970,18 +1006,44 @@ window.__linkedInExtractorReady = true;
       step++;
       
       if (seenUrls.size >= SCANNED_RESULTS_LIMIT) {
-        console.log('[v18] Limit reached: 150 results scanned. Finishing keyword.');
-        heartbeat('Phase1-Limit', '✅ 150 results scanned. Moving to next keyword.');
+        console.log('[v18] Limit reached: 100 results scanned. Finishing keyword.');
+        heartbeat('Phase1-Limit', '✅ 100 results scanned. Moving to next keyword.');
+      }
+
+      // ── QUALITY-AWARE EARLY EXIT ──
+      // If we already have 10+ high/mid quality posts, we can stop scrolling early
+      if (countQualityPosts(allPosts) >= MIN_QUALITY_TARGET && allPosts.length >= MIN_QUALITY_TARGET) {
+        console.log('[v18] ✅ Quality target reached: ' + countQualityPosts(allPosts) + ' high/mid posts. Stopping scroll early.');
+        heartbeat('Phase1-Quality', '✅ ' + countQualityPosts(allPosts) + ' quality posts found. Proceeding to validation...');
+        break;
       }
       
-      // ── INCREMENTAL SAVE (CRASH PROTECTOR) ──
-      if (step > 0 && step % 15 === 0) {
-        console.log('[v18] 💾 Incremental Backup: Delaying sync to ensure active validation runs first.');
-        heartbeat('Phase1-Backup', '💾 Buffering partial progress...');
+      // ── INCREMENTAL SAVE (PROGRESSIVE STREAMING) ──
+      // Stream posts to dashboard in real-time WITHOUT validation (non-blocking).
+      // Validation runs once at the end to ensure zero broken posts.
+      if (step > 0 && step % 5 === 0) {
+        const unsentPosts = allPosts.slice(lastSyncedIndex);
+        if (unsentPosts.length >= 2) {
+          console.log('[v18] 💾 Incremental stream: sending ' + unsentPosts.length + ' posts to dashboard...');
+          heartbeat('Phase1-Sync', '💾 Streaming ' + unsentPosts.length + ' posts to dashboard...');
+          try {
+            const serializedBatch = unsentPosts.map(p => ({
+              url: p.url, likes: p.likes, postComments: p.postComments,
+              author: p.author, textSnippet: p.textSnippet,
+              commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
+              discoveryIndex: p.discoveryIndex
+            }));
+            await syncPosts(serializedBatch, keyword, dashboardUrl, userId, linkedInProfileId, false);
+            console.log('[v18] 💾 Incremental stream complete: ' + unsentPosts.length + ' posts relayed');
+            lastSyncedIndex = allPosts.length;
+          } catch(e) {
+            console.warn('[v18] Incremental stream error (non-fatal):', e);
+          }
+        }
       }
     }
 
-    // ── Step 5: Active HTTP Validation ──
+    // ── Step 5: Active HTTP Validation (on ALL posts, once, after scrolling) ──
     heartbeat('Phase1-Validate', `🛡️ Actively verifying ${allPosts.length} posts...`);
     const validPosts = await validatePostsConcurrently(allPosts);
 
@@ -994,11 +1056,12 @@ window.__linkedInExtractorReady = true;
       heartbeat('Phase1-Low', '⚠️ Low yield: ' + totalReal + ' valid posts');
     }
 
-    // ── Step 6: Serialize ──
+    // ── Step 6: Serialize with discoveryIndex for position-based quality boosting ──
     const serializedPosts = validPosts.map(p => ({
       url: p.url, likes: p.likes, postComments: p.postComments,
       author: p.author, textSnippet: p.textSnippet,
-      commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false
+      commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
+      discoveryIndex: p.discoveryIndex
     }));
 
     const needsCommenting = !isSearchOnly && comments && comments.length > 0;
@@ -1006,6 +1069,8 @@ window.__linkedInExtractorReady = true;
     // ── Step 7: Comment or sync ──
     // v19 FIX: We removed PASS_DONE completely to guarantee ONE stable extraction cycle.
     // All extracted posts from this single deep pass are now ALWAYS saved.
+    // v20 FIX: Posts are streamed progressively during scrolling for real-time visibility.
+    // Final authoritative sync here ensures validated posts replace any broken ones.
     if (needsCommenting) {
       let commentedHistory = [], usedCommentHistory = [];
       try {
@@ -1059,12 +1124,37 @@ window.__linkedInExtractorReady = true;
 
       heartbeat('Phase4', '📤 Syncing...');
       await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
-      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: posted, assignedCommentsCount: requiredComments, searchOnlyMode: false, linkedinBlocked: blocked });
+      
+      // ISSUE 2 FIX: Multi-Pass Coverage Expansion
+      // Navigate through sequential time filters to maximize result volume per keyword
+      // Pass 0 (top) -> Pass 1 (past 24h) -> Pass 2 (past week) -> Pass 3 (past month)
+      if (passIndex < 3) {
+        let filterParam = 'r86400'; // Default next is Pass 1 (24h)
+        if (passIndex === 1) filterParam = 'r604800'; // Pass 2 (week)
+        if (passIndex === 2) filterParam = 'r2592000'; // Pass 3 (month)
+        
+        console.log(`[v21] 🔄 Pass ${passIndex} complete. Triggering Pass ${passIndex+1} with filter ${filterParam}`);
+        safeSend({ action: 'PASS_DONE', passIndex, posts: validPosts, keyword, linkedInProfileId, filterParam });
+      } else {
+        console.log(`[v21] ✅ All passes complete.`);
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: posted, assignedCommentsCount: requiredComments, searchOnlyMode: false, linkedinBlocked: blocked });
+      }
 
     } else {
-      heartbeat('Phase4', '📤 Syncing ' + totalReal + ' real posts...');
+      heartbeat('Phase4', '📤 Final sync: ' + totalReal + ' validated posts...');
       await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
-      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: totalReal });
+      
+      if (passIndex < 3) {
+        let filterParam = 'r86400';
+        if (passIndex === 1) filterParam = 'r604800';
+        if (passIndex === 2) filterParam = 'r2592000';
+        
+        console.log(`[v21] 🔄 Pass ${passIndex} complete. Triggering Pass ${passIndex+1} with filter ${filterParam}`);
+        safeSend({ action: 'PASS_DONE', passIndex, posts: validPosts, keyword, linkedInProfileId, filterParam });
+      } else {
+        console.log(`[v21] ✅ All passes complete.`);
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: totalReal });
+      }
     }
   }
 

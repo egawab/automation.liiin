@@ -930,12 +930,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Build URL for next pass
       let nextUrl;
-      if (nextPass === 1) {
-        // Pass 1: date sort
-        nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
-      } else if (filterParam) {
-        // Pass 2/3: time-filtered (past-month or past-quarter)
+      if (filterParam) {
+        // Passes with specific time filters (24h, week, month)
         nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted&f_TPR=${filterParam}`;
+      } else if (nextPass === 1) {
+        // Legacy fallback: Pass 1 is just date sort
+        nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
       } else {
         // No filter param and past pass 1 — skip to final sync
         console.log(`[Worker] PASS_DONE: no filterParam for pass ${nextPass}. Treating as final.`);

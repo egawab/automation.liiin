@@ -321,10 +321,44 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 
     await broadcastLog(`Searching for: "${keyword.keyword}"`);
 
-    // Search LinkedIn
-    const postsRaw = await searchLinkedInPosts(keyword.keyword);
-      // Sort by engagement descending (High Reach Priority)
-      const posts = postsRaw.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
+    // ISSUE 2 FIX: Multi-Pass Coverage Expansion for Worker
+    // Query across multiple time ranges to maximize volume and avoid getting stuck in a narrow recent slice
+    const timeFilters = [
+      null,        // Pass 0: Top/Relevant (default)
+      'r86400',    // Pass 1: Past 24 hours
+      'r604800',   // Pass 2: Past week
+      'r2592000'   // Pass 3: Past month
+    ];
+
+    let allAggregatedPosts: PostCandidate[] = [];
+    const seenUrls = new Set<string>();
+
+    for (let i = 0; i < timeFilters.length; i++) {
+      const filter = timeFilters[i];
+      const passName = filter === 'r86400' ? 'Past 24h' : filter === 'r604800' ? 'Past Week' : filter === 'r2592000' ? 'Past Month' : 'Top/Relevant';
+      
+      console.log(`\n🔄 [Worker Pass ${i}] Searching "${keyword.keyword}" (${passName})...`);
+      await broadcastLog(`Starting Pass ${i} for "${keyword.keyword}" (${passName})`);
+      
+      try {
+        const postsRaw = await searchLinkedInPosts(keyword.keyword, filter);
+        
+        let newCount = 0;
+        for (const p of postsRaw) {
+          if (!seenUrls.has(p.url)) {
+            seenUrls.add(p.url);
+            allAggregatedPosts.push(p);
+            newCount++;
+          }
+        }
+        console.log(`✅ [Worker Pass ${i}] Found ${postsRaw.length} total, ${newCount} new unique posts.\n`);
+      } catch(err) {
+        console.error(`❌ [Worker Pass ${i}] failed:`, err);
+      }
+    }
+
+    // Sort by engagement descending (High Reach Priority)
+    const posts = allAggregatedPosts.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
 
     // Log this search for rate limit tracking
     await logSearch(settings.userId, keyword.keyword);
@@ -379,13 +413,16 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 
 // ============================================================================
 // LINKEDIN SEA// Maximum number of posts to collect per keyword search
-const MAX_POSTS_PER_SEARCH = 150;
+const MAX_POSTS_PER_SEARCH = 100;
 
-async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
+async function searchLinkedInPosts(keyword: string, filterParam: string | null = null): Promise<PostCandidate[]> {
   if (!page) throw new Error('Browser not initialized');
 
   try {
-    const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}`;
+    let searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}`;
+    if (filterParam) {
+      searchUrl += `&sortBy=date_posted&f_TPR=${filterParam}`;
+    }
 
     console.log(`🔍 Navigating to search page...`);
 
