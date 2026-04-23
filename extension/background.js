@@ -951,60 +951,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const jobSettings = settingsData.jobSettings || {};
       const jobComments = settingsData.jobComments || [];
 
-      const tabId = s.activeTabId;
-      if (!tabId) { console.warn('[Worker] PASS_DONE: no active tab.'); return; }
-
-      const alive = await tabExists(tabId);
-      if (!alive) {
-        console.warn(`[Worker] PASS_DONE: Tab ${tabId} is dead. Aborting pass navigation.`);
-        await finishCycle(null, false, jobSettings.searchOnlyMode);
-        return;
-      }
-
-      const nextPass = passIndex + 1;
-
-      // Build URL for next pass
-      let nextUrl;
-      if (filterParam === 'latest') {
-        nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
-      } else if (filterParam) {
-        nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted&f_TPR=${filterParam}`;
-      } else {
-        console.log(`[Worker] PASS_DONE: no filterParam for pass ${nextPass}. Treating as final.`);
-        await finishCycle(tabId, true, jobSettings.searchOnlyMode);
-        return;
-      }
-
-      console.log(`[Worker] PASS_DONE: navigating tab ${tabId} to Pass ${nextPass} URL...`);
-      _lastContentHeartbeat = Date.now(); // RESET HEARTBEAT before navigation to prevent watchdog panic during load
-
-      try {
-        await chrome.tabs.update(tabId, { url: nextUrl });
-        await waitForTabLoad(tabId, 20000);
-        await sleep(1500);
-
-        const aliveAfter = await tabExists(tabId);
-        if(!aliveAfter) throw new Error("Tab vanished after update.");
-
-        // Inject content.js fresh onto the new page
-        await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
-        await sleep(1500);
-
-        // Start next pass with accumulated posts
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          func: (k, s, c, du, u) => {
-            if (window.__startExtraction) window.__startExtraction(k, s, c, du, u);
-            else throw new Error('Extractor not defined');
-          },
-          args: [keyword, { ...jobSettings, passIndex: nextPass, priorPosts: posts || [], totalSaved }, jobComments, config.dashboardUrl, config.userId]
-        });
-        _lastContentHeartbeat = Date.now();
-        console.log(`[Worker] ✅ Pass ${nextPass} started on tab ${tabId}`);
-      } catch (err) {
-        console.error(`[Worker] PASS_DONE navigation failed: ${err.message}`);
-        await finishCycle(tabId, false, jobSettings.searchOnlyMode);
-      }
+      console.log(`[Worker] PASS_DONE: Multi-pass disabled. Treating pass as final.`);
+      await finishCycle(tabId, true, jobSettings.searchOnlyMode);
     });
     if (sendResponse) sendResponse({ ok: true });
     return true;

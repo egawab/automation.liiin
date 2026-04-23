@@ -322,105 +322,53 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
     await broadcastLog(`Searching for: "${keyword.keyword}"`);
 
     // =========================================================================
-    // 🔥 RULE 1 & 3: TIME RANGE EXPANSION & QUALITY MAXIMIZATION
+    // 🔥 MAX-EXTRACTION MODE
     // =========================================================================
-    // We search across progressively wider time ranges. 
-    // We NEVER stop early if we have fewer than 10 valid posts. 
-    // We continue searching even after 10 posts to maximize quality and supplement with high-engagement posts.
-    const timeFilters = [
-      null,        // Pass 0: Top/Relevant (default)
-      'latest',    // Pass 1: Latest
-      'r86400',    // Pass 2: Past 24 hours
-      'r604800',   // Pass 3: Past week
-      'r2592000'   // Pass 4: Past month
-    ];
+    // We do a single comprehensive deep-search per keyword, saving everything found.
 
     let allAggregatedPosts: PostCandidate[] = [];
     const seenUrls = new Set<string>();
     let totalSavedCount = 0;
-    let zeroResultsPasses = 0;
 
-    for (let i = 0; i < timeFilters.length; i++) {
-      const filter = timeFilters[i];
-      const passName = filter === 'latest' ? 'Latest' : filter === 'r86400' ? 'Past 24h' : filter === 'r604800' ? 'Past Week' : filter === 'r2592000' ? 'Past Month' : 'Top/Relevant';
+    console.log(`\n🔄 Searching "${keyword.keyword}" (Top/Relevant)...`);
+    await broadcastLog(`Starting deep search for "${keyword.keyword}"`);
+    
+    try {
+      const postsRaw = await searchLinkedInPosts(keyword.keyword, null);
       
-      console.log(`\n🔄 [Worker Pass ${i}] Searching "${keyword.keyword}" (${passName})...`);
-      await broadcastLog(`Starting Pass ${i} for "${keyword.keyword}" (${passName})`);
+      for (const p of postsRaw) {
+        if (!seenUrls.has(p.url)) {
+          seenUrls.add(p.url);
+          allAggregatedPosts.push(p);
+        }
+      }
       
-      let postsRaw: PostCandidate[] = [];
-      try {
-        postsRaw = await searchLinkedInPosts(keyword.keyword, filter);
-        
-        let newValidCount = 0;
-        let postsToSaveThisPass: PostCandidate[] = [];
+      console.log(`✅ Scanned ${postsRaw.length} total posts.\n`);
 
-        for (const p of postsRaw) {
-          if (!seenUrls.has(p.url)) {
-            seenUrls.add(p.url);
-            
-            // =========================================================================
-            // 🔥 RULE 2: HARD MINIMUM ENGAGEMENT THRESHOLDS
-            // =========================================================================
-            // Silently reject any post that falls below the absolute safety floor.
-            if (p.likes >= 10 && p.comments >= 8) {
-              allAggregatedPosts.push(p);
-              postsToSaveThisPass.push(p);
-              newValidCount++;
-            }
-          }
-        }
-        
-        console.log(`✅ [Worker Pass ${i}] Scanned ${postsRaw.length} total, found ${newValidCount} valid threshold-passing posts.\n`);
+      if (allAggregatedPosts.length > 0) {
+          // Sort to prioritize high engagement posts first
+          allAggregatedPosts.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
+          
+          const saveResults = await Promise.allSettled(
+            allAggregatedPosts.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
+          );
+          
+          totalSavedCount = saveResults.filter(
+            r => r.status === 'fulfilled' && r.value === true
+          ).length;
 
-        if (postsRaw.length === 0) {
-            zeroResultsPasses++;
-        } else {
-            zeroResultsPasses = 0;
-        }
-
-        if (postsToSaveThisPass.length > 0) {
-            // Sort to save best first
-            postsToSaveThisPass.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
-            
-            const saveResults = await Promise.allSettled(
-              postsToSaveThisPass.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
-            );
-            
-            const savedThisPass = saveResults.filter(
-              r => r.status === 'fulfilled' && r.value === true
-            ).length;
-
-            totalSavedCount += savedThisPass;
-            console.log(`💾 Saved ${savedThisPass} new posts to dashboard (Total so far: ${totalSavedCount})\n`);
-        }
-
-      } catch(err) {
-        console.error(`❌ [Worker Pass ${i}] failed:`, err);
+          console.log(`💾 Saved ${totalSavedCount} new posts to dashboard\n`);
       }
 
-      // Short-circuit if consecutive empty passes
-      if (zeroResultsPasses >= 2) {
-          console.log(`⚠️ Short-circuiting execution: ${zeroResultsPasses} consecutive passes returned 0 posts.`);
-          break;
-      }
-
-      // Check maximization safety cap (to prevent true infinite loops)
-      if (totalSavedCount >= 10) {
-        console.log(`✅ Quality target reached (${totalSavedCount} confirmed saved posts). Stopping time expansion.`);
-        break;
-      }
+    } catch(err) {
+      console.error(`❌ Search failed:`, err);
     }
 
     // Log this search for rate limit tracking
     await logSearch(settings.userId, keyword.keyword);
 
-    if (totalSavedCount < 10) {
-      console.log(`⚠️ WARNING: Exhausted all time ranges but only secured ${totalSavedCount} saved posts for "${keyword.keyword}". Minimum 10 target missed.\n`);
-      await broadcastLog(`Secured ${totalSavedCount} posts for "${keyword.keyword}" (below 10 minimum, but exhausted all ranges)`, 'warn');
-    } else {
-      console.log(`🎯 SUCCESS: Secured ${totalSavedCount} valid, high-engagement posts for "${keyword.keyword}".\n`);
-      await broadcastLog(`Secured ${totalSavedCount} valid, high-engagement posts for "${keyword.keyword}"`);
-    }
+    console.log(`🎯 SUCCESS: Secured ${totalSavedCount} posts for "${keyword.keyword}".\n`);
+    await broadcastLog(`Secured ${totalSavedCount} posts for "${keyword.keyword}"`);
 
   } catch (error: any) {
     console.error(`❌ Error processing keyword "${keyword.keyword}":`, error.message);
