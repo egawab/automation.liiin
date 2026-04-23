@@ -775,6 +775,7 @@ window.__linkedInExtractorReady = true;
           }));
           
           validations.forEach(v => { if (v) validPosts.push(v); });
+          heartbeat('Phase1-Validate', `🛡️ Validating batch ${Math.floor(i/batchSize)+1}...`); // KEEP WORKER ALIVE
           await new Promise(r => setTimeout(r, 300)); // Slightly longer delay between batches
       }
       
@@ -904,22 +905,20 @@ window.__linkedInExtractorReady = true;
 
     // ── Step 4: Scroll loop — CAPPED AT 100 SCANNED RESULTS ──
     const STALL_LIMIT = 15; // Increased from 8 to 15 to prevent premature stopping on slow connections
-    const ABSOLUTE_SAFETY_LIMIT = 500; // Physical safety stop
+    const ABSOLUTE_SAFETY_LIMIT = 30; // Fast cap: maximum 30 scroll steps
     const SCANNED_RESULTS_LIMIT = 100; // Strict limit: 100 items scanned per keyword
-    const MIN_QUALITY_TARGET = 10; // Minimum high/mid reach posts to aim for
+    const MIN_QUALITY_TARGET = 10; // Minimum strict posts to aim for
     let stallCount = 0;
     let step = 0;
 
-    // Inline quality counter: count high/mid tier posts using same thresholds as syncPosts
+    // Inline strict quality counter (HARD MINIMUMS: >= 10 likes AND >= 8 comments)
     function countQualityPosts(posts) {
       let count = 0;
       for (let i = 0; i < posts.length; i++) {
         const p = posts[i];
-        const eng = (p.likes || 0) + (p.postComments || 0);
-        const pos = p.discoveryIndex ?? 999;
-        if (eng >= 5) { count++; continue; } // mid or high by engagement
-        if (eng > 0 && pos < 10) { count++; continue; } // position-boosted to mid
-        if (eng === 0 && pos < 40) { count++; continue; } // position-based mid/high
+        if ((p.likes || 0) >= 10 && (p.postComments || 0) >= 8) {
+          count++;
+        }
       }
       return count;
     }
@@ -1018,29 +1017,9 @@ window.__linkedInExtractorReady = true;
         break;
       }
       
-      // ── INCREMENTAL SAVE (PROGRESSIVE STREAMING) ──
-      // Stream posts to dashboard in real-time WITHOUT validation (non-blocking).
-      // Validation runs once at the end to ensure zero broken posts.
-      if (step > 0 && step % 5 === 0) {
-        const unsentPosts = allPosts.slice(lastSyncedIndex);
-        if (unsentPosts.length >= 2) {
-          console.log('[v18] 💾 Incremental stream: sending ' + unsentPosts.length + ' posts to dashboard...');
-          heartbeat('Phase1-Sync', '💾 Streaming ' + unsentPosts.length + ' posts to dashboard...');
-          try {
-            const serializedBatch = unsentPosts.map(p => ({
-              url: p.url, likes: p.likes, postComments: p.postComments,
-              author: p.author, textSnippet: p.textSnippet,
-              commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
-              discoveryIndex: p.discoveryIndex
-            }));
-            await syncPosts(serializedBatch, keyword, dashboardUrl, userId, linkedInProfileId, false);
-            console.log('[v18] 💾 Incremental stream complete: ' + unsentPosts.length + ' posts relayed');
-            lastSyncedIndex = allPosts.length;
-          } catch(e) {
-            console.warn('[v18] Incremental stream error (non-fatal):', e);
-          }
-        }
-      }
+      // ── INCREMENTAL SAVE REMOVED ──
+      // To strictly guarantee ZERO broken posts, we no longer stream unverified data.
+      // All posts must wait for active HTTP validation before being sent.
     }
 
     // ── Step 5: Active HTTP Validation (on ALL posts, once, after scrolling) ──
@@ -1048,12 +1027,13 @@ window.__linkedInExtractorReady = true;
     const validPosts = await validatePostsConcurrently(allPosts);
 
     const totalReal = countReal(validPosts);
+    const strictQualityCount = countQualityPosts(validPosts);
     const newPosts = validPosts.length - priorPosts.length;
-    console.log('[v18] ══ FINAL: ' + totalReal + ' real / ' + validPosts.length + ' total (' + newPosts + ' new this pass) ══');
-    heartbeat('Phase1-Done', '✅ Pass ' + (passIndex + 1) + ': ' + totalReal + ' valid posts');
+    console.log('[v18] ══ FINAL: ' + strictQualityCount + ' strict quality / ' + totalReal + ' real / ' + validPosts.length + ' total (' + newPosts + ' new this pass) ══');
+    heartbeat('Phase1-Done', '✅ Pass ' + (passIndex + 1) + ': ' + strictQualityCount + ' strict quality posts');
 
-    if (totalReal < 5) {
-      heartbeat('Phase1-Low', '⚠️ Low yield: ' + totalReal + ' valid posts');
+    if (strictQualityCount < MIN_QUALITY_TARGET) {
+      heartbeat('Phase1-Low', '⚠️ Below minimum target: ' + strictQualityCount + ' / ' + MIN_QUALITY_TARGET);
     }
 
     // ── Step 6: Serialize with discoveryIndex for position-based quality boosting ──
@@ -1127,13 +1107,15 @@ window.__linkedInExtractorReady = true;
       
       // ISSUE 2 FIX: Multi-Pass Coverage Expansion
       // Navigate through sequential time filters to maximize result volume per keyword
-      // Pass 0 (top) -> Pass 1 (past 24h) -> Pass 2 (past week) -> Pass 3 (past month)
-      if (passIndex < 3) {
+      if (strictQualityCount >= MIN_QUALITY_TARGET) {
+        console.log(`[v21] ✅ Secured ${strictQualityCount} high-quality posts. Target reached. Exiting passes early.`);
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: posted, assignedCommentsCount: requiredComments, searchOnlyMode: false, linkedinBlocked: blocked });
+      } else if (passIndex < 3) {
         let filterParam = 'r86400'; // Default next is Pass 1 (24h)
         if (passIndex === 1) filterParam = 'r604800'; // Pass 2 (week)
         if (passIndex === 2) filterParam = 'r2592000'; // Pass 3 (month)
         
-        console.log(`[v21] 🔄 Pass ${passIndex} complete. Triggering Pass ${passIndex+1} with filter ${filterParam}`);
+        console.log(`[v21] 🔄 Pass ${passIndex} complete (${strictQualityCount}/${MIN_QUALITY_TARGET} strict). Triggering Pass ${passIndex+1} with filter ${filterParam}`);
         safeSend({ action: 'PASS_DONE', passIndex, posts: validPosts, keyword, linkedInProfileId, filterParam });
       } else {
         console.log(`[v21] ✅ All passes complete.`);
@@ -1144,16 +1126,19 @@ window.__linkedInExtractorReady = true;
       heartbeat('Phase4', '📤 Final sync: ' + totalReal + ' validated posts...');
       await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
       
-      if (passIndex < 3) {
+      if (strictQualityCount >= MIN_QUALITY_TARGET) {
+        console.log(`[v21] ✅ Secured ${strictQualityCount} high-quality posts. Target reached. Exiting passes early.`);
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: strictQualityCount });
+      } else if (passIndex < 3) {
         let filterParam = 'r86400';
         if (passIndex === 1) filterParam = 'r604800';
         if (passIndex === 2) filterParam = 'r2592000';
         
-        console.log(`[v21] 🔄 Pass ${passIndex} complete. Triggering Pass ${passIndex+1} with filter ${filterParam}`);
+        console.log(`[v21] 🔄 Pass ${passIndex} complete (${strictQualityCount}/${MIN_QUALITY_TARGET} strict). Triggering Pass ${passIndex+1} with filter ${filterParam}`);
         safeSend({ action: 'PASS_DONE', passIndex, posts: validPosts, keyword, linkedInProfileId, filterParam });
       } else {
         console.log(`[v21] ✅ All passes complete.`);
-        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: totalReal });
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: strictQualityCount });
       }
     }
   }
@@ -1278,15 +1263,9 @@ window.__linkedInExtractorReady = true;
       return (a.discoveryIndex || 999) - (b.discoveryIndex || 999); // Earlier discovered = higher priority
     });
     
-    // STRICT QUALITY FILTERING (PER USER REQUEST)
-    // Only transmit High and Medium reach posts. Drop Low and Unknown completely.
-    let final = labeled.filter(p => p.engagementTier === 'high' || p.engagementTier === 'mid');
-    
-    // Best-effort fallback: if strict filtering leaves us with 0 posts but we found some, keep top 3
-    if (final.length === 0 && labeled.length > 0) {
-        console.log('[v18] No high/mid posts found. Falling back to best available 3 posts.');
-        final = labeled.slice(0, 3);
-    }
+    // STRICT QUALITY FILTERING (HARD MINIMUMS)
+    // Only transmit posts with >= 10 likes AND >= 8 comments. Drop everything else.
+    let final = labeled.filter(p => (p.likes || 0) >= 10 && (p.comments || p.postComments || 0) >= 8);
 
     const tierCounts = {
       high: final.filter(p => p.engagementTier === 'high').length,

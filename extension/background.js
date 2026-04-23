@@ -944,6 +944,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       console.log(`[Worker] PASS_DONE: navigating tab ${tabId} to Pass ${nextPass} URL...`);
+      _lastContentHeartbeat = Date.now(); // RESET HEARTBEAT before navigation to prevent watchdog panic during load
 
       try {
         await chrome.tabs.update(tabId, { url: nextUrl });
