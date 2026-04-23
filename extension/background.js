@@ -737,17 +737,21 @@ async function finishCycle(tabId, incrementKeyword = true, searchOnlyMode = fals
 
   if (state.currentKeyword) {
     if (searchOnlyMode) {
-      updates.currentSearchKeywordIndex = nextKwIndex;
-      updates.currentKeyword = null;
-      const searchPages = state.keywordSearchPages || {};
-      delete searchPages[state.currentKeyword];
-      updates.keywordSearchPages = searchPages;
+      if (incrementKeyword) {
+        updates.currentSearchKeywordIndex = nextKwIndex;
+        updates.currentKeyword = null;
+        const searchPages = state.keywordSearchPages || {};
+        delete searchPages[state.currentKeyword];
+        updates.keywordSearchPages = searchPages;
 
-      // Log with group context
-      const groupBoundary = nextKwIndex > 0 && nextKwIndex % 3 === 0;
-      const cdSec = Math.round(cd / 1000);
-      const cdLabel = cd >= 60000 ? `${Math.round(cd / 60000)} min` : `${cdSec}s`;
-      console.log(`[Worker] ✅ "${state.currentKeyword}" done. → Keyword ${nextKwIndex}. Cooldown: ${cdLabel}${groupBoundary ? ' (GROUP BOUNDARY)' : ''}.`);
+        // Log with group context
+        const groupBoundary = nextKwIndex > 0 && nextKwIndex % 3 === 0;
+        const cdSec = Math.round(cd / 1000);
+        const cdLabel = cd >= 60000 ? `${Math.round(cd / 60000)} min` : `${cdSec}s`;
+        console.log(`[Worker] ✅ "${state.currentKeyword}" done. → Keyword ${nextKwIndex}. Cooldown: ${cdLabel}${groupBoundary ? ' (GROUP BOUNDARY)' : ''}.`);
+      } else {
+        console.log(`[Worker] 🔄 Retrying "${state.currentKeyword}" on next cycle due to failure/0 posts.`);
+      }
     } else {
       // Comment mode
       updates.currentSearchKeywordIndex = nextKwIndex;
