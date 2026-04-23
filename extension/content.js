@@ -798,9 +798,9 @@ window.__linkedInExtractorReady = true;
         console.log('[v18] Last-resort harvest: ' + realCount + ' real posts');
 
         if (realCount === 0) {
-          // Send JOB_FAILED so the background worker retries the keyword instead of completing it
+          // DO NOT send PASS_DONE with 0 posts — just complete smoothly
           safeSend({
-            action: 'JOB_FAILED',
+            action: 'JOB_COMPLETED',
             commentsPostedCount: 0,
             assignedCommentsCount: 0,
             searchOnlyMode: isSearchOnly,
@@ -1002,13 +1002,7 @@ window.__linkedInExtractorReady = true;
     } else {
       heartbeat('Phase4', '📤 Syncing ' + totalReal + ' real posts...');
       await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
-      
-      if (totalReal === 0) {
-        console.warn('[v18] 0 real posts extracted after full scan. Failing job to force retry.');
-        safeSend({ action: 'JOB_FAILED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: 0 });
-      } else {
-        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: totalReal });
-      }
+      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: totalReal });
     }
   }
 

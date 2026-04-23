@@ -996,14 +996,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     }
 
-    if (isSuccessfulCycle && isSearchOnly) {
-      if (message.postsExtracted === 0) {
-        console.warn(`[Worker] ❌ 0 posts extracted for search. NOT consuming cycle slot. Keyword will retry.`);
-        isSuccessfulCycle = false;
-        showPremiumToast('Extraction Failed', `❌ 0 posts extracted. Retrying...`, true);
-      }
-    }
-
     if (blocked) {
       console.error(`[Worker] 🚫 LINKEDIN RESTRICTION DETECTED. Pausing 30 min.`);
       showPremiumToast('🚫 Account Restricted', `LinkedIn blocking comments. Pausing 30 min.`, true);
