@@ -475,10 +475,21 @@ window.__linkedInExtractorReady = true;
         // Ensure this is actually a substantial card (relaxed rule to catch more valid content)
         if (card.offsetHeight < 40 || card.offsetWidth < 150) return;
 
-        const url = extractUrlFromCard(card);
-        const cleanedUrl = url ? cleanUrl(url) : null;
+        let url = extractUrlFromCard(card);
+        let cleanedUrl = url ? cleanUrl(url) : null;
 
-        // If we found a real URL, this is definitively a post card
+        // V19 FIX: If LinkedIn hides the URL, but the card has a "Comment" button, it's a valid post!
+        if (!cleanedUrl) {
+            const hasCommentBtn = Array.from(card.querySelectorAll('button')).find(b => 
+                (b.getAttribute('aria-label') || '').toLowerCase().includes('comment') || 
+                (b.innerText || '').toLowerCase().includes('comment')
+            );
+            if (hasCommentBtn) {
+                cleanedUrl = `discovered:post_${Date.now()}_${Math.floor(Math.random()*100000)}`;
+            }
+        }
+
+        // If we found a real or synthetic URL, this is definitively a post card
         if (cleanedUrl) {
           if (seenUrls.has(cleanedUrl)) {
              seenCards.add(card); // Don't process this physical card again
@@ -524,13 +535,22 @@ window.__linkedInExtractorReady = true;
         if (!card || processedCards.has(card) || seenCards.has(card)) continue;
         processedCards.add(card);
 
-        const url = extractUrlFromCard(card);
-        const cleanedUrl = url ? cleanUrl(url) : null;
+        let url = extractUrlFromCard(card);
+        let cleanedUrl = url ? cleanUrl(url) : null;
 
-        // STRICT FILTER: If we cannot extract a real post URL, this is almost certainly
-        // a COMMENT container (which has its own Like button). We MUST reject it.
-        // Allowing comments balloons the array and stops the scroll loop prematurely.
-        if (!cleanedUrl) continue;
+        // V19 FIX: Fallback for hidden URLs. We only accept it if it has a "Comment" button.
+        // Comments on posts only have "Like" and "Reply", so checking for "Comment" prevents comment-ballooning.
+        if (!cleanedUrl) {
+            const hasCommentBtn = Array.from(card.querySelectorAll('button')).find(b => 
+                (b.getAttribute('aria-label') || '').toLowerCase().includes('comment') || 
+                (b.innerText || '').toLowerCase().includes('comment')
+            );
+            if (hasCommentBtn) {
+                cleanedUrl = `discovered:post_${Date.now()}_${Math.floor(Math.random()*100000)}`;
+            } else {
+                continue;
+            }
+        }
 
         // Skip if we've seen this URL
         if (seenUrls.has(cleanedUrl)) {
