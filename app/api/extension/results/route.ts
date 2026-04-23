@@ -9,6 +9,24 @@ function setCorsHeaders(res: NextResponse) {
   return res;
 }
 
+// ── String Sanitization for PostgreSQL ──
+// LinkedIn DOM text often contains null bytes (\x00), broken hex/unicode escape
+// sequences, and other characters that PostgreSQL text columns reject outright.
+// This function strips ALL of them before data reaches Prisma.
+function sanitizeString(input: unknown): string {
+  if (input === null || input === undefined) return '';
+  let s = String(input);
+  // 1. Remove null bytes (the #1 cause of "unexpected end of hex escape")
+  s = s.replace(/\x00/g, '');
+  // 2. Remove all other C0 control characters except \t \n \r
+  s = s.replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  // 3. Strip broken backslash-x hex escapes like \x, \x0, \xG that PostgreSQL chokes on
+  s = s.replace(/\\x[0-9a-fA-F]?(?![0-9a-fA-F])/g, '');
+  // 4. Remove lone backslashes that could start incomplete escape sequences
+  s = s.replace(/\\(?![\\nrtbfux"'/])/g, '');
+  return s.trim();
+}
+
 export async function OPTIONS() {
   return setCorsHeaders(NextResponse.json({}, { status: 200 }));
 }
@@ -57,6 +75,9 @@ export async function POST(req: Request) {
       return setCorsHeaders(NextResponse.json({ error: 'Invalid payload: posts array required' }, { status: 400 }));
     }
 
+    // Sanitize keyword once
+    const safeKeyword = sanitizeString(keyword || 'auto').substring(0, 50);
+
     // 1. Log the action for dashboard metrics (First, to ensure we track the attempt)
     try {
         await prisma.log.create({
@@ -64,7 +85,7 @@ export async function POST(req: Request) {
             userId,
             action: 'SEARCH',
             postUrl: posts.length === 0 && debugInfo ? `ext-search:DEBUG_EMPTY_PAGE` : `ext-search:CONTENT`,
-            comment: debugInfo || (posts.length > 0 ? `KEYWORD: ${keyword} | FOUND: ${posts.length}` : `KEYWORD: ${keyword}`)
+            comment: sanitizeString(debugInfo || (posts.length > 0 ? `KEYWORD: ${keyword} | FOUND: ${posts.length}` : `KEYWORD: ${keyword}`))
           }
         });
     } catch(e) { console.error("Log creation failed:", e); }
@@ -80,21 +101,29 @@ export async function POST(req: Request) {
             const postLikes = Number(post.likes || 0);
             const postComments = Number(post.comments || 0);
 
+            // ── SANITIZE all string fields before they touch Prisma ──
+            const safeUrl = sanitizeString(post.url).substring(0, 2000);
+            const safeAuthor = sanitizeString(post.author || 'Unknown').substring(0, 100);
+            const safePreview = sanitizeString(post.preview || '').substring(0, 1000);
+
+            // Skip posts with no usable URL after sanitization
+            if (!safeUrl) return 'skipped';
+
             // Check for existing post for THIS user
             const existing = await prisma.savedPost.findFirst({
-              where: { userId, postUrl: post.url }
+              where: { userId, postUrl: safeUrl }
             });
     
             if (!existing) {
               await prisma.savedPost.create({
                 data: {
                   userId,
-                  postUrl: post.url,
-                  postAuthor: String(post.author || 'Unknown').substring(0, 100),
-                  postPreview: String(post.preview || '').substring(0, 1000),
+                  postUrl: safeUrl,
+                  postAuthor: safeAuthor,
+                  postPreview: safePreview,
                   likes: postLikes,
                   comments: postComments,
-                  keyword: String(keyword || 'auto').substring(0, 50),
+                  keyword: safeKeyword,
                   visited: false
                 }
               });
@@ -106,7 +135,7 @@ export async function POST(req: Request) {
                 data: {
                   likes: postLikes,
                   comments: postComments,
-                  postPreview: post.preview ? String(post.preview).substring(0, 1000) : undefined,
+                  postPreview: safePreview || undefined,
                   savedAt: new Date() // Refresh timestamp to show it was recently seen
                 }
               });
