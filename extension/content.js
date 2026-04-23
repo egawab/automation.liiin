@@ -306,7 +306,11 @@ window.__linkedInExtractorReady = true;
   function checkIsCommentable(card) {
     if (!card) return true; // Permissive default
     const text = (card.innerText || '').toLowerCase();
-    if (text.includes("comments are turned off") || text.includes("comments on this post are limited") || text.includes("you can't comment") || text.includes("commenting is restricted")) {
+    if (text.includes("comments are turned off") || 
+        text.includes("comments on this post are limited") || 
+        text.includes("you can't comment") || 
+        text.includes("commenting is restricted") ||
+        text.includes("only group members can comment on this post")) {
         return false; // Explicitly locked
     }
 
@@ -830,8 +834,8 @@ window.__linkedInExtractorReady = true;
       const scrollAmt = 700 + Math.floor(Math.random() * 500);
       aggressiveScroll(scrollAmt);
 
-      // ULTRA-FASTER wait — Bare minimum for React to paint DOM elements
-      await wait(600, 1000);
+      // SPEEDUP: Optimized wait times for faster collection while staying within safe rendering limits
+      await wait(400, 800);
 
       // Harvest
       const before = allPosts.length;
