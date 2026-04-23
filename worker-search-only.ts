@@ -321,21 +321,27 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 
     await broadcastLog(`Searching for: "${keyword.keyword}"`);
 
-    // ISSUE 2 FIX: Multi-Pass Coverage Expansion for Worker
-    // Query across multiple time ranges to maximize volume and avoid getting stuck in a narrow recent slice
+    // =========================================================================
+    // 🔥 RULE 1 & 3: TIME RANGE EXPANSION & QUALITY MAXIMIZATION
+    // =========================================================================
+    // We search across progressively wider time ranges. 
+    // We NEVER stop early if we have fewer than 10 valid posts. 
+    // We continue searching even after 10 posts to maximize quality and supplement with high-engagement posts.
     const timeFilters = [
       null,        // Pass 0: Top/Relevant (default)
       'r86400',    // Pass 1: Past 24 hours
       'r604800',   // Pass 2: Past week
-      'r2592000'   // Pass 3: Past month
+      'r2592000',  // Pass 3: Past month
+      ''           // Pass 4: All available data
     ];
 
     let allAggregatedPosts: PostCandidate[] = [];
     const seenUrls = new Set<string>();
+    let validPostCount = 0;
 
     for (let i = 0; i < timeFilters.length; i++) {
       const filter = timeFilters[i];
-      const passName = filter === 'r86400' ? 'Past 24h' : filter === 'r604800' ? 'Past Week' : filter === 'r2592000' ? 'Past Month' : 'Top/Relevant';
+      const passName = filter === 'r86400' ? 'Past 24h' : filter === 'r604800' ? 'Past Week' : filter === 'r2592000' ? 'Past Month' : filter === '' ? 'All Time' : 'Top/Relevant';
       
       console.log(`\n🔄 [Worker Pass ${i}] Searching "${keyword.keyword}" (${passName})...`);
       await broadcastLog(`Starting Pass ${i} for "${keyword.keyword}" (${passName})`);
@@ -344,54 +350,58 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
         const postsRaw = await searchLinkedInPosts(keyword.keyword, filter);
         
         let newCount = 0;
+        let newValidCount = 0;
         for (const p of postsRaw) {
           if (!seenUrls.has(p.url)) {
             seenUrls.add(p.url);
-            allAggregatedPosts.push(p);
             newCount++;
+            
+            // =========================================================================
+            // 🔥 RULE 2: HARD MINIMUM ENGAGEMENT THRESHOLDS
+            // =========================================================================
+            // Silently reject any post that falls below the absolute safety floor.
+            if (p.likes >= 10 && p.comments >= 8) {
+              allAggregatedPosts.push(p);
+              validPostCount++;
+              newValidCount++;
+            }
           }
         }
-        console.log(`✅ [Worker Pass ${i}] Found ${postsRaw.length} total, ${newCount} new unique posts.\n`);
+        console.log(`✅ [Worker Pass ${i}] Scanned ${postsRaw.length} total, added ${newValidCount} valid threshold-passing posts.\n`);
       } catch(err) {
         console.error(`❌ [Worker Pass ${i}] failed:`, err);
       }
+
+      // Check maximization safety cap (to prevent true infinite loops)
+      if (validPostCount >= 200) {
+        console.log(`✅ Maximization target reached (${validPostCount} high-engagement posts). Stopping time expansion.`);
+        break;
+      }
     }
 
-    // Sort by engagement descending (High Reach Priority)
+    // =========================================================================
+    // 🔥 ONGOING OPTIMIZATION (SORTING)
+    // =========================================================================
+    // Sort by engagement descending (High Reach Priority). More is always better.
     const posts = allAggregatedPosts.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
 
     // Log this search for rate limit tracking
     await logSearch(settings.userId, keyword.keyword);
 
+    if (posts.length < 10) {
+      console.log(`⚠️ WARNING: Exhausted all time ranges but only found ${posts.length} valid posts for "${keyword.keyword}". Minimum 10 target missed, but saving what was found.\n`);
+      await broadcastLog(`Found ${posts.length} valid posts for "${keyword.keyword}" (below 10 minimum, but exhausted all ranges)`, 'warn');
+    } else {
+      console.log(`🎯 SUCCESS: Secured ${posts.length} valid, high-engagement posts for "${keyword.keyword}".\n`);
+      await broadcastLog(`Secured ${posts.length} valid, high-engagement posts for "${keyword.keyword}"`);
+    }
+
     if (posts.length === 0) {
-      console.log('❌ No posts found\n');
-      await broadcastLog(`No posts found for "${keyword.keyword}"`);
+      console.log('⚠️  No posts matching strict reach criteria found. Skipping.\n');
       return;
     }
 
-    console.log(`📊 Found ${posts.length} posts\n`);
-
-    // Filter by reach criteria (strict matches)
-    const strictMatches = posts.filter(post =>
-      post.likes >= settings.minLikes &&
-      post.likes <= settings.maxLikes &&
-      post.comments >= settings.minComments &&
-      post.comments <= settings.maxComments
-    );
-
-    // Double-check: how many posts actually have engagement data?
-    const withEngagement = posts.filter(p => p.likes > 0 || p.comments > 0);
-    console.log(`📈 Engagement data: ${withEngagement.length}/${posts.length} posts have likes/comments`);
-    console.log(`✅ ${strictMatches.length} posts match reach criteria\n`);
-    await broadcastLog(`Found ${strictMatches.length} matching posts for "${keyword.keyword}" (${withEngagement.length} with engagement data)`);
-
-      let postsToSave: PostCandidate[] = [...strictMatches];
-
-      if (postsToSave.length === 0) {
-        console.log('⚠️  No posts matching strict reach criteria found. Skipping.\n');
-        await broadcastLog(`No quality matches found for "${keyword.keyword}". Skipping.`, 'warn');
-        return;
-      }
+    let postsToSave: PostCandidate[] = [...posts];
 
     const saveResults = await Promise.allSettled(
       postsToSave.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
