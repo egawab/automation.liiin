@@ -444,6 +444,20 @@ window.__linkedInExtractorReady = true;
 
   function harvest(seenUrls, seenCards, allPosts) {
     let added = 0;
+    let _diag = { cards: 0, tooSmall: 0, noUrl: 0, duplicate: 0, uncommentable: 0, btnCards: 0, urnEls: 0, anchors: 0 };
+
+    // ── FALLBACK: Try to extract a URN from the raw HTML of a card ──
+    function fallbackUrnFromCard(card) {
+      try {
+        const html = card.outerHTML || '';
+        const m = html.match(/urn:li:(?:activity|ugcPost|share):(\d{10,22})/);
+        if (m) {
+          const urnType = m[0].includes('ugcPost') ? 'ugcPost' : 'activity';
+          return 'https://www.linkedin.com/feed/update/urn:li:' + urnType + ':' + m[1];
+        }
+      } catch(e) {}
+      return null;
+    }
 
     // ── Primary: Direct Container Discovery (MOST RELIABLE) ──
     const cardSelectors = [
@@ -451,58 +465,62 @@ window.__linkedInExtractorReady = true;
       '.feed-shared-update-v2',
       '.search-entity',
       'article',
-      '[data-urn]:not(button):not(a):not(span)', // any container block with a URN
-      '[data-id]:not(button):not(a)'
+      '[data-urn]:not(button):not(a):not(span)',
+      '[data-id]:not(button):not(a)',
+      'li.reusable-search__result-container',
+      'div[data-chameleon-result-urn]',
+      'div[data-urn]'
     ];
 
     document.querySelectorAll(cardSelectors.join(', ')).forEach(card => {
       try {
         if (seenCards.has(card)) return;
+        _diag.cards++;
 
-        // Ensure this is actually a substantial card (relaxed rule to catch more valid content)
-        if (card.offsetHeight < 40 || card.offsetWidth < 150) return;
+        if (card.offsetHeight < 40 || card.offsetWidth < 150) { _diag.tooSmall++; return; }
 
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
-        // V22: Aggressive extraction allowed, but basic sanity check required
+        // FALLBACK: If extractUrlFromCard failed, try raw HTML URN extraction
         if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) {
+          const fallback = fallbackUrnFromCard(card);
+          if (fallback) cleanedUrl = cleanUrl(fallback);
+        }
+
+        if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) {
+            _diag.noUrl++;
             return;
         }
 
-        // If we found a real or synthetic URL, this is definitively a post card
-        if (cleanedUrl) {
-          if (seenUrls.has(cleanedUrl)) {
-             seenCards.add(card); // Don't process this physical card again
-             return; 
-          }
-
-          seenUrls.add(cleanedUrl);
-          seenCards.add(card);
-
-          if (!checkIsCommentable(card)) {
-             console.log('[v18] Excluded locked/uncommentable post:', cleanedUrl);
-             return;
-          }
-
-          seenUrls.add(cleanedUrl);
-          seenCards.add(card);
-
-          const metrics = extractMetrics(card);
-          
-          allPosts.push({
-            url: cleanedUrl,
-            likes: metrics.likes,
-            postComments: metrics.postComments,
-            author: metrics.author,
-            textSnippet: metrics.textSnippet,
-            commentable: true,
-            container: card,
-            hasRealUrl: true,
-            discoveryIndex: allPosts.length // Track feed position for quality ranking
-          });
-          added++;
+        if (seenUrls.has(cleanedUrl)) {
+           seenCards.add(card);
+           _diag.duplicate++;
+           return; 
         }
+
+        seenUrls.add(cleanedUrl);
+        seenCards.add(card);
+
+        // DO NOT block collection based on commentability.
+        // Store the flag for later use by comment-mode, but always collect the post.
+        const isCommentable = checkIsCommentable(card);
+        if (!isCommentable) _diag.uncommentable++;
+
+        const metrics = extractMetrics(card);
+        
+        allPosts.push({
+          url: cleanedUrl,
+          likes: metrics.likes,
+          postComments: metrics.postComments,
+          author: metrics.author,
+          textSnippet: metrics.textSnippet,
+          commentable: isCommentable,
+          container: card,
+          hasRealUrl: true,
+          discoveryIndex: allPosts.length
+        });
+        added++;
       } catch(e) {}
     });
 
@@ -515,29 +533,27 @@ window.__linkedInExtractorReady = true;
         const card = walkUpToCard(btn);
         if (!card || processedCards.has(card) || seenCards.has(card)) continue;
         processedCards.add(card);
+        _diag.btnCards++;
 
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
         if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) {
-            continue;
+          const fallback = fallbackUrnFromCard(card);
+          if (fallback) cleanedUrl = cleanUrl(fallback);
         }
 
-        // Skip if we've seen this URL
+        if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) continue;
+
         if (seenUrls.has(cleanedUrl)) {
             seenCards.add(card);
             continue;
         }
 
-        // Mark as seen
         seenUrls.add(cleanedUrl);
         seenCards.add(card);
 
-        if (!checkIsCommentable(card)) {
-            console.log('[v18] Excluded locked/uncommentable post:', cleanedUrl);
-            continue;
-        }
-
+        const isCommentable = checkIsCommentable(card);
         const metrics = extractMetrics(card);
 
         allPosts.push({
@@ -546,7 +562,7 @@ window.__linkedInExtractorReady = true;
           postComments: metrics.postComments,
           author: metrics.author,
           textSnippet: metrics.textSnippet,
-          commentable: true,
+          commentable: isCommentable,
           container: card,
           hasRealUrl: true,
           discoveryIndex: allPosts.length
@@ -555,7 +571,7 @@ window.__linkedInExtractorReady = true;
       } catch(e) {}
     }
 
-    // ── Secondary: data-urn attribute elements ──
+    // ── Tertiary: data-urn attribute elements ──
     document.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn]').forEach(el => {
       try {
         if (seenCards.has(el)) return;
@@ -563,19 +579,17 @@ window.__linkedInExtractorReady = true;
           const v = el.getAttribute(attr) || '';
           const m = v.match(/urn:li:(?:activity|ugcPost|share):\d{10,22}/);
           if (m) {
+            _diag.urnEls++;
             const url = cleanUrl('https://www.linkedin.com/feed/update/' + m[0]);
             if (url && !seenUrls.has(url)) {
               seenUrls.add(url);
               seenCards.add(el);
-              if (!checkIsCommentable(el)) {
-                  console.log('[v18] Excluded locked/uncommentable post:', url);
-                  break;
-              }
+              const isCommentable = checkIsCommentable(el);
               const metrics = extractMetrics(el);
               allPosts.push({
                 url, likes: metrics.likes, postComments: metrics.postComments,
                 author: metrics.author, textSnippet: metrics.textSnippet,
-                commentable: true, container: el, hasRealUrl: true,
+                commentable: isCommentable, container: el, hasRealUrl: true,
                 discoveryIndex: allPosts.length
               });
               added++;
@@ -586,7 +600,7 @@ window.__linkedInExtractorReady = true;
       } catch(e) {}
     });
 
-    // ── Tertiary: Traditional anchor-href walk (in case LinkedIn uses old format) ──
+    // ── Quaternary: Traditional anchor-href walk ──
     document.querySelectorAll('a[href]').forEach(a => {
       try {
         const href = a.href || '';
@@ -600,29 +614,32 @@ window.__linkedInExtractorReady = true;
           if (m) postUrl = cleanUrl(m[1]);
         }
 
-        if (!postUrl || seenUrls.has(postUrl)) {
-            if (card) seenCards.add(card);
-            return;
-        }
+        if (!postUrl || seenUrls.has(postUrl)) return;
+        _diag.anchors++;
 
-        const finalCard = card || a.parentElement;
+        // Walk up to find the nearest card container
+        const parentCard = walkUpToCard(a);
+        const finalCard = parentCard || a.parentElement;
+        
         seenUrls.add(postUrl);
-        if (card) seenCards.add(card);
+        if (finalCard) seenCards.add(finalCard);
 
-        if (!checkIsCommentable(finalCard)) {
-            console.log('[v18] Excluded locked/uncommentable post:', postUrl);
-            return;
-        }
-        const metrics = extractMetrics(finalCard);
+        const isCommentable = finalCard ? checkIsCommentable(finalCard) : true;
+        const metrics = finalCard ? extractMetrics(finalCard) : { likes: 0, postComments: 0, author: '', textSnippet: '' };
         allPosts.push({
           url: postUrl, likes: metrics.likes, postComments: metrics.postComments,
           author: metrics.author, textSnippet: metrics.textSnippet,
-          commentable: true, container: card, hasRealUrl: true,
+          commentable: isCommentable, container: finalCard, hasRealUrl: true,
           discoveryIndex: allPosts.length
         });
         added++;
       } catch(e) {}
     });
+
+    // ── Diagnostic output (every harvest call) ──
+    if (added > 0 || _diag.cards > 0) {
+      console.log(`[v22-harvest] +${added} | cards=${_diag.cards} tooSmall=${_diag.tooSmall} noUrl=${_diag.noUrl} dup=${_diag.duplicate} uncomm=${_diag.uncommentable} | btns=${_diag.btnCards} urns=${_diag.urnEls} anchors=${_diag.anchors}`);
+    }
 
     return added;
   }
