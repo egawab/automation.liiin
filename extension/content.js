@@ -242,12 +242,13 @@ window.__linkedInExtractorReady = true;
         return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
       }
 
-      // Method 1: Explicit URN data attributes (MOST RELIABLE)
-      const urnEls = [card, ...card.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn],[data-search-result-urn],[data-id]')];
+      // Method 1: Explicit URN data attributes (MOST RELIABLE - STRICTLY PREVENTS GHOST POSTS)
+      const urnEls = [card, ...card.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn],[data-search-result-urn]')];
       for (const el of urnEls) {
-        for (const attr of el.attributes) {
-          if (!attr.value) continue;
-          const m = attr.value.match(WIDE_URN_REGEX);
+        for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn','data-search-result-urn']) {
+          const val = el.getAttribute(attr);
+          if (!val) continue;
+          const m = val.match(WIDE_URN_REGEX);
           if (m) return buildPostUrl(m[1], m[2]);
         }
       }
@@ -273,15 +274,7 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // Method 4: REMOVED — Aggressive DOM attribute scan was matching tracking IDs,
-      // session data, and comment URNs, producing ghost URLs that show
-      // "This post cannot be displayed". Methods 1-3 and 5 are sufficient.
-
-      // Method 5: innerHTML URN match (preserves URN type)
-      const html = card.innerHTML || '';
-      let match = html.match(WIDE_URN_REGEX);
-      if (match) return buildPostUrl(match[1], match[2]);
-
+      // innerHTML regex matching removed to strictly prevent tracking URNs from creating Ghost Posts.
     } catch(e) {}
 
     return null;
@@ -446,19 +439,6 @@ window.__linkedInExtractorReady = true;
     let added = 0;
     let _diag = { cards: 0, tooSmall: 0, noUrl: 0, duplicate: 0, uncommentable: 0, btnCards: 0, urnEls: 0, anchors: 0 };
 
-    // ── FALLBACK: Try to extract a URN from the raw HTML of a card ──
-    function fallbackUrnFromCard(card) {
-      try {
-        const html = card.outerHTML || '';
-        const m = html.match(/urn:li:(?:activity|ugcPost|share):(\d{10,22})/);
-        if (m) {
-          const urnType = m[0].includes('ugcPost') ? 'ugcPost' : 'activity';
-          return 'https://www.linkedin.com/feed/update/urn:li:' + urnType + ':' + m[1];
-        }
-      } catch(e) {}
-      return null;
-    }
-
     // ── Primary: Direct Container Discovery (MOST RELIABLE) ──
     const cardSelectors = [
       '.reusable-search__result-container', 
@@ -466,10 +446,9 @@ window.__linkedInExtractorReady = true;
       '.search-entity',
       'article',
       '[data-urn]:not(button):not(a):not(span)',
-      '[data-id]:not(button):not(a)',
       'li.reusable-search__result-container',
       'div[data-chameleon-result-urn]',
-      'div[data-urn]'
+      'div[data-update-urn]'
     ];
 
     document.querySelectorAll(cardSelectors.join(', ')).forEach(card => {
@@ -481,12 +460,6 @@ window.__linkedInExtractorReady = true;
 
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
-
-        // FALLBACK: If extractUrlFromCard failed, try raw HTML URN extraction
-        if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) {
-          const fallback = fallbackUrnFromCard(card);
-          if (fallback) cleanedUrl = cleanUrl(fallback);
-        }
 
         if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) {
             _diag.noUrl++;
@@ -537,11 +510,6 @@ window.__linkedInExtractorReady = true;
 
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
-
-        if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) {
-          const fallback = fallbackUrnFromCard(card);
-          if (fallback) cleanedUrl = cleanUrl(fallback);
-        }
 
         if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) continue;
 
@@ -736,7 +704,7 @@ window.__linkedInExtractorReady = true;
     const seenUrls = new Set(priorPosts.map(p => p.url).filter(Boolean));
     const seenCards = new WeakSet();
     const allPosts = [...priorPosts];
-    let lastSyncedIndex = priorPosts.length;
+    const syncedUrls = new Set(); // Tracks posts already sent during incremental streaming
 
     // ── Settings-Driven Constraints ──
     const SETTINGS_MIN_LIKES = Number(settings.minLikes) || 0;
@@ -958,23 +926,33 @@ window.__linkedInExtractorReady = true;
         heartbeat('Phase1-Limit', '✅ 100 results scanned. Moving to next keyword.');
       }
 
-      // ── INCREMENTAL SAVE ──
-      // Automatically save every 2 posts to the dashboard in real-time
-      if (isSearchOnly && (allPosts.length - lastSyncedIndex) >= 2) {
-          const unsynced = allPosts.slice(lastSyncedIndex);
-          const validUnsynced = await validatePostsConcurrently(unsynced);
-          
-          const serializedChunk = validUnsynced.map(p => ({
-              url: p.url, likes: p.likes, postComments: p.postComments,
-              author: p.author, textSnippet: p.textSnippet,
-              commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
-              discoveryIndex: p.discoveryIndex
-          }));
+      // ── HIGH-QUALITY INCREMENTAL SAVE ──
+      // Automatically save HIGH-REACH posts in real-time.
+      // Posts that do not perfectly match constraints are pooled until the final 
+      // fallback calculation at the end, ensuring they are globally scored.
+      if (isSearchOnly) {
+          const unsynced = allPosts.filter(p => p.hasRealUrl && !syncedUrls.has(p.url));
+          const exactMatches = unsynced.filter(p => {
+              const likes = p.likes || 0;
+              const comms = p.postComments || p.comments || 0;
+              if (likes === 0 && comms === 0) return false; // Wait for final fallback to score these
+              return likes >= SETTINGS_MIN_LIKES && likes <= SETTINGS_MAX_LIKES &&
+                     comms >= SETTINGS_MIN_COMMENTS && comms <= SETTINGS_MAX_COMMENTS;
+          });
 
-          const savedCount = await syncPosts(serializedChunk, keyword, dashboardUrl, userId, linkedInProfileId, false, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
-          lastSyncedIndex = allPosts.length;
-          console.log(`[v24] Incremental sync: streamed ${unsynced.length} posts (${savedCount} accepted). Total streamed: ${lastSyncedIndex}`);
-          heartbeat('Phase1-Stream', `📤 Streamed ${lastSyncedIndex} posts so far...`);
+          if (exactMatches.length >= 2) {
+              const serializedChunk = exactMatches.map(p => ({
+                  url: p.url, likes: p.likes, postComments: p.postComments,
+                  author: p.author, textSnippet: p.textSnippet,
+                  commentable: p.commentable || false, hasRealUrl: true,
+                  discoveryIndex: p.discoveryIndex
+              }));
+
+              const savedCount = await syncPosts(serializedChunk, keyword, dashboardUrl, userId, linkedInProfileId, false, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
+              exactMatches.forEach(p => syncedUrls.add(p.url));
+              console.log(`[v25] Incremental sync: streamed ${exactMatches.length} HIGH-REACH posts. Total streamed: ${syncedUrls.size}`);
+              heartbeat('Phase1-Stream', `📤 Streamed ${syncedUrls.size} high-quality posts so far...`);
+          }
       }
     }
 
@@ -990,7 +968,8 @@ window.__linkedInExtractorReady = true;
     heartbeat('Phase1-Done', '✅ Extraction finished: ' + totalReal + ' real posts');
 
     // ── Step 6: Serialize with discoveryIndex for position-based quality boosting ──
-    const serializedPosts = validPosts.map(p => ({
+    const remainingPosts = validPosts.filter(p => !syncedUrls.has(p.url));
+    const serializedPosts = remainingPosts.map(p => ({
       url: p.url, likes: p.likes, postComments: p.postComments,
       author: p.author, textSnippet: p.textSnippet,
       commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
@@ -1067,8 +1046,8 @@ window.__linkedInExtractorReady = true;
       heartbeat('Phase4', '📤 Final sync: ' + totalReal + ' validated posts...');
       const savedThisPass = await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
       
-      console.log(`[v22] ✅ Saved ${savedThisPass} posts this pass.`);
-      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: savedThisPass || validPosts.length });
+      console.log(`[v25] ✅ Final sync: Evaluated ${remainingPosts.length} remaining pooled posts. Saved ${savedThisPass}.`);
+      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: syncedUrls.size + savedThisPass });
     }
   }
 
@@ -1200,13 +1179,11 @@ window.__linkedInExtractorReady = true;
     // CONSTRAINT-DRIVEN SELECTION WITH INTELLIGENT FALLBACK
     // ═══════════════════════════════════════════════════════════
     // Step 1: Select posts that EXACTLY match the settings constraints
-    // IMPORTANT: Posts with 0/0 metrics (DOM extraction failed) are NOT filtered out —
-    // they pass through as "unscored" since we can't measure what we can't see.
     const exactMatches = labeled.filter(p => {
       const likes = p.likes || 0;
       const comms = p.postComments || p.comments || 0;
-      // If both metrics are 0, the DOM parser failed — let the post through
-      if (likes === 0 && comms === 0) return true;
+      // Do NOT blindly allow 0/0 posts. They must pass the exact match constraints
+      // or fall through to the closest-match approximation logic below.
       return likes >= SETTINGS_MIN_LIKES && likes <= SETTINGS_MAX_LIKES &&
              comms >= SETTINGS_MIN_COMMENTS && comms <= SETTINGS_MAX_COMMENTS;
     });
@@ -1249,8 +1226,8 @@ window.__linkedInExtractorReady = true;
           console.log(`[v22] 🔄 Added ${needed} closest-match fallback posts (max deviation: ${maxAcceptableDev.toFixed(1)}).`);
         }
       }
-    } else {
-      // Zero exact matches — apply intelligent approximation
+    } else if (isFinal) {
+      // Zero exact matches — apply intelligent approximation ONLY on the final sync
       console.log(`[v22] ⚠️ 0 exact matches. Falling back to closest-match approximation...`);
 
       const scored = labeled.map(p => {
@@ -1279,6 +1256,8 @@ window.__linkedInExtractorReady = true;
       } else {
         console.log(`[v22] 🔄 Selected ${final.length} posts via closest-match fallback (tolerance: ${maxFallbackDev}).`);
       }
+    } else {
+      console.log(`[v25] ⚠️ 0 exact matches and isFinal=false. Skipping fallback during incremental sync.`);
     }
 
     // Clean up internal scoring field before sending
