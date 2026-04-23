@@ -64,13 +64,16 @@ export function SavedPostsPanel() {
     } catch (error) {}
   }
 
-  function openPost(post: SavedPost) {
-    markAsVisited(post.id);
+  function getValidUrl(post: SavedPost) {
     let finalUrl = post.postUrl;
-    if (!finalUrl.startsWith('http')) {
-      finalUrl = 'https://' + finalUrl.replace(/^\/*/, '');
+    // Handle synthetic/discovered URLs by linking to the keyword search page
+    if (finalUrl.startsWith('discovered:') || finalUrl.startsWith('synthetic:')) {
+      return `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(post.keyword)}&origin=GLOBAL_SEARCH_HEADER`;
     }
-    window.open(finalUrl, '_blank');
+    if (!finalUrl.startsWith('http')) {
+      return 'https://' + finalUrl.replace(/^\/*/, '');
+    }
+    return finalUrl;
   }
 
   const uniqueKeywords = Array.from(new Set(posts.map(p => p.keyword)));
@@ -254,13 +257,26 @@ export function SavedPostsPanel() {
 
                 {/* Footer */}
                 <div className="p-3 grid grid-cols-3 gap-2">
-                  <Button onClick={() => openPost(post)} variant="primary" size="sm" className="col-span-2 text-micro">
+                  <a 
+                    href={getValidUrl(post)} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    onClick={() => markAsVisited(post.id)}
+                    className="col-span-2 inline-flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-normal transition-all duration-200 rounded-md bg-apple-blue text-white hover:opacity-90 active:opacity-80"
+                  >
                     <ExternalLink className="w-3.5 h-3.5" />
                     Engage Target
-                  </Button>
-                  <Button onClick={() => openPost(post)} variant="secondary" size="sm" disabled={post.visited} className="col-span-1" title="View on LinkedIn">
+                  </a>
+                  <a 
+                    href={getValidUrl(post)} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    onClick={() => markAsVisited(post.id)}
+                    className={`col-span-1 inline-flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-normal transition-all duration-200 rounded-md bg-surface-elevated border border-subtle text-primary hover:bg-surface-hover ${post.visited ? 'opacity-50' : ''}`}
+                    title="View on LinkedIn"
+                  >
                     <Eye className="w-3.5 h-3.5" />
-                  </Button>
+                  </a>
                 </div>
                 
                 {/* Delete */}
