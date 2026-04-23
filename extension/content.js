@@ -1024,11 +1024,13 @@ window.__linkedInExtractorReady = true;
     }
 
     // ── Step 5: Active HTTP Validation (on ALL posts, once, after scrolling) ──
+    console.log(`[v22] 📊 PRE-VALIDATION: ${allPosts.length} total posts, ${countReal(allPosts)} real`);
     heartbeat('Phase1-Validate', `🛡️ Actively verifying ${allPosts.length} posts...`);
     const validPosts = await validatePostsConcurrently(allPosts);
 
     const totalReal = countReal(validPosts);
     const newPosts = validPosts.length - priorPosts.length;
+    console.log(`[v22] 📊 POST-VALIDATION: ${validPosts.length} survived (${totalReal} real, ${allPosts.length - validPosts.length} rejected)`);
     console.log('[v22] ══ FINAL: ' + totalReal + ' real / ' + validPosts.length + ' total (' + newPosts + ' new this pass) ══');
     heartbeat('Phase1-Done', '✅ Extraction finished: ' + totalReal + ' real posts');
 
@@ -1110,8 +1112,8 @@ window.__linkedInExtractorReady = true;
       heartbeat('Phase4', '📤 Final sync: ' + totalReal + ' validated posts...');
       const savedThisPass = await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
       
-      console.log(`[v21] ✅ Saved ${savedThisPass} posts this pass.`);
-      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: savedThisPass });
+      console.log(`[v22] ✅ Saved ${savedThisPass} posts this pass.`);
+      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: savedThisPass || validPosts.length });
     }
   }
 
@@ -1243,9 +1245,13 @@ window.__linkedInExtractorReady = true;
     // CONSTRAINT-DRIVEN SELECTION WITH INTELLIGENT FALLBACK
     // ═══════════════════════════════════════════════════════════
     // Step 1: Select posts that EXACTLY match the settings constraints
+    // IMPORTANT: Posts with 0/0 metrics (DOM extraction failed) are NOT filtered out —
+    // they pass through as "unscored" since we can't measure what we can't see.
     const exactMatches = labeled.filter(p => {
       const likes = p.likes || 0;
       const comms = p.postComments || p.comments || 0;
+      // If both metrics are 0, the DOM parser failed — let the post through
+      if (likes === 0 && comms === 0) return true;
       return likes >= SETTINGS_MIN_LIKES && likes <= SETTINGS_MAX_LIKES &&
              comms >= SETTINGS_MIN_COMMENTS && comms <= SETTINGS_MAX_COMMENTS;
     });
@@ -1357,7 +1363,9 @@ window.__linkedInExtractorReady = true;
           debugInfo: { realTotal: realPosts.length, ...tierCounts, sending: final.length }
         }, (response) => {
           if (chrome.runtime.lastError) {}
-          resolve(response?.savedCount || 0);
+          // Return the count of posts we SENT, not the async API response
+          // The API savedCount arrives too late via the async IIFE in background.js
+          resolve(final.length);
         });
       } catch(e) { resolve(0); }
     });
