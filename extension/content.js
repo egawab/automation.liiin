@@ -958,12 +958,24 @@ window.__linkedInExtractorReady = true;
         heartbeat('Phase1-Limit', '✅ 100 results scanned. Moving to next keyword.');
       }
 
-      // ── QUALITY-AWARE EARLY EXIT REMOVED ──
-      // The system will now exhaust exactly 100 scrolls to maximize dataset volume.
-      
-      // ── INCREMENTAL SAVE REMOVED ──
-      // To strictly guarantee ZERO broken posts, we no longer stream unverified data.
-      // All posts must wait for active HTTP validation before being sent.
+      // ── INCREMENTAL SAVE ──
+      // Automatically save every 2 posts to the dashboard in real-time
+      if (isSearchOnly && (allPosts.length - lastSyncedIndex) >= 2) {
+          const unsynced = allPosts.slice(lastSyncedIndex);
+          const validUnsynced = await validatePostsConcurrently(unsynced);
+          
+          const serializedChunk = validUnsynced.map(p => ({
+              url: p.url, likes: p.likes, postComments: p.postComments,
+              author: p.author, textSnippet: p.textSnippet,
+              commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
+              discoveryIndex: p.discoveryIndex
+          }));
+
+          const savedCount = await syncPosts(serializedChunk, keyword, dashboardUrl, userId, linkedInProfileId, false, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
+          lastSyncedIndex = allPosts.length;
+          console.log(`[v24] Incremental sync: streamed ${unsynced.length} posts (${savedCount} accepted). Total streamed: ${lastSyncedIndex}`);
+          heartbeat('Phase1-Stream', `📤 Streamed ${lastSyncedIndex} posts so far...`);
+      }
     }
 
     // ── Step 5: Active HTTP Validation (on ALL posts, once, after scrolling) ──
