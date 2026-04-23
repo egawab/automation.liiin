@@ -228,41 +228,29 @@ window.__linkedInExtractorReady = true;
     if (!card) return null;
 
     try {
+      // ── STRICT VALIDATION: Only 'activity', 'ugcPost', and 'share' are valid public routes ──
+      const VALID_URN_REGEX = /urn:li:(activity|ugcPost|share):(\d{18,22})/i;
+
       // Method 1: Explicit URN attributes
       const urnEls = [card, ...card.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn],[data-search-result-urn],[data-id]')];
       for (const el of urnEls) {
-        for (const attr of el.attributes) { // Check all attributes natively
+        for (const attr of el.attributes) {
           if (!attr.value) continue;
-          const v = attr.value;
-          // Match standard and internal URNs (fsd_update, fs_updateV2)
-          const m = v.match(/urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):\d{18,22}/i);
-          if (m) {
-             // Keep the exact matched URN, do not force activity:
-             return 'https://www.linkedin.com/feed/update/' + m[0];
-          }
-          
-          if (v.match(/^(?:activity|ugcPost|share|update):\d{18,22}$/i)) {
-            return 'https://www.linkedin.com/feed/update/urn:li:' + v;
-          }
+          const m = attr.value.match(VALID_URN_REGEX);
+          if (m) return 'https://www.linkedin.com/feed/update/' + m[0];
         }
       }
 
-      // Method 2: Standard anchor links (including the timestamp link)
+      // Method 2: Standard anchor links
       for (const a of card.querySelectorAll('a[href]')) {
         const href = a.href || '';
         if (href.includes('/feed/update/') || href.includes('/feed/update/urn:li:')) {
-          const m = href.match(/urn:li:[^?&#\s"']+/);
-          if (m) {
-             return cleanUrl('https://www.linkedin.com/feed/update/' + m[0]);
-          }
+          const m = href.match(VALID_URN_REGEX);
+          if (m) return cleanUrl('https://www.linkedin.com/feed/update/' + m[0]);
         }
         if (href.includes('/posts/')) {
           const m = href.match(/(https?:\/\/(?:www\.)?linkedin\.com\/posts\/[^?&#\s"']+)/);
           if (m) return cleanUrl(m[1]);
-        }
-        const urnM = href.match(/urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):\d{18,22}/i);
-        if (urnM) {
-             return 'https://www.linkedin.com/feed/update/' + urnM[0];
         }
       }
 
@@ -274,33 +262,21 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // Method 4: Aggressive DOM Attribute Scan
-      const regex19 = /(\d{18,22})/;
+      // Method 4: Aggressive DOM Attribute Scan (Strictly limited to valid public URNs)
       const allEls = card.querySelectorAll('*');
       for (const el of allEls) {
         for (const attr of el.attributes) {
            if (attr.value && attr.value.length >= 18) {
-              const v = attr.value.toLowerCase();
-              if (v.includes('activity') || v.includes('ugcpost') || v.includes('share') || v.includes('update') || v.includes('fsd_update') || v.includes('fs_updatev2')) {
-                 const m = v.match(/urn:li:(activity|ugcpost|share|update|fsd_update|fs_updatev2):(\d{18,22})/i);
-                 if (m) return 'https://www.linkedin.com/feed/update/urn:li:' + m[1] + ':' + m[2];
-                 
-                 const m19 = v.match(regex19);
-                 if (m19) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + m19[1];
-              }
+              const m = attr.value.match(VALID_URN_REGEX);
+              if (m) return 'https://www.linkedin.com/feed/update/' + m[0];
            }
         }
       }
 
-      // Method 5: Aggressive innerHTML match 
+      // Method 5: Aggressive innerHTML match (Strictly limited to valid public URNs)
       const html = card.innerHTML || '';
-      const urnRegex = /urn:li:(activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{18,22})/i;
-      let match = urnRegex.exec(html);
-      if (match) return 'https://www.linkedin.com/feed/update/urn:li:' + match[1] + ':' + match[2];
-
-      const bareRegex = /(?:activity|ugcPost|share|update|fsd_update|fs_updateV2)[^a-zA-Z0-9]?(\d{18,22})/i;
-      match = bareRegex.exec(html);
-      if (match) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + match[1];
+      let match = html.match(VALID_URN_REGEX);
+      if (match) return 'https://www.linkedin.com/feed/update/' + match[0];
 
     } catch(e) {}
 
@@ -485,10 +461,11 @@ window.__linkedInExtractorReady = true;
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
-        // V20 FIX: STRICT FILTER. If we cannot extract a real post URL, this is almost certainly
-        // a COMMENT container or invalid entity. We MUST reject it.
-        // The fallback `discovered:` URL breaks 1:1 dashboard identity mapping.
-        if (!cleanedUrl) return;
+        // V21 FIX: STRICT VALIDATION. Only accept URLs that are definitively valid public LinkedIn routes.
+        // If it does not match a known valid format, DISCARD IT to prevent "Cannot be displayed" errors.
+        if (!cleanedUrl || (!cleanedUrl.includes('urn:li:activity:') && !cleanedUrl.includes('urn:li:ugcPost:') && !cleanedUrl.includes('urn:li:share:') && !cleanedUrl.includes('/posts/'))) {
+            return;
+        }
 
         // If we found a real or synthetic URL, this is definitively a post card
         if (cleanedUrl) {
@@ -539,8 +516,10 @@ window.__linkedInExtractorReady = true;
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
-        // V20 FIX: STRICT FILTER. 
-        if (!cleanedUrl) continue;
+        // V21 FIX: STRICT VALIDATION.
+        if (!cleanedUrl || (!cleanedUrl.includes('urn:li:activity:') && !cleanedUrl.includes('urn:li:ugcPost:') && !cleanedUrl.includes('urn:li:share:') && !cleanedUrl.includes('/posts/'))) {
+            continue;
+        }
 
         // Skip if we've seen this URL
         if (seenUrls.has(cleanedUrl)) {
