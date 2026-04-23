@@ -822,8 +822,8 @@ window.__linkedInExtractorReady = true;
     heartbeat('Phase1-Init', '✅ Initial: ' + countReal(allPosts) + ' real posts');
 
     // ── Step 4: Scroll loop — CAPPED AT 150 SCANNED RESULTS ──
-    const STALL_LIMIT = 8;
-    const ABSOLUTE_SAFETY_LIMIT = 400; // Physical safety stop
+    const STALL_LIMIT = 15; // Increased from 8 to 15 to prevent premature stopping on slow connections
+    const ABSOLUTE_SAFETY_LIMIT = 500; // Physical safety stop
     const SCANNED_RESULTS_LIMIT = 150; // Strict limit: 150 items scanned per keyword
     let stallCount = 0;
     let step = 0;
@@ -889,11 +889,22 @@ window.__linkedInExtractorReady = true;
         
         const seenAfterRecovery = seenUrls.size;
         if (seenAfterRecovery <= seenBeforeRecovery) {
-           console.log('[v18] Recovery found no new URLs. Page physically exhausted.');
-           break;
+           console.log('[v18] Recovery found no new URLs. Attempting ultimate hard-refresh scroll...');
+           // Ultimate fallback to force LinkedIn's lazy loader
+           for (let r = 0; r < 8; r++) {
+               window.scrollTo(0, document.body.scrollHeight);
+               await wait(1500, 2000);
+               window.scrollTo(0, document.body.scrollHeight - 2000);
+               await wait(500, 1000);
+           }
+           harvest(seenUrls, seenCards, allPosts);
+           if (seenUrls.size <= seenAfterRecovery) {
+               console.log('[v18] Page is genuinely exhausted (no more posts exist). Breaking loop.');
+               break;
+           }
         }
         stallCount = 0;
-        window.__lastSeenSize = seenAfterRecovery;
+        window.__lastSeenSize = seenUrls.size;
       }
       step++;
       
