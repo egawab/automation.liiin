@@ -551,65 +551,83 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
     await waitForTabLoad(tab.id, 20000);
     await sleep(1500);
 
+    let isInjecting = false;
     async function injectAndStart() {
-      injectionCount++;
-      console.log(`🛠️ [Worker] Injection attempt #${injectionCount}/${MAX_INJECTIONS}...`);
-
-      let currentTab;
-      try {
-        currentTab = await chrome.tabs.get(tab.id);
-      } catch (e) {
-        console.warn("⚠️ [Worker] Tab lost before injection.");
-        await finishCycle(null, false, settings.searchOnlyMode);
+      if (isInjecting) {
+        console.log("🛠️ [Worker] Injection already in progress. Guard preventing loop.");
         return false;
       }
-
-      if (!currentTab.url || !currentTab.url.includes('linkedin.com')) {
-        console.warn(`⚠️ [Worker] Tab URL not LinkedIn: ${currentTab.url}`);
-        chrome.tabs.remove(tab.id).catch(() => { });
-        await finishCycle(null, false, settings.searchOnlyMode);
-        return false;
-      }
-
-      console.log(`📍 [Worker] Tab verified: ${currentTab.url.substring(0, 80)}...`);
-
+      isInjecting = true;
       try {
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-      } catch (e) {
-        console.error("❌ [Worker] Inject failed:", e.message);
-        chrome.tabs.remove(tab.id).catch(() => { });
-        await finishCycle(null, false, settings.searchOnlyMode);
-        return false;
-      }
+        injectionCount++;
+        console.log(`🛠️ [Worker] Injection attempt #${injectionCount}/${MAX_INJECTIONS}...`);
 
-      await sleep(1500);
-
-      console.log("🚀 [Worker] Starting extraction...");
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: (k, s, c, du, u) => {
-            if (window.__startExtraction) {
-              window.__startExtraction(k, s, c, du, u);
-            } else {
-              throw new Error("Extractor function not defined on window.");
-            }
-          },
-          args: [keyword, { ...settings, passIndex, priorPosts }, comments, dashboardUrl, userId]
-        });
-        console.log("✅ [Worker] Content script started.");
-        _lastContentHeartbeat = Date.now();
-        return true;
-      } catch (e) {
-        console.error(`❌ [Worker] Comm error on attempt #${injectionCount}:`, e.message);
-        if (injectionCount < MAX_INJECTIONS) {
-          console.log("🔄 [Worker] Retrying injection...");
-          await sleep(5000);
-          return injectAndStart();
+        const alive = await tabExists(tab.id);
+        if (!alive) {
+          console.warn("⚠️ [Worker] Tab lost before injection.");
+          await finishCycle(null, false, settings.searchOnlyMode);
+          return false;
         }
-        chrome.tabs.remove(tab.id).catch(() => { });
-        await finishCycle(null, false, settings.searchOnlyMode);
-        return false;
+
+        let currentTab;
+        try {
+          currentTab = await chrome.tabs.get(tab.id);
+        } catch (e) {
+          console.warn("⚠️ [Worker] Failed to get tab info:", e.message);
+          await finishCycle(null, false, settings.searchOnlyMode);
+          return false;
+        }
+
+        if (!currentTab.url || !currentTab.url.includes('linkedin.com')) {
+          console.warn(`⚠️ [Worker] Tab URL not LinkedIn: ${currentTab.url}`);
+          chrome.tabs.remove(tab.id).catch(() => { });
+          await finishCycle(null, false, settings.searchOnlyMode);
+          return false;
+        }
+
+        console.log(`📍 [Worker] Tab verified: ${currentTab.url.substring(0, 80)}...`);
+
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+        } catch (e) {
+          console.error("❌ [Worker] Inject failed:", e.message);
+          chrome.tabs.remove(tab.id).catch(() => { });
+          await finishCycle(null, false, settings.searchOnlyMode);
+          return false;
+        }
+
+        await sleep(1500);
+
+        console.log("🚀 [Worker] Starting extraction...");
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: (k, s, c, du, u) => {
+              if (window.__startExtraction) {
+                window.__startExtraction(k, s, c, du, u);
+              } else {
+                throw new Error("Extractor function not defined on window.");
+              }
+            },
+            args: [keyword, { ...settings, passIndex, priorPosts }, comments, dashboardUrl, userId]
+          });
+          console.log("✅ [Worker] Content script started.");
+          _lastContentHeartbeat = Date.now();
+          return true;
+        } catch (e) {
+          console.error(`❌ [Worker] Comm error on attempt #${injectionCount}:`, e.message);
+          if (injectionCount < MAX_INJECTIONS) {
+            console.log("🔄 [Worker] Retrying injection...");
+            await sleep(5000);
+            isInjecting = false;
+            return injectAndStart();
+          }
+          chrome.tabs.remove(tab.id).catch(() => { });
+          await finishCycle(null, false, settings.searchOnlyMode);
+          return false;
+        }
+      } finally {
+        isInjecting = false;
       }
     }
 
@@ -867,54 +885,64 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo } = message;
     console.log(`📤 [Worker] Relaying ${posts?.length || 0} posts for "${keyword}"...`);
     
-    getExtensionFingerprint().then(async deviceId => {
+    // Empty batch prevention
+    if (!posts || posts.length === 0) {
+        console.warn(`[Worker] SYNC_RESULTS received with 0 posts. Skipping relay.`);
+        if (sendResponse) sendResponse({ ok: true, savedCount: 0 });
+        return true;
+    }
+
+    (async () => {
+      let savedCount = 0;
       let success = false;
       let lastError = null;
-      
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          console.log(`[Worker] Sync attempt ${attempt}/3...`);
-          const response = await fetch(`${dashboardUrl}/api/extension/results`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
-            body: JSON.stringify({ keyword, posts, linkedInProfileId, debugInfo })
-          });
-          
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${await response.text().catch(()=>'')}`);
+      try {
+        const deviceId = await getExtensionFingerprint();
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            console.log(`[Worker] Sync attempt ${attempt}/3...`);
+            const response = await fetch(`${dashboardUrl}/api/extension/results`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
+              body: JSON.stringify({ keyword, posts, linkedInProfileId, debugInfo })
+            });
+            
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${await response.text().catch(()=>'')}`);
+            }
+            
+            const result = await response.json().catch(() => ({}));
+            savedCount = result.savedCount || 0;
+            console.log(`✅ [Worker] Database sync successful. ${result.savedCount || 0} NEW + ${result.updatedCount || 0} UPDATED = ${posts.length} total relayed.`);
+            if (result.errors && result.errors.length > 0) {
+                console.error(`❌ [Worker] API reported ${result.errors.length} Prisma errors:`, result.errors);
+            }
+            success = true;
+            break;
+          } catch (e) {
+            lastError = e;
+            console.error(`⚠️ [Worker] Sync attempt ${attempt} failed:`, e.message);
+            if (attempt < 3) await sleep(2000 * attempt);
           }
-          
-          const result = await response.json().catch(() => ({}));
-          console.log(`✅ [Worker] Database sync successful. ${result.savedCount || 0} NEW + ${result.updatedCount || 0} UPDATED = ${posts?.length || 0} total relayed.`);
-          if (result.errors && result.errors.length > 0) {
-              console.error(`❌ [Worker] API reported ${result.errors.length} Prisma errors:`, result.errors);
-          }
-          success = true;
-          break; // Exit retry loop on success
-        } catch (e) {
-          lastError = e;
-          console.error(`⚠️ [Worker] Sync attempt ${attempt} failed:`, e.message);
-          if (attempt < 3) await sleep(2000 * attempt); // exponential backoff
         }
+        
+        if (!success) {
+          console.error("❌ [Worker] CRITICAL SYNC FAILURE. Data could not be saved to dashboard:", lastError);
+        }
+      } catch (err) {
+        console.error("❌ [Worker] Error preparing sync:", err);
       }
       
-      if (!success) {
-        console.error("❌ [Worker] CRITICAL SYNC FAILURE. Data could not be saved to dashboard:", lastError);
-      }
-    });
-    
-    if (sendResponse) sendResponse({ ok: true });
+      if (sendResponse) sendResponse({ ok: success, savedCount });
+    })();
     return true;
   }
 
   if (message.action === 'PASS_DONE') {
-    // v11: Multi-pass support (up to 4 passes)
-    // Pass 0 = relevance, Pass 1 = date sort, Pass 2 = past-month, Pass 3 = past-quarter
-    // Content.js may send a filterParam (e.g. 'r2592000') for time-filtered navigation
-    const { passIndex, posts, keyword, linkedInProfileId, filterParam } = message;
+    const { passIndex, posts, keyword, linkedInProfileId, filterParam, totalSaved } = message;
     const realCount = (posts || []).filter(p => p.url && !p.url.includes('synthetic:')).length;
     const highConf = (posts || []).filter(p => (p.likes||0) + (p.postComments||0) > 0).length;
-    console.log(`📄 [Worker] PASS_DONE pass=${passIndex} | ${posts?.length || 0} total (${realCount} real, ${highConf} high-conf) | filterParam=${filterParam || 'none'}`);
+    console.log(`📄 [Worker] PASS_DONE pass=${passIndex} | ${posts?.length || 0} total (${realCount} real, ${highConf} high-conf) | filterParam=${filterParam || 'none'} | saved=${totalSaved || 0}`);
 
     loadState().then(async s => {
       if (!s.isJobRunning) { console.warn('[Worker] PASS_DONE received but job not running. Ignoring.'); return; }
@@ -926,18 +954,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabId = s.activeTabId;
       if (!tabId) { console.warn('[Worker] PASS_DONE: no active tab.'); return; }
 
+      const alive = await tabExists(tabId);
+      if (!alive) {
+        console.warn(`[Worker] PASS_DONE: Tab ${tabId} is dead. Aborting pass navigation.`);
+        await finishCycle(null, false, jobSettings.searchOnlyMode);
+        return;
+      }
+
       const nextPass = passIndex + 1;
 
       // Build URL for next pass
       let nextUrl;
-      if (filterParam) {
-        // Passes with specific time filters (24h, week, month)
-        nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted&f_TPR=${filterParam}`;
-      } else if (nextPass === 1) {
-        // Legacy fallback: Pass 1 is just date sort
+      if (filterParam === 'latest') {
         nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
+      } else if (filterParam) {
+        nextUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted&f_TPR=${filterParam}`;
       } else {
-        // No filter param and past pass 1 — skip to final sync
         console.log(`[Worker] PASS_DONE: no filterParam for pass ${nextPass}. Treating as final.`);
         await finishCycle(tabId, true, jobSettings.searchOnlyMode);
         return;
@@ -951,6 +983,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await waitForTabLoad(tabId, 20000);
         await sleep(1500);
 
+        const aliveAfter = await tabExists(tabId);
+        if(!aliveAfter) throw new Error("Tab vanished after update.");
+
         // Inject content.js fresh onto the new page
         await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
         await sleep(1500);
@@ -962,7 +997,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (window.__startExtraction) window.__startExtraction(k, s, c, du, u);
             else throw new Error('Extractor not defined');
           },
-          args: [keyword, { ...jobSettings, passIndex: nextPass, priorPosts: posts || [] }, jobComments, config.dashboardUrl, config.userId]
+          args: [keyword, { ...jobSettings, passIndex: nextPass, priorPosts: posts || [], totalSaved }, jobComments, config.dashboardUrl, config.userId]
         });
         _lastContentHeartbeat = Date.now();
         console.log(`[Worker] ✅ Pass ${nextPass} started on tab ${tabId}`);

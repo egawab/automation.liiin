@@ -903,13 +903,17 @@ window.__linkedInExtractorReady = true;
     console.log('[v18] Initial harvest: +' + initCount + ' (total=' + allPosts.length + ', real=' + countReal(allPosts) + ')');
     heartbeat('Phase1-Init', '✅ Initial: ' + countReal(allPosts) + ' real posts');
 
-    // ── Step 4: Scroll loop — CAPPED AT 100 SCANNED RESULTS ──
+    // ── Step 4: Scroll loop — CAPPED AT 100/150 SCANNED RESULTS ──
     const STALL_LIMIT = 15; // Increased from 8 to 15 to prevent premature stopping on slow connections
-    const ABSOLUTE_SAFETY_LIMIT = 30; // Fast cap: maximum 30 scroll steps
-    const SCANNED_RESULTS_LIMIT = 100; // Strict limit: 100 items scanned per keyword
+    const SCANNED_RESULTS_LIMIT = 300; // Increase max items scanned
     const MIN_QUALITY_TARGET = 10; // Minimum strict posts to aim for
     let stallCount = 0;
     let step = 0;
+    const START_TIME = Date.now();
+    const HARD_TIMEOUT_MS = 600000; // 10 minutes hard timeout
+
+    const previousSaved = settings.totalSaved || 0;
+    const zeroResultsPasses = settings.zeroResultsPasses || 0;
 
     // Inline strict quality counter (HARD MINIMUMS: >= 10 likes AND >= 8 comments)
     function countQualityPosts(posts) {
@@ -923,9 +927,22 @@ window.__linkedInExtractorReady = true;
       return count;
     }
 
-    heartbeat('Phase1-Scroll', '📜 Scrolling until 100 results scanned or 10+ quality posts...');
+    heartbeat('Phase1-Scroll', '📜 Scrolling until 100-150 results scanned or 10+ quality posts...');
 
-    while (step < ABSOLUTE_SAFETY_LIMIT && seenUrls.size < SCANNED_RESULTS_LIMIT) {
+    while (seenUrls.size < SCANNED_RESULTS_LIMIT) {
+      if (Date.now() - START_TIME > HARD_TIMEOUT_MS) {
+        console.warn(`[v18] ⏰ Hard 10-minute timeout reached. Stopping scroll early.`);
+        break;
+      }
+      
+      const qualitySoFar = previousSaved + countQualityPosts(allPosts);
+      const ABSOLUTE_SAFETY_LIMIT = (qualitySoFar < MIN_QUALITY_TARGET) ? 150 : 100;
+
+      if (step >= ABSOLUTE_SAFETY_LIMIT) {
+        console.log(`[v18] 📜 Reached max scroll steps: ${ABSOLUTE_SAFETY_LIMIT}. Stopping.`);
+        break;
+      }
+
       const scrollAmt = 700 + Math.floor(Math.random() * 500);
       aggressiveScroll(scrollAmt);
 
@@ -1011,9 +1028,10 @@ window.__linkedInExtractorReady = true;
 
       // ── QUALITY-AWARE EARLY EXIT ──
       // If we already have 10+ high/mid quality posts, we can stop scrolling early
-      if (countQualityPosts(allPosts) >= MIN_QUALITY_TARGET && allPosts.length >= MIN_QUALITY_TARGET) {
-        console.log('[v18] ✅ Quality target reached: ' + countQualityPosts(allPosts) + ' high/mid posts. Stopping scroll early.');
-        heartbeat('Phase1-Quality', '✅ ' + countQualityPosts(allPosts) + ' quality posts found. Proceeding to validation...');
+      const qualitySoFar = previousSaved + countQualityPosts(allPosts);
+      if (qualitySoFar >= MIN_QUALITY_TARGET && allPosts.length >= 1) { // At least 1 to send
+        console.log('[v18] ✅ Quality target reached: ' + qualitySoFar + ' high/mid posts across passes. Stopping scroll early.');
+        heartbeat('Phase1-Quality', '✅ ' + qualitySoFar + ' total quality posts reached. Proceeding to validation...');
         break;
       }
       
@@ -1124,21 +1142,28 @@ window.__linkedInExtractorReady = true;
 
     } else {
       heartbeat('Phase4', '📤 Final sync: ' + totalReal + ' validated posts...');
-      await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
+      const savedThisPass = await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true);
       
-      if (strictQualityCount >= MIN_QUALITY_TARGET) {
-        console.log(`[v21] ✅ Secured ${strictQualityCount} high-quality posts. Target reached. Exiting passes early.`);
-        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: strictQualityCount });
-      } else if (passIndex < 3) {
-        let filterParam = 'r86400';
-        if (passIndex === 1) filterParam = 'r604800';
-        if (passIndex === 2) filterParam = 'r2592000';
+      const newTotalSaved = previousSaved + savedThisPass;
+      const newZeroResults = (allPosts.length === 0) ? zeroResultsPasses + 1 : 0;
+      
+      console.log(`[v21] ✅ Saved ${savedThisPass} posts this pass. Total confirmed saved: ${newTotalSaved}.`);
+
+      if (newTotalSaved >= MIN_QUALITY_TARGET) {
+        console.log(`[v21] ✅ Secured ${newTotalSaved} confirmed saved posts. Target reached. Exiting passes early.`);
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: newTotalSaved });
+      } else if (newZeroResults >= 2) {
+        console.log(`[v21] ⚠️ Short-circuiting execution: ${newZeroResults} consecutive passes returned 0 posts.`);
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: newTotalSaved });
+      } else if (passIndex < 4) { // Passes 0 to 4
+        const passes = [null, 'latest', 'r86400', 'r604800', 'r2592000'];
+        const filterParam = passes[passIndex + 1];
         
-        console.log(`[v21] 🔄 Pass ${passIndex} complete (${strictQualityCount}/${MIN_QUALITY_TARGET} strict). Triggering Pass ${passIndex+1} with filter ${filterParam}`);
-        safeSend({ action: 'PASS_DONE', passIndex, posts: validPosts, keyword, linkedInProfileId, filterParam });
+        console.log(`[v21] 🔄 Pass ${passIndex} complete (${newTotalSaved}/${MIN_QUALITY_TARGET} strict). Triggering Pass ${passIndex+1} with filter ${filterParam}`);
+        safeSend({ action: 'PASS_DONE', passIndex, posts: priorPosts, totalSaved: newTotalSaved, keyword, linkedInProfileId, filterParam, zeroResultsPasses: newZeroResults });
       } else {
-        console.log(`[v21] ✅ All passes complete.`);
-        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: strictQualityCount });
+        console.log(`[v21] ✅ All passes complete. Total saved: ${newTotalSaved}`);
+        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: newTotalSaved });
       }
     }
   }
@@ -1267,6 +1292,11 @@ window.__linkedInExtractorReady = true;
     // Only transmit posts with >= 10 likes AND >= 8 comments. Drop everything else.
     let final = labeled.filter(p => (p.likes || 0) >= 10 && (p.comments || p.postComments || 0) >= 8);
 
+    if (final.length === 0) {
+      console.log('[v18] ⚠️ 0 valid posts met the strict criteria. Skipping sync to prevent empty batches.');
+      return 0; // Return 0 saved
+    }
+
     const tierCounts = {
       high: final.filter(p => p.engagementTier === 'high').length,
       mid: final.filter(p => p.engagementTier === 'mid').length,
@@ -1289,13 +1319,16 @@ window.__linkedInExtractorReady = true;
       engagementTier: p.engagementTier
     }));
 
-    await new Promise(resolve => {
+    return await new Promise(resolve => {
       try {
         chrome.runtime.sendMessage({
           action: 'SYNC_RESULTS', posts: payload, keyword, dashboardUrl, userId, linkedInProfileId,
           debugInfo: { realTotal: realPosts.length, ...tierCounts, sending: final.length }
-        }, () => { if (chrome.runtime.lastError) {} resolve(); });
-      } catch(e) { resolve(); }
+        }, (response) => {
+          if (chrome.runtime.lastError) {}
+          resolve(response?.savedCount || 0);
+        });
+      } catch(e) { resolve(0); }
     });
   }
 

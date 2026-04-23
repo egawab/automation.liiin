@@ -329,32 +329,34 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
     // We continue searching even after 10 posts to maximize quality and supplement with high-engagement posts.
     const timeFilters = [
       null,        // Pass 0: Top/Relevant (default)
-      'r86400',    // Pass 1: Past 24 hours
-      'r604800',   // Pass 2: Past week
-      'r2592000',  // Pass 3: Past month
-      ''           // Pass 4: All available data
+      'latest',    // Pass 1: Latest
+      'r86400',    // Pass 2: Past 24 hours
+      'r604800',   // Pass 3: Past week
+      'r2592000'   // Pass 4: Past month
     ];
 
     let allAggregatedPosts: PostCandidate[] = [];
     const seenUrls = new Set<string>();
-    let validPostCount = 0;
+    let totalSavedCount = 0;
+    let zeroResultsPasses = 0;
 
     for (let i = 0; i < timeFilters.length; i++) {
       const filter = timeFilters[i];
-      const passName = filter === 'r86400' ? 'Past 24h' : filter === 'r604800' ? 'Past Week' : filter === 'r2592000' ? 'Past Month' : filter === '' ? 'All Time' : 'Top/Relevant';
+      const passName = filter === 'latest' ? 'Latest' : filter === 'r86400' ? 'Past 24h' : filter === 'r604800' ? 'Past Week' : filter === 'r2592000' ? 'Past Month' : 'Top/Relevant';
       
       console.log(`\n🔄 [Worker Pass ${i}] Searching "${keyword.keyword}" (${passName})...`);
       await broadcastLog(`Starting Pass ${i} for "${keyword.keyword}" (${passName})`);
       
+      let postsRaw: PostCandidate[] = [];
       try {
-        const postsRaw = await searchLinkedInPosts(keyword.keyword, filter);
+        postsRaw = await searchLinkedInPosts(keyword.keyword, filter);
         
-        let newCount = 0;
         let newValidCount = 0;
+        let postsToSaveThisPass: PostCandidate[] = [];
+
         for (const p of postsRaw) {
           if (!seenUrls.has(p.url)) {
             seenUrls.add(p.url);
-            newCount++;
             
             // =========================================================================
             // 🔥 RULE 2: HARD MINIMUM ENGAGEMENT THRESHOLDS
@@ -362,58 +364,63 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
             // Silently reject any post that falls below the absolute safety floor.
             if (p.likes >= 10 && p.comments >= 8) {
               allAggregatedPosts.push(p);
-              validPostCount++;
+              postsToSaveThisPass.push(p);
               newValidCount++;
             }
           }
         }
-        console.log(`✅ [Worker Pass ${i}] Scanned ${postsRaw.length} total, added ${newValidCount} valid threshold-passing posts.\n`);
+        
+        console.log(`✅ [Worker Pass ${i}] Scanned ${postsRaw.length} total, found ${newValidCount} valid threshold-passing posts.\n`);
+
+        if (postsRaw.length === 0) {
+            zeroResultsPasses++;
+        } else {
+            zeroResultsPasses = 0;
+        }
+
+        if (postsToSaveThisPass.length > 0) {
+            // Sort to save best first
+            postsToSaveThisPass.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
+            
+            const saveResults = await Promise.allSettled(
+              postsToSaveThisPass.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
+            );
+            
+            const savedThisPass = saveResults.filter(
+              r => r.status === 'fulfilled' && r.value === true
+            ).length;
+
+            totalSavedCount += savedThisPass;
+            console.log(`💾 Saved ${savedThisPass} new posts to dashboard (Total so far: ${totalSavedCount})\n`);
+        }
+
       } catch(err) {
         console.error(`❌ [Worker Pass ${i}] failed:`, err);
       }
 
+      // Short-circuit if consecutive empty passes
+      if (zeroResultsPasses >= 2) {
+          console.log(`⚠️ Short-circuiting execution: ${zeroResultsPasses} consecutive passes returned 0 posts.`);
+          break;
+      }
+
       // Check maximization safety cap (to prevent true infinite loops)
-      if (validPostCount >= 200) {
-        console.log(`✅ Maximization target reached (${validPostCount} high-engagement posts). Stopping time expansion.`);
+      if (totalSavedCount >= 10) {
+        console.log(`✅ Quality target reached (${totalSavedCount} confirmed saved posts). Stopping time expansion.`);
         break;
       }
     }
 
-    // =========================================================================
-    // 🔥 ONGOING OPTIMIZATION (SORTING)
-    // =========================================================================
-    // Sort by engagement descending (High Reach Priority). More is always better.
-    const posts = allAggregatedPosts.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments));
-
     // Log this search for rate limit tracking
     await logSearch(settings.userId, keyword.keyword);
 
-    if (posts.length < 10) {
-      console.log(`⚠️ WARNING: Exhausted all time ranges but only found ${posts.length} valid posts for "${keyword.keyword}". Minimum 10 target missed, but saving what was found.\n`);
-      await broadcastLog(`Found ${posts.length} valid posts for "${keyword.keyword}" (below 10 minimum, but exhausted all ranges)`, 'warn');
+    if (totalSavedCount < 10) {
+      console.log(`⚠️ WARNING: Exhausted all time ranges but only secured ${totalSavedCount} saved posts for "${keyword.keyword}". Minimum 10 target missed.\n`);
+      await broadcastLog(`Secured ${totalSavedCount} posts for "${keyword.keyword}" (below 10 minimum, but exhausted all ranges)`, 'warn');
     } else {
-      console.log(`🎯 SUCCESS: Secured ${posts.length} valid, high-engagement posts for "${keyword.keyword}".\n`);
-      await broadcastLog(`Secured ${posts.length} valid, high-engagement posts for "${keyword.keyword}"`);
+      console.log(`🎯 SUCCESS: Secured ${totalSavedCount} valid, high-engagement posts for "${keyword.keyword}".\n`);
+      await broadcastLog(`Secured ${totalSavedCount} valid, high-engagement posts for "${keyword.keyword}"`);
     }
-
-    if (posts.length === 0) {
-      console.log('⚠️  No posts matching strict reach criteria found. Skipping.\n');
-      return;
-    }
-
-    let postsToSave: PostCandidate[] = [...posts];
-
-    const saveResults = await Promise.allSettled(
-      postsToSave.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
-    );
-    const savedCount = saveResults.filter(
-      r => r.status === 'fulfilled' && r.value === true
-    ).length;
-
-    console.log(`💾 Saved ${savedCount} new posts to dashboard\n`);
-    await broadcastLog(
-      `✅ Saved high-quality strict matches for "${keyword.keyword}" (${savedCount} saved)`
-    );
 
   } catch (error: any) {
     console.error(`❌ Error processing keyword "${keyword.keyword}":`, error.message);
@@ -430,8 +437,12 @@ async function searchLinkedInPosts(keyword: string, filterParam: string | null =
 
   try {
     let searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}`;
-    if (filterParam) {
-      searchUrl += `&sortBy=date_posted&f_TPR=${filterParam}`;
+    if (filterParam === 'latest') {
+      searchUrl += `&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
+    } else if (filterParam) {
+      searchUrl += `&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted&f_TPR=${filterParam}`;
+    } else {
+      searchUrl += `&origin=GLOBAL_SEARCH_HEADER`;
     }
 
     console.log(`🔍 Navigating to search page...`);
