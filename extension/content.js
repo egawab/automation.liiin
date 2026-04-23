@@ -237,13 +237,12 @@ window.__linkedInExtractorReady = true;
           // Match standard and internal URNs (fsd_update, fs_updateV2)
           const m = v.match(/urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):\d{18,22}/i);
           if (m) {
-             const digits = m[0].match(/\d{18,22}/)[0];
-             return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
+             // Keep the exact matched URN, do not force activity:
+             return 'https://www.linkedin.com/feed/update/' + m[0];
           }
           
           if (v.match(/^(?:activity|ugcPost|share|update):\d{18,22}$/i)) {
-            const digits = v.match(/\d{18,22}/)[0];
-            return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
+            return 'https://www.linkedin.com/feed/update/urn:li:' + v;
           }
         }
       }
@@ -254,8 +253,7 @@ window.__linkedInExtractorReady = true;
         if (href.includes('/feed/update/') || href.includes('/feed/update/urn:li:')) {
           const m = href.match(/urn:li:[^?&#\s"']+/);
           if (m) {
-             const digitsMatch = m[0].match(/\d{18,22}/);
-             if (digitsMatch) return cleanUrl('https://www.linkedin.com/feed/update/urn:li:activity:' + digitsMatch[0]);
+             return cleanUrl('https://www.linkedin.com/feed/update/' + m[0]);
           }
         }
         if (href.includes('/posts/')) {
@@ -264,8 +262,7 @@ window.__linkedInExtractorReady = true;
         }
         const urnM = href.match(/urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):\d{18,22}/i);
         if (urnM) {
-             const digits = urnM[0].match(/\d{18,22}/)[0];
-             return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
+             return 'https://www.linkedin.com/feed/update/' + urnM[0];
         }
       }
 
@@ -277,15 +274,17 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // Method 4: Aggressive DOM Attribute Scan (Find 19-digit numbers near 'activity' in ANY attribute)
+      // Method 4: Aggressive DOM Attribute Scan
       const regex19 = /(\d{18,22})/;
       const allEls = card.querySelectorAll('*');
       for (const el of allEls) {
         for (const attr of el.attributes) {
            if (attr.value && attr.value.length >= 18) {
               const v = attr.value.toLowerCase();
-              // ONLY match post-level URNs
               if (v.includes('activity') || v.includes('ugcpost') || v.includes('share') || v.includes('update') || v.includes('fsd_update') || v.includes('fs_updatev2')) {
+                 const m = v.match(/urn:li:(activity|ugcpost|share|update|fsd_update|fs_updatev2):(\d{18,22})/i);
+                 if (m) return 'https://www.linkedin.com/feed/update/urn:li:' + m[1] + ':' + m[2];
+                 
                  const m19 = v.match(regex19);
                  if (m19) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + m19[1];
               }
@@ -295,9 +294,9 @@ window.__linkedInExtractorReady = true;
 
       // Method 5: Aggressive innerHTML match 
       const html = card.innerHTML || '';
-      const urnRegex = /urn:li:(?:activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{18,22})/i; // removed 'g' flag to prevent stateful index issues
+      const urnRegex = /urn:li:(activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{18,22})/i;
       let match = urnRegex.exec(html);
-      if (match) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + match[1];
+      if (match) return 'https://www.linkedin.com/feed/update/urn:li:' + match[1] + ':' + match[2];
 
       const bareRegex = /(?:activity|ugcPost|share|update|fsd_update|fs_updateV2)[^a-zA-Z0-9]?(\d{18,22})/i;
       match = bareRegex.exec(html);
