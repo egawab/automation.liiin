@@ -258,20 +258,24 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // Method 3: Explicit URN data attributes ON ROOT ELEMENTS ONLY
-      // We restore data-id to fix the 0-post stalling issue, but restrict it strictly to 
-      // the root card or its immediate primary wrappers to avoid grabbing comment URNs.
-      const safeRootEls = [card, ...card.querySelectorAll(':scope > div, .feed-shared-update-v2, .search-entity, .reusable-search__result-container')];
-      for (const el of safeRootEls) {
-        for (const attr of ['data-urn', 'data-id', 'data-chameleon-result-urn', 'data-entity-urn', 'data-update-urn', 'data-search-result-urn']) {
+      // Method 3: Explicit URN data attributes (SAFE DEEP EXTRACTION)
+      // We safely search deep into the card but explicitly ignore any element
+      // that is inside a comment container, preventing Ghost Posts.
+      const urnEls = [card, ...card.querySelectorAll('[data-urn], [data-id], [data-chameleon-result-urn], [data-update-urn]')];
+      for (const el of urnEls) {
+        // STRICT GHOST POST PREVENTION: Ignore anything inside a comment section
+        if (el.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, article.comment')) continue;
+
+        for (const attr of ['data-urn', 'data-id', 'data-chameleon-result-urn', 'data-update-urn']) {
           const val = el.getAttribute(attr);
           if (!val) continue;
           
-          // Explicitly reject if this looks like a comment URN or tracking metadata
-          if (val.includes('comment') || val.includes('control_name')) continue;
+          if (val.includes('comment') || val.includes('control_name') || val.includes('tracking')) continue;
           
           const m = val.match(WIDE_URN_REGEX);
-          if (m) return buildPostUrl(m[1], m[2]);
+          if (m) {
+             return buildPostUrl(m[1], m[2]);
+          }
         }
       }
 
@@ -664,8 +668,8 @@ window.__linkedInExtractorReady = true;
       }
     }
     
-    const nextBtn = document.querySelector('.artdeco-pagination__button--next:not([disabled])');
-    if (nextBtn) { 
+    const nextBtn = document.querySelector('.artdeco-pagination__button--next');
+    if (nextBtn && !nextBtn.disabled && !nextBtn.classList.contains('disabled')) { 
         nextBtn.click(); 
         clicked = true;
         console.log('[v19] Clicked Artdeco NEXT pagination button');
@@ -880,16 +884,21 @@ window.__linkedInExtractorReady = true;
       // Stall handling
       if (stallCount >= STALL_LIMIT) {
         console.log('[v18] Stall at ' + stallCount + '. Trying Show More...');
+        const seenBeforeRecovery = seenUrls.size;
+        
         const clicked = await clickShowMore();
         if (clicked) {
-           stallCount = 0;
-           await wait(1500, 2500);
+           await wait(2000, 3000);
            harvest(seenUrls, seenCards, allPosts);
-           continue;
+           if (seenUrls.size > seenBeforeRecovery) {
+               stallCount = 0;
+               continue;
+           } else {
+               console.log('[v18] Clicked Show More but no new posts found. Continuing to hard recovery...');
+           }
         }
 
         console.log('[v18] No Show More. Recovery scroll...');
-        const seenBeforeRecovery = seenUrls.size;
         
         window.scrollTo({ top: 0, behavior: 'smooth' });
         await wait(1000, 2000);
