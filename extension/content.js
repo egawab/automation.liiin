@@ -259,14 +259,12 @@ window.__linkedInExtractorReady = true;
       }
 
       // Method 3: Explicit URN data attributes (SAFE DEEP EXTRACTION)
-      // We explicitly DO NOT extract 'data-chameleon-result-urn' because it generates
-      // tracking URNs that cause "This post cannot be displayed" errors (Ghost Posts).
-      const urnEls = [card, ...card.querySelectorAll('[data-urn], [data-id], [data-entity-urn], [data-update-urn], [data-search-result-urn]')];
+      const urnEls = [card, ...card.querySelectorAll('[data-urn], [data-id], [data-entity-urn], [data-update-urn], [data-search-result-urn], [data-chameleon-result-urn]')];
       for (const el of urnEls) {
         // STRICT GHOST POST PREVENTION: Ignore anything inside a comment section
         if (el.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, article.comment')) continue;
 
-        for (const attr of ['data-urn', 'data-id', 'data-entity-urn', 'data-update-urn', 'data-search-result-urn']) {
+        for (const attr of ['data-urn', 'data-id', 'data-entity-urn', 'data-update-urn', 'data-search-result-urn', 'data-chameleon-result-urn']) {
           const val = el.getAttribute(attr);
           if (!val) continue;
           
@@ -1224,21 +1222,12 @@ window.__linkedInExtractorReady = true;
 
         // Sort by deviation (closest to constraints first)
         scored.sort((a, b) => a._deviation - b._deviation);
-
-        // Take only posts with reasonable deviation (within 50% of the min thresholds)
         const maxAcceptableDev = Math.max(SETTINGS_MIN_LIKES, SETTINGS_MIN_COMMENTS, 5) * 0.5;
         const fallbacks = scored.filter(p => p._deviation <= maxAcceptableDev);
         const needed = Math.min(fallbacks.length, 10 - exactMatches.length);
-
-        if (needed > 0) {
-          final = [...exactMatches, ...fallbacks.slice(0, needed)];
-          console.log(`[v22] 🔄 Added ${needed} closest-match fallback posts (max deviation: ${maxAcceptableDev.toFixed(1)}).`);
-        }
+        if (needed > 0) postsToSync = [...exactMatches, ...fallbacks.slice(0, needed)];
       }
     } else if (isFinal) {
-      // Zero exact matches — apply intelligent approximation ONLY on the final sync
-      console.log(`[v22] ⚠️ 0 exact matches. Falling back to closest-match approximation...`);
-
       const scored = labeled.map(p => {
         const likes = p.likes || 0;
         const comms = p.postComments || p.comments || 0;
@@ -1299,16 +1288,41 @@ window.__linkedInExtractorReady = true;
       engagementTier: p.engagementTier
     }));
 
+    // ACTIVE GHOST POST VALIDATION
+    // Verify each URL sequentially to ensure no "This post cannot be displayed" errors are saved.
+    // Sequential fetching prevents LinkedIn HTTP 999 rate limiting.
+    console.log(`[v26] 🛡️ Actively verifying ${payload.length} finalized posts via direct network check...`);
+    const verifiedPayload = [];
+    for (const p of payload) {
+        try {
+            const res = await fetch(p.url, { method: 'GET', credentials: 'omit' });
+            if (!res.ok) continue; // 404 or 999 block
+            const html = await res.text();
+            if (html.includes('This post cannot be displayed') || html.includes('Post not found')) {
+                console.warn(`[v26] 🚫 Rejected Ghost Post: ${p.url}`);
+                continue;
+            }
+            verifiedPayload.push(p);
+            await wait(300, 800); // Small delay to prevent rate limits
+        } catch(e) {
+            // If fetch fails locally due to CORS or network, we still pass it to avoid losing valid posts
+            verifiedPayload.push(p); 
+        }
+    }
+
+    if (verifiedPayload.length === 0) {
+        console.warn(`[v26] All ${payload.length} candidates failed Ghost Post verification.`);
+        return 0;
+    }
+
     return await new Promise(resolve => {
       try {
         chrome.runtime.sendMessage({
-          action: 'SYNC_RESULTS', posts: payload, keyword, dashboardUrl, userId, linkedInProfileId,
-          debugInfo: { realTotal: realPosts.length, ...tierCounts, sending: final.length }
+          action: 'SYNC_RESULTS', posts: verifiedPayload, keyword, dashboardUrl, userId, linkedInProfileId,
+          debugInfo: { realTotal: realPosts.length, ...tierCounts, sending: verifiedPayload.length }
         }, (response) => {
           if (chrome.runtime.lastError) {}
-          // Return the count of posts we SENT, not the async API response
-          // The API savedCount arrives too late via the async IIFE in background.js
-          resolve(final.length);
+          resolve(verifiedPayload.length);
         });
       } catch(e) { resolve(0); }
     });
