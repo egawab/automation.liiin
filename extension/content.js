@@ -236,8 +236,7 @@ window.__linkedInExtractorReady = true;
         return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
       }
 
-      // Method 1: Standard anchor links (100% RELIABLE - PREVENTS GHOST POSTS)
-      // We prioritize explicit timestamp links because they never point to tracking chameleon URNs
+      // 1. ANCHOR LINKS (Highest Priority: Guaranteed Routable)
       for (const a of card.querySelectorAll('a[href]')) {
         const href = a.href || '';
         if (href.includes('/feed/update/')) {
@@ -250,48 +249,32 @@ window.__linkedInExtractorReady = true;
         }
       }
 
-      // Method 2: "Copy link to post" or "Share" buttons
-      for (const btn of card.querySelectorAll('[data-clipboard-text], [data-share-url], .feed-shared-control-menu__item, button')) {
+      // 2. CONTROL MENU BUTTONS
+      for (const btn of card.querySelectorAll('[data-clipboard-text], [data-share-url]')) {
         const url = btn.getAttribute('data-clipboard-text') || btn.getAttribute('data-share-url');
         if (url && (url.includes('linkedin.com/posts/') || url.includes('linkedin.com/feed/'))) {
           return cleanUrl(url);
         }
       }
 
-      // Method 3: Explicit URN data attributes (SAFE DEEP EXTRACTION)
-      const urnEls = [card, ...card.querySelectorAll('[data-urn], [data-id], [data-entity-urn], [data-update-urn], [data-search-result-urn], [data-chameleon-result-urn]')];
-      for (const el of urnEls) {
-        // STRICT GHOST POST PREVENTION: Ignore anything inside a comment section
-        if (el.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, article.comment')) continue;
-
-        for (const attr of ['data-urn', 'data-id', 'data-entity-urn', 'data-update-urn', 'data-search-result-urn', 'data-chameleon-result-urn']) {
+      // 3. EXPLICIT TRUE URNS (Avoid tracking URNs if possible)
+      // We look for strict real URN attributes before checking chameleon tracking URNs
+      const safeEls = [card, ...card.querySelectorAll('[data-urn], [data-id], [data-update-urn]')];
+      for (const el of safeEls) {
+        for (const attr of ['data-urn', 'data-id', 'data-update-urn']) {
           const val = el.getAttribute(attr);
           if (!val) continue;
-          
-          if (val.includes('comment') || val.includes('control_name') || val.includes('tracking')) continue;
-          
           const m = val.match(WIDE_URN_REGEX);
-          if (m) {
-             return buildPostUrl(m[1], m[2]);
-          }
+          if (m) return buildPostUrl(m[1], m[2]);
         }
       }
 
-      // Method 4: Fallback to Raw HTML scanning (CATCHES REACT JSON BLOBS)
-      // LinkedIn frequently stores URNs inside hidden <code> blocks containing JSON state.
-      // These lack data-attributes, so querySelector fails. We must regex the raw HTML.
-      // Any Ghost Posts generated here will be actively rejected by the final fetch() verification.
-      const html = card.innerHTML || '';
-      const fallbackMatch = html.match(WIDE_URN_REGEX);
-      if (fallbackMatch) {
-         // Ensure we aren't accidentally grabbing a comment URN
-         // If "comments" appears within 50 characters before the match, skip it.
-         const idx = fallbackMatch.index;
-         const contextBefore = html.substring(Math.max(0, idx - 50), idx).toLowerCase();
-         if (!contextBefore.includes('comment')) {
-             return buildPostUrl(fallbackMatch[1], fallbackMatch[2]);
-         }
-      }
+      // 4. RAW HTML SCAN (Absolute Fallback for React JSON blobs and Chameleon URNs)
+      // This will grab whatever URN it can find. If it grabs a broken tracking URN,
+      // the active fetch validation in syncPosts will safely discard it.
+      const html = card.outerHTML || card.innerHTML || '';
+      const m = html.match(WIDE_URN_REGEX);
+      if (m) return buildPostUrl(m[1], m[2]);
 
     } catch(e) {}
 
