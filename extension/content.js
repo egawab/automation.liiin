@@ -228,8 +228,9 @@ window.__linkedInExtractorReady = true;
     if (!card) return null;
 
     try {
-      // Matches absolutely ANY LinkedIn URN structure (activity, ugcPost, share, searchResult, etc.)
-      const WIDE_URN_REGEX = /urn:li:([a-zA-Z0-9_]+):(\d{10,30})/i;
+      // Strictly whitelist post-related URN types to prevent accidentally capturing
+      // shared `member`, `company`, or `page` tracking URNs which cause mass deduplication.
+      const WIDE_URN_REGEX = /urn:li:(activity|ugcPost|share|update|fsd_update|fs_updateV2|searchResult|entity|organizationPost):(\d{10,30})/i;
 
       function buildPostUrl(urnType, digits) {
         const t = urnType.toLowerCase();
