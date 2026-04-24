@@ -61,6 +61,7 @@ async function loadState() {
   return chrome.storage.local.get({
     isJobRunning: false,
     activeTabId: null,
+    activeWindowId: null,
     cycleStartTime: 0,
     lastJobTime: 0,
     cooldownMs: 0,
@@ -545,7 +546,7 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
       height: 900
     });
     const tab = win.tabs[0];
-    await saveState({ activeTabId: tab.id });
+    await saveState({ activeTabId: tab.id, activeWindowId: win.id });
 
     console.log(`💉 [Worker] Tab ${tab.id} created for "${keyword}". Waiting for load...`);
     await waitForTabLoad(tab.id, 20000);
@@ -662,17 +663,19 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
       if (changeInfo.status === 'complete' && !backgroundNavigating && injectionCount < MAX_INJECTIONS) {
         const newTab = await chrome.tabs.get(tabId).catch(() => null);
         if (!newTab) return;
-        // Only re-inject if URL looks like an unexpected navigation (not our pass URL)
-        const isPassUrl = newTab.url && (
-          newTab.url.includes('/search/results/content/') &&
-          newTab.url.includes('origin=GLOBAL_SEARCH_HEADER')
-        );
-        if (!isPassUrl) {
+        // Treat ANY LinkedIn content-search URL as same-run navigation.
+        // Pagination/sort/query changes can remove/alter origin params and should NOT restart extraction.
+        const url = String(newTab.url || '');
+        const isLinkedInHost = /https?:\/\/(?:www\.)?linkedin\.com\//i.test(url);
+        const isContentSearchUrl = /linkedin\.com\/search\/results\/content\//i.test(url);
+        const isAllowedInRun = isLinkedInHost && isContentSearchUrl;
+
+        if (!isAllowedInRun) {
           console.log("🔄 [Worker] Unexpected navigation detected. Re-injecting...");
           await sleep(3000);
           await injectAndStart();
         } else {
-          console.log("🔄 [Worker] Pass navigation detected — skipping auto re-inject (PASS_DONE handles this).");
+          console.log("🔄 [Worker] In-run content-search navigation detected — skipping auto re-inject.");
         }
       }
     };
@@ -686,6 +689,26 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
         chrome.tabs.onUpdated.removeListener(navListener);
         return;
       }
+
+      // Keep worker renderer alive in background mode.
+      // If the worker window gets minimized, restore it to normal (unfocused) so scrolling/extraction continues.
+      try {
+        if (s.activeWindowId) {
+          const w = await chrome.windows.get(s.activeWindowId);
+          if (w && w.state === 'minimized') {
+            await chrome.windows.update(s.activeWindowId, {
+              state: 'normal',
+              focused: false,
+              width: 800,
+              height: 600
+            });
+            console.log(`🪟 [Worker] Restored minimized worker window ${s.activeWindowId} to keep extraction active.`);
+          }
+        }
+      } catch (e) {
+        // Non-fatal: window may be closed by user.
+      }
+
       const timeSinceHeartbeat = Date.now() - _lastContentHeartbeat;
       if (timeSinceHeartbeat > 90000 && injectionCount < MAX_INJECTIONS) {
         // v9: Raised re-inject threshold from 60s to 90s (content.js v10 pauses up to 3.5s/step × 5 = 17s between heartbeats)
@@ -746,6 +769,7 @@ async function finishCycle(tabId, incrementKeyword = true, searchOnlyMode = fals
   const updates = {
     isJobRunning: false,
     activeTabId: null,
+    activeWindowId: null,
     cycleStartTime: 0,
     lastJobTime: Date.now(),
     cooldownMs: cd,
@@ -963,7 +987,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const jobComments = settingsData.jobComments || [];
 
       console.log(`[Worker] PASS_DONE: Multi-pass disabled. Treating pass as final.`);
-      await finishCycle(tabId, true, jobSettings.searchOnlyMode);
+      await finishCycle(sender.tab?.id ?? s.activeTabId, true, jobSettings.searchOnlyMode);
     });
     if (sendResponse) sendResponse({ ok: true });
     return true;

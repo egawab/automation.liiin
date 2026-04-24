@@ -24,6 +24,8 @@ window.__linkedInExtractorReady = true;
 
 {
   let isExtracting = false;
+  if (typeof window.__linkedInExtractorRunCounter !== 'number') window.__linkedInExtractorRunCounter = 0;
+  if (typeof window.__linkedInExtractorActiveRunId !== 'number') window.__linkedInExtractorActiveRunId = 0;
 
   function messageHandler(request, sender, sendResponse) {
     if (request.action === 'EXECUTE_SEARCH') {
@@ -41,18 +43,28 @@ window.__linkedInExtractorReady = true;
   window.__linkedInExtractorCleanup = function () {
     chrome.runtime.onMessage.removeListener(messageHandler);
     isExtracting = false;
+    // Invalidate any still-running async loop from older injected instances.
+    window.__linkedInExtractorActiveRunId = ++window.__linkedInExtractorRunCounter;
   };
 
   async function runExtraction(keyword, settings, comments, dashboardUrl, userId) {
     if (isExtracting) { console.log('[v18] Already extracting.'); return; }
     isExtracting = true;
+    const runId = ++window.__linkedInExtractorRunCounter;
+    window.__linkedInExtractorActiveRunId = runId;
     try {
-      await extractPipeline(keyword, settings, comments, dashboardUrl, userId);
+      await extractPipeline(keyword, settings, comments, dashboardUrl, userId, runId);
     } catch (e) {
+      if (String(e?.message || e).includes('EXTRACTION_CANCELLED')) {
+        console.log('[v18] Extraction run cancelled due to reinjection/newer run.');
+        return;
+      }
       console.error('[v18] Fatal:', e);
       safeSend({ action: 'JOB_FAILED', error: String(e) });
     } finally {
-      isExtracting = false;
+      if (window.__linkedInExtractorActiveRunId === runId) {
+        isExtracting = false;
+      }
     }
   }
 
@@ -92,6 +104,33 @@ window.__linkedInExtractorReady = true;
     } catch(e) {
       return url.split('?')[0].split('#')[0].replace(/\/$/, '');
     }
+  }
+
+  /** Only URLs we know LinkedIn serves as real posts (blocks searchResult / entity IDs mis-mapped to activity). */
+  function isValidCanonicalPostUrl(url) {
+    if (!url || !url.includes('linkedin.com')) return false;
+    if (/\/posts\/[^/?#]+\/?$/i.test(url)) return true;
+    if (/linkedin\.com\/feed\/update\/urn:li:activity:\d{10,30}$/i.test(url)) return true;
+    if (/linkedin\.com\/feed\/update\/urn:li:ugcPost:\d{10,30}$/i.test(url)) return true;
+    if (/linkedin\.com\/feed\/update\/urn:li:share:[^\s"?'#/]+$/i.test(url)) return true;
+    return false;
+  }
+
+  function htmlIndicatesBrokenOrLogin(html) {
+    if (!html || html.length < 200) return true;
+    const h = html.toLowerCase();
+    const ghost = [
+      'this post cannot be displayed',
+      'this page doesn\'t exist',
+      'page not found',
+      'post not found',
+      'no longer available',
+      'this content isn\'t available',
+      'something went wrong',
+      'this post is not available',
+      'unavailable post'
+    ];
+    return ghost.some(p => h.includes(p));
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -146,14 +185,115 @@ window.__linkedInExtractorReady = true;
 
   const STOP_TAGS = new Set(['BODY','HTML','HEADER','NAV','FOOTER']);
 
+  function isLikeButton(btn) {
+    const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
+    const txt = (btn.innerText || '').toLowerCase().trim();
+    return lbl.startsWith('react') || lbl === 'like' || lbl.includes(' like') ||
+      lbl.includes('إعجاب') || txt === 'like' || txt === 'react';
+  }
+
+  function isCommentButton(btn) {
+    const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
+    const txt = (btn.innerText || '').toLowerCase().trim();
+    return lbl.includes('comment') || txt === 'comment' || txt === 'تعليق';
+  }
+
+  function countMainActionLikeButtons(node) {
+    let likeCount = 0;
+    node.querySelectorAll('button').forEach(b => {
+      if (b.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, .comments-comment-item')) return;
+      if (isLikeButton(b)) likeCount++;
+    });
+    return likeCount;
+  }
+
+  function isLikelySinglePostContainer(node) {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { height: 0, width: 0 };
+    const h = rect.height || node.offsetHeight || 0;
+    const w = rect.width || node.offsetWidth || 0;
+    if (h < 80 || w < 200) return false;
+    const likeCount = countMainActionLikeButtons(node);
+    // Wrapper/feed containers usually include many action bars.
+    if (likeCount > 2) return false;
+    return true;
+  }
+
+  function extractCanonicalPostUrlFromText(text) {
+    if (!text) return null;
+    const src = String(text);
+    try {
+      const directFeed = src.match(/https?:\/\/(?:www\.)?linkedin\.com\/feed\/update\/(urn:li:(?:activity|ugcPost|share):[^"'&#\s<]+)/i);
+      if (directFeed) {
+        const u = cleanUrl('https://www.linkedin.com/feed/update/' + decodeURIComponent(directFeed[1]));
+        if (isValidCanonicalPostUrl(u)) return u;
+      }
+      const directPosts = src.match(/https?:\/\/(?:www\.)?linkedin\.com\/posts\/[^"'&#\s<]+/i);
+      if (directPosts) {
+        const u = cleanUrl(directPosts[0]);
+        if (isValidCanonicalPostUrl(u)) return u;
+      }
+      // Escaped JSON form like https:\/\/www.linkedin.com\/feed\/update\/...
+      const escFeed = src.match(/https?:\\\/\\\/(?:www\.)?linkedin\.com\\\/feed\\\/update\\\/(urn:li:(?:activity|ugcPost|share):[^"'&#\s<]+)/i);
+      if (escFeed) {
+        const u = cleanUrl('https://www.linkedin.com/feed/update/' + decodeURIComponent(escFeed[1]));
+        if (isValidCanonicalPostUrl(u)) return u;
+      }
+      const urn = src.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
+      if (urn) {
+        const u = cleanUrl('https://www.linkedin.com/feed/update/urn:li:' + urn[1] + ':' + urn[2]);
+        if (isValidCanonicalPostUrl(u)) return u;
+      }
+    } catch(e) {}
+    return null;
+  }
+
+  function canonicalFromUrn(urnType, idPart) {
+    const t = String(urnType || '').toLowerCase();
+    if (t === 'ugcpost') return cleanUrl('https://www.linkedin.com/feed/update/urn:li:ugcPost:' + idPart);
+    if (t === 'activity') return cleanUrl('https://www.linkedin.com/feed/update/urn:li:activity:' + idPart);
+    if (t === 'share') return cleanUrl('https://www.linkedin.com/feed/update/urn:li:share:' + idPart);
+    return null;
+  }
+
+  function extractCanonicalFromHref(href) {
+    if (!href) return null;
+    const raw = String(href);
+    const decoded = (() => {
+      try { return decodeURIComponent(raw); } catch(e) { return raw; }
+    })();
+
+    if (decoded.includes('/feed/update/')) {
+      const m = decoded.match(/\/feed\/update\/(urn:li:(?:activity|ugcPost|share):[^?&#\s]+)/i);
+      if (m) {
+        const u = cleanUrl('https://www.linkedin.com/feed/update/' + m[1]);
+        if (isValidCanonicalPostUrl(u)) return u;
+      }
+    }
+
+    if (decoded.includes('/posts/')) {
+      const m = decoded.match(/(https?:\/\/(?:www\.)?linkedin\.com\/posts\/[^?&#\s"']+)/i);
+      if (m) {
+        const u = cleanUrl(m[1]);
+        if (isValidCanonicalPostUrl(u)) return u;
+      }
+    }
+
+    // LinkedIn search results often keep post URN in query params (e.g. updateEntityUrn=urn:li:activity:...)
+    const urn = decoded.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
+    if (urn) {
+      const u = canonicalFromUrn(urn[1], urn[2]);
+      if (u && isValidCanonicalPostUrl(u)) return u;
+    }
+
+    return null;
+  }
+
   function findAllActionButtons() {
     const buttons = [];
     document.querySelectorAll('button').forEach(btn => {
-      const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
-      const txt = (btn.innerText || '').toLowerCase().trim();
-      const isLike = lbl.startsWith('react') || lbl === 'like' || lbl.includes(' like') ||
-                     lbl.includes('إعجاب') || txt === 'like' || txt === 'react';
-      const isComment = lbl.includes('comment') || txt === 'comment' || txt === 'تعليق';
+      const isLike = isLikeButton(btn);
+      const isComment = isCommentButton(btn);
       if (isLike || isComment) {
         buttons.push({ el: btn, type: isLike ? 'like' : 'comment' });
       }
@@ -163,8 +303,7 @@ window.__linkedInExtractorReady = true;
 
   function walkUpToCard(startEl) {
     let node = startEl;
-    let bestCandidate = null;
-    let bestHeight = 0;
+    let fallbackCandidate = null;
 
     for (let depth = 0; depth < 20 && node && !STOP_TAGS.has(node.tagName); depth++) {
       node = node.parentElement;
@@ -173,52 +312,32 @@ window.__linkedInExtractorReady = true;
       const tag = node.tagName;
 
       // ARTICLE is always a card boundary
-      if (tag === 'ARTICLE') return node;
+      if (tag === 'ARTICLE' && isLikelySinglePostContainer(node)) return node;
 
       // If it's an LI or DIV, check if it's a valid individual card
       if (tag === 'LI' || tag === 'DIV') {
-        const h = node.offsetHeight || 0;
-        const w = node.offsetWidth || 0;
+        if (!isLikelySinglePostContainer(node)) continue;
 
-        if (h > 80 && w > 200) {
-          // 1. FIRST: Check if this element has URN data attributes (strong signal)
-          for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn','data-id']) {
-            const v = node.getAttribute(attr) || '';
-            // STRICTLY POST-LEVEL URNS ONLY
-            if (v.includes('activity') || v.includes('ugcPost') || v.includes('share')) {
-              return node; // Definite card
-            }
+        // 1. FIRST: Check if this element has URN data attributes (strong signal)
+        for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn','data-id']) {
+          const v = node.getAttribute(attr) || '';
+          if (v.includes('activity') || v.includes('ugcPost') || v.includes('share')) {
+            return node;
           }
+        }
 
-          // 2. BOUNDARY CHECK: How many like buttons are inside this container?
-          // If a container has 3+ like buttons, it is definitely the parent feed wrapper, NOT a single post.
-          let likeCount = 0;
-          node.querySelectorAll('button').forEach(b => {
-             // CRITICAL: Do not count like buttons that belong to injected comments
-             if (b.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, .comments-comment-item')) return;
+        // 2. Anchor signal: a true post card usually contains post permalinks internally.
+        const hasPostAnchor = !!node.querySelector('a[href*="/feed/update/"],a[href*="/posts/"]');
+        if (hasPostAnchor) return node;
 
-             const lbl = (b.getAttribute('aria-label') || '').toLowerCase();
-             if (lbl.startsWith('react') || lbl === 'like' || lbl.includes('إعجاب') || (b.innerText||'').toLowerCase().trim() === 'like') {
-                 likeCount++;
-             }
-          });
-          
-          if (likeCount > 2) {
-            // We've hit the feed list wrapper! 
-            // Return the best candidate we found BEFORE hitting this wrapper.
-            return bestCandidate; 
-          }
-
-          // Track the best candidate (largest container that IS NOT the feed wrapper)
-          if (h > bestHeight) {
-            bestCandidate = node;
-            bestHeight = h;
-          }
+        // 3. Fallback: first good candidate on the climb.
+        if (!fallbackCandidate) {
+          fallbackCandidate = node;
         }
       }
     }
 
-    return bestCandidate;
+    return fallbackCandidate;
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -228,55 +347,59 @@ window.__linkedInExtractorReady = true;
     if (!card) return null;
 
     try {
-      // Strictly whitelist post-related URN types to prevent accidentally capturing
-      // shared `member`, `company`, or `page` tracking URNs which cause mass deduplication.
-      const WIDE_URN_REGEX = /urn:li:(activity|ugcPost|share|update|fsd_update|fs_updateV2|searchResult|entity|organizationPost):(\d{10,30})/i;
-
-      function buildPostUrl(urnType, digits) {
-        const t = urnType.toLowerCase();
-        if (t === 'ugcpost') return 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + digits;
-        // Even if original URN was a synthetic tracking ID or searchResult, force it to an activity route
-        // The fetch validator in syncPosts will verify if this mapped route actually exists.
-        return 'https://www.linkedin.com/feed/update/urn:li:activity:' + digits;
+      // NEVER synthesize /feed/update/ URLs from searchResult, entity, organizationPost, fsd_update, etc.
+      // Those IDs are not activity IDs — they produce "This post cannot be displayed".
+      const ATTR_URN_REGEX = /urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i;
+      function buildFromUrn(urnType, idPart) {
+        const t = String(urnType).toLowerCase();
+        if (t === 'ugcpost') return 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + idPart;
+        if (t === 'activity') return 'https://www.linkedin.com/feed/update/urn:li:activity:' + idPart;
+        if (t === 'share') return 'https://www.linkedin.com/feed/update/urn:li:share:' + idPart;
+        return null;
       }
 
-      // 1. ANCHOR LINKS (Highest Priority: Guaranteed Routable)
+      // 1. ANCHOR LINKS (highest signal — use full href as LinkedIn emitted it)
       for (const a of card.querySelectorAll('a[href]')) {
         const href = a.href || '';
-        if (href.includes('/feed/update/')) {
-          const m = href.match(WIDE_URN_REGEX);
-          if (m) return cleanUrl(buildPostUrl(m[1], m[2]));
-        }
-        if (href.includes('/posts/')) {
-          const m = href.match(/(https?:\/\/(?:www\.)?linkedin\.com\/posts\/[^?&#\s"']+)/);
-          if (m) return cleanUrl(m[1]);
-        }
+        const extracted = extractCanonicalFromHref(href);
+        if (extracted) return extracted;
       }
 
-      // 2. CONTROL MENU BUTTONS
+      // 2. CONTROL MENU / copy-link targets
       for (const btn of card.querySelectorAll('[data-clipboard-text], [data-share-url]')) {
         const url = btn.getAttribute('data-clipboard-text') || btn.getAttribute('data-share-url');
-        if (url && (url.includes('linkedin.com/posts/') || url.includes('linkedin.com/feed/'))) {
-          return cleanUrl(url);
+        if (url && (url.includes('linkedin.com/posts/') || url.includes('linkedin.com/feed/update/'))) {
+          const built = cleanUrl(url);
+          if (isValidCanonicalPostUrl(built)) return built;
         }
       }
 
-      // 3. ALL DOM ATTRIBUTES (Aggressive Extraction)
-      const attrList = ['data-urn', 'data-id', 'data-update-urn', 'data-entity-urn', 'data-search-result-urn', 'data-chameleon-result-urn'];
+      // 3. data-* attributes — only activity / ugcPost digit IDs
+      const attrList = ['data-urn', 'data-id', 'data-update-urn', 'data-entity-urn', 'data-chameleon-result-urn'];
       const safeEls = [card, ...card.querySelectorAll(attrList.map(a => `[${a}]`).join(', '))];
       for (const el of safeEls) {
         for (const attr of attrList) {
           const val = el.getAttribute(attr);
           if (!val) continue;
-          const m = val.match(WIDE_URN_REGEX);
-          if (m) return buildPostUrl(m[1], m[2]);
+          const m = val.match(ATTR_URN_REGEX);
+          if (m) {
+          const u = buildFromUrn(m[1], m[2]);
+            if (u && isValidCanonicalPostUrl(u)) return cleanUrl(u);
+          }
         }
       }
 
-      // 4. RAW HTML SCAN (Absolute Fallback)
+      // 4. Raw HTML fallback
       const html = card.outerHTML || card.innerHTML || '';
-      const m = html.match(WIDE_URN_REGEX);
-      if (m) return buildPostUrl(m[1], m[2]);
+      const m = html.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
+      if (m) {
+        const u = buildFromUrn(m[1], m[2]);
+        if (u && isValidCanonicalPostUrl(u)) return cleanUrl(u);
+      }
+
+      // 5. Emergency extraction from embedded JSON/text blobs.
+      const emergency = extractCanonicalPostUrlFromText(html);
+      if (emergency) return emergency;
 
     } catch(e) {}
 
@@ -438,20 +561,20 @@ window.__linkedInExtractorReady = true;
   //   3. Extract URL from card using multiple methods
   //   4. Deduplicate by URL (or by card element if no URL found)
 
-  function harvest(seenUrls, seenCards, allPosts) {
+  function harvest(seenUrls, seenCards, allPosts, opts = {}) {
+    const deepScan = opts.deepScan === true;
     let added = 0;
     let _diag = { cards: 0, tooSmall: 0, noUrl: 0, duplicate: 0, uncommentable: 0, btnCards: 0, urnEls: 0, anchors: 0 };
 
-    // ── Primary: Direct Container Discovery (MOST RELIABLE) ──
+    // ── Primary: Direct container discovery (strict single-post containers only) ──
     const cardSelectors = [
       '.reusable-search__result-container', 
       '.feed-shared-update-v2',
       '.search-entity',
       'article',
-      '[data-urn]:not(button):not(a):not(span)',
       'li.reusable-search__result-container',
-      'div[data-chameleon-result-urn]',
-      'div[data-update-urn]'
+      '[data-urn].feed-shared-update-v2',
+      'div.search-result__wrapper'
     ];
 
     document.querySelectorAll(cardSelectors.join(', ')).forEach(card => {
@@ -459,12 +582,12 @@ window.__linkedInExtractorReady = true;
         if (seenCards.has(card)) return;
         _diag.cards++;
 
-        if (card.offsetHeight < 40 || card.offsetWidth < 150) { _diag.tooSmall++; return; }
+        if (!isLikelySinglePostContainer(card)) { _diag.tooSmall++; return; }
 
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
-        if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) {
+        if (!cleanedUrl || !isValidCanonicalPostUrl(cleanedUrl)) {
             _diag.noUrl++;
             return;
         }
@@ -514,7 +637,7 @@ window.__linkedInExtractorReady = true;
         let url = extractUrlFromCard(card);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
-        if (!cleanedUrl || !cleanedUrl.includes('linkedin.com/')) continue;
+        if (!cleanedUrl || !isValidCanonicalPostUrl(cleanedUrl)) continue;
 
         if (seenUrls.has(cleanedUrl)) {
             seenCards.add(card);
@@ -542,59 +665,18 @@ window.__linkedInExtractorReady = true;
       } catch(e) {}
     }
 
-    // ── Tertiary: data-urn attribute elements ──
-    document.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn]').forEach(el => {
-      try {
-        if (seenCards.has(el)) return;
-        for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn']) {
-          const v = el.getAttribute(attr) || '';
-          const m = v.match(/urn:li:(?:activity|ugcPost|share):\d{10,22}/);
-          if (m) {
-            _diag.urnEls++;
-            const url = cleanUrl('https://www.linkedin.com/feed/update/' + m[0]);
-            if (url && !seenUrls.has(url)) {
-              seenUrls.add(url);
-              seenCards.add(el);
-              const isCommentable = checkIsCommentable(el);
-              const metrics = extractMetrics(el);
-              allPosts.push({
-                url, likes: metrics.likes, postComments: metrics.postComments,
-                author: metrics.author, textSnippet: metrics.textSnippet,
-                commentable: isCommentable, container: el, hasRealUrl: true,
-                discoveryIndex: allPosts.length
-              });
-              added++;
-            }
-            break;
-          }
-        }
-      } catch(e) {}
-    });
-
-    // ── Quaternary: Traditional anchor-href walk ──
-    document.querySelectorAll('a[href]').forEach(a => {
+    // Always-on canonical anchor scan: robust against LinkedIn DOM structure changes.
+    // This is the primary anti-zero guarantee path.
+    document.querySelectorAll('a[href*="/feed/update/"], a[href*="/posts/"]').forEach(a => {
       try {
         const href = a.href || '';
-        let postUrl = null;
-
-        if (href.includes('/feed/update/')) {
-          const m = href.match(/\/feed\/update\/(urn:li:[^?&#\s]+)/);
-          if (m) postUrl = cleanUrl('https://www.linkedin.com/feed/update/' + decodeURIComponent(m[1]));
-        } else if (href.includes('/posts/')) {
-          const m = href.match(/(https?:\/\/(?:www\.)?linkedin\.com\/posts\/[^?&#\s]+)/);
-          if (m) postUrl = cleanUrl(m[1]);
-        }
-
-        if (!postUrl || seenUrls.has(postUrl)) return;
+        const postUrl = extractCanonicalFromHref(href);
+        if (!postUrl || !isValidCanonicalPostUrl(postUrl) || seenUrls.has(postUrl)) return;
         _diag.anchors++;
-
-        // Walk up to find the nearest card container
         const parentCard = walkUpToCard(a);
-        const finalCard = parentCard || a.parentElement;
-        
+        const finalCard = parentCard || a.closest('article,li,div') || a.parentElement;
         seenUrls.add(postUrl);
         if (finalCard) seenCards.add(finalCard);
-
         const isCommentable = finalCard ? checkIsCommentable(finalCard) : true;
         const metrics = finalCard ? extractMetrics(finalCard) : { likes: 0, postComments: 0, author: '', textSnippet: '' };
         allPosts.push({
@@ -604,12 +686,64 @@ window.__linkedInExtractorReady = true;
           discoveryIndex: allPosts.length
         });
         added++;
-      } catch(e) {}
+      } catch (e) {}
     });
 
+    // Deep scans are expensive. Run only periodically/recovery to avoid tab freezes.
+    if (deepScan) {
+      // ── Tertiary: data-urn attribute elements ──
+      document.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn]').forEach(el => {
+        try {
+          if (seenCards.has(el)) return;
+          if (!isLikelySinglePostContainer(el)) return;
+          for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn']) {
+            const v = el.getAttribute(attr) || '';
+          const m = v.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
+            if (m) {
+              _diag.urnEls++;
+            const t = m[1].toLowerCase();
+            const fixed = t === 'ugcpost'
+              ? cleanUrl('https://www.linkedin.com/feed/update/urn:li:ugcPost:' + m[2])
+              : t === 'share'
+                ? cleanUrl('https://www.linkedin.com/feed/update/urn:li:share:' + m[2])
+                : cleanUrl('https://www.linkedin.com/feed/update/urn:li:activity:' + m[2]);
+              if (fixed && isValidCanonicalPostUrl(fixed) && !seenUrls.has(fixed)) {
+                seenUrls.add(fixed);
+                seenCards.add(el);
+                const isCommentable = checkIsCommentable(el);
+                const metrics = extractMetrics(el);
+                allPosts.push({
+                  url: fixed, likes: metrics.likes, postComments: metrics.postComments,
+                  author: metrics.author, textSnippet: metrics.textSnippet,
+                  commentable: isCommentable, container: el, hasRealUrl: true,
+                  discoveryIndex: allPosts.length
+                });
+                added++;
+              }
+              break;
+            }
+          }
+        } catch(e) {}
+      });
+
+      // Emergency global scan when regular selectors miss visible posts.
+      // Extract one canonical URL from whole DOM so we never stay at hard zero while posts exist.
+      if (added === 0) {
+        const emergency = extractCanonicalPostUrlFromText(document.documentElement?.innerHTML || '');
+        if (emergency && !seenUrls.has(emergency)) {
+          seenUrls.add(emergency);
+          allPosts.push({
+            url: emergency, likes: 0, postComments: 0, author: 'Unknown', textSnippet: '',
+            commentable: true, container: null, hasRealUrl: true, discoveryIndex: allPosts.length
+          });
+          added++;
+        }
+      }
+    }
+
     // ── Diagnostic output (every harvest call) ──
-    if (added > 0 || _diag.cards > 0) {
-      console.log(`[v22-harvest] +${added} | cards=${_diag.cards} tooSmall=${_diag.tooSmall} noUrl=${_diag.noUrl} dup=${_diag.duplicate} uncomm=${_diag.uncommentable} | btns=${_diag.btnCards} urns=${_diag.urnEls} anchors=${_diag.anchors}`);
+    if (added > 0 || _diag.cards > 0 || deepScan) {
+      console.log(`[v22-harvest] +${added} | cards=${_diag.cards} tooSmall=${_diag.tooSmall} noUrl=${_diag.noUrl} dup=${_diag.duplicate} uncomm=${_diag.uncommentable} | btns=${_diag.btnCards} urns=${_diag.urnEls} anchors=${_diag.anchors} | deep=${deepScan ? 1 : 0}`);
     }
 
     return added;
@@ -623,7 +757,7 @@ window.__linkedInExtractorReady = true;
   // SCROLLING — aggressive multi-target + slow waits
   // ═══════════════════════════════════════════════════════════
   function aggressiveScroll(pixels) {
-    try { window.scrollBy({ top: pixels, behavior: 'smooth' }); } catch(e) {}
+    try { window.scrollBy({ top: pixels, behavior: 'auto' }); } catch(e) {}
     try { document.documentElement.scrollTop += pixels; } catch(e) {}
     try { document.body.scrollTop += pixels; } catch(e) {}
 
@@ -645,8 +779,25 @@ window.__linkedInExtractorReady = true;
 
   function scrollToBottom() {
     const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-    try { window.scrollTo({ top: h, behavior: 'smooth' }); } catch(e) {}
+    try { window.scrollTo({ top: h, behavior: 'auto' }); } catch(e) {}
     try { document.documentElement.scrollTop = h; } catch(e) {}
+  }
+
+  function domSignalSnapshot() {
+    return {
+      h: Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0),
+      cards: document.querySelectorAll('.reusable-search__result-container,.feed-shared-update-v2,article').length
+    };
+  }
+
+  async function waitForDomGrowth(before, timeoutMs = 2600) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      await sleep(220);
+      const now = domSignalSnapshot();
+      if (now.h > before.h + 80 || now.cards > before.cards) return true;
+    }
+    return false;
   }
 
   async function clickShowMore() {
@@ -675,7 +826,7 @@ window.__linkedInExtractorReady = true;
     }
     
     if (clicked) {
-        await sleep(3000); // Wait for newly triggered content to load
+        await sleep(900); // Faster pagination response to increase coverage per keyword
         return true;
     }
     return false;
@@ -700,7 +851,12 @@ window.__linkedInExtractorReady = true;
   // ═══════════════════════════════════════════════════════════
   // MAIN PIPELINE
   // ═══════════════════════════════════════════════════════════
-  async function extractPipeline(keyword, settings, comments, dashboardUrl, userId) {
+  async function extractPipeline(keyword, settings, comments, dashboardUrl, userId, runId) {
+    const ensureActiveRun = () => {
+      if (window.__linkedInExtractorActiveRunId !== runId) {
+        throw new Error('EXTRACTION_CANCELLED');
+      }
+    };
     const isSearchOnly = settings.searchOnlyMode === true;
     const passIndex = settings.passIndex || 0;
     const priorPosts = settings.priorPosts || [];
@@ -775,7 +931,7 @@ window.__linkedInExtractorReady = true;
       // Scroll down to trigger lazy loading — LinkedIn might not render until scrolled
       for (let s = 0; s < 5; s++) {
         aggressiveScroll(600);
-        await wait(3000, 4000);
+        await wait(900, 1600);
         const d = pageDiag();
         if (d.likeBtn + d.commentBtn + d.urnAttrs + d.postLinks > 0) {
           probeResult = d;
@@ -796,11 +952,11 @@ window.__linkedInExtractorReady = true;
         heartbeat('Phase0-Fail', reason);
 
         // Still try one harvest before giving up completely
-        harvest(seenUrls, seenCards, allPosts);
+        harvest(seenUrls, seenCards, allPosts, { deepScan: true });
         const realCount = countReal(allPosts);
         console.log('[v18] Last-resort harvest: ' + realCount + ' real posts');
 
-        if (realCount === 0) {
+    if (realCount === 0) {
           // DO NOT send PASS_DONE with 0 posts — just complete smoothly
           safeSend({
             action: 'JOB_COMPLETED',
@@ -816,53 +972,50 @@ window.__linkedInExtractorReady = true;
 
     // ── Pre-Scroll React Hydration Barrier ──
     // Ensures LinkedIn's internal JS is fully bound to the DOM before aggressive scrolling begins
-    heartbeat('Phase0-Hydrate', '⏳ Stabilizing DOM binding to prevent race conditions...');
-    await wait(4000, 5000);
+    heartbeat('Phase0-Hydrate', '⏳ Quick DOM stabilization...');
+    await wait(700, 1200);
 
     // ── Step 3: Initial harvest (before scrolling) ──
-    const initCount = harvest(seenUrls, seenCards, allPosts);
+    const initCount = harvest(seenUrls, seenCards, allPosts, { deepScan: true });
     console.log('[v18] Initial harvest: +' + initCount + ' (total=' + allPosts.length + ', real=' + countReal(allPosts) + ')');
     heartbeat('Phase1-Init', '✅ Initial: ' + countReal(allPosts) + ' real posts');
 
     // ── Step 4: Scroll loop — CAPPED AT 100/150 SCANNED RESULTS ──
-    const STALL_LIMIT = 15;
+    const STALL_LIMIT = 10;
     const SCANNED_RESULTS_LIMIT = 300; 
+    const ABSOLUTE_SAFETY_LIMIT = 100;
     let stallCount = 0;
+    let exhaustedRounds = 0;
     let step = 0;
+    let lastIncrementalSyncAtStep = -1;
     const START_TIME = Date.now();
-    const HARD_TIMEOUT_MS = 600000; // 10 minutes hard timeout
+    const HARD_TIMEOUT_MS = 1500000; // 25 minutes absolute cap
 
     heartbeat('Phase1-Scroll', '📜 Scrolling until up to 100 results scanned...');
 
-    while (seenUrls.size < SCANNED_RESULTS_LIMIT) {
-      if (Date.now() - START_TIME > HARD_TIMEOUT_MS) {
-        console.warn(`[v18] ⏰ Hard 10-minute timeout reached. Stopping scroll early.`);
-        break;
-      }
-      
-      const ABSOLUTE_SAFETY_LIMIT = 100;
-
-      if (step >= ABSOLUTE_SAFETY_LIMIT) {
-        console.log(`[v18] 📜 Reached max scroll steps: ${ABSOLUTE_SAFETY_LIMIT}. Stopping.`);
+    while (step < ABSOLUTE_SAFETY_LIMIT) {
+      ensureActiveRun();
+      const elapsed = Date.now() - START_TIME;
+      if (elapsed > HARD_TIMEOUT_MS) {
+        console.warn(`[v18] ⏰ Hard 20-minute timeout reached. Stopping scroll.`);
         break;
       }
 
-      const scrollAmt = 700 + Math.floor(Math.random() * 500);
+      const scrollAmt = 1000 + Math.floor(Math.random() * 700);
+      const beforeDom = domSignalSnapshot();
       aggressiveScroll(scrollAmt);
+      const grew = await waitForDomGrowth(beforeDom, 900);
+      if (!grew) await wait(150, 350);
 
-      // SPEEDUP: Optimized wait times for faster collection while staying within safe rendering limits
-      await wait(400, 800);
-
-      // Harvest
-      const before = allPosts.length;
-      harvest(seenUrls, seenCards, allPosts);
+      const doDeepScan = true;
+      harvest(seenUrls, seenCards, allPosts, { deepScan: doDeepScan });
 
       // Every 3rd step, click Load More aggressively
       if (step % 3 === 2) {
         scrollToBottom();
-        await wait(800, 1200);
+        await wait(180, 420);
         await clickShowMore(); 
-        harvest(seenUrls, seenCards, allPosts);
+        harvest(seenUrls, seenCards, allPosts, { deepScan: true });
       }
 
       // Stall detection: TRACK DISCOVERED URLS, NOT DOM SIZE
@@ -878,7 +1031,7 @@ window.__linkedInExtractorReady = true;
 
       const real = countReal(allPosts);
       console.log('[v18] Scroll ' + (step + 1) + ' | Scanned: ' + currentSeenSize + ' | Real: ' + real + ' | Stall: ' + stallCount + '/' + STALL_LIMIT);
-      if (step % 5 === 0) heartbeat('Phase1-Scroll', '📜 Scrolled ' + step + ' | ' + real + ' posts');
+      heartbeat('Phase1-Scroll', '📜 Scrolled ' + step + ' | ' + real + ' posts');
 
       // Stall handling
       if (stallCount >= STALL_LIMIT) {
@@ -887,8 +1040,8 @@ window.__linkedInExtractorReady = true;
         
         const clicked = await clickShowMore();
         if (clicked) {
-           await wait(2000, 3000);
-           harvest(seenUrls, seenCards, allPosts);
+           await wait(700, 1200);
+           harvest(seenUrls, seenCards, allPosts, { deepScan: true });
            if (seenUrls.size > seenBeforeRecovery) {
                stallCount = 0;
                continue;
@@ -899,13 +1052,13 @@ window.__linkedInExtractorReady = true;
 
         console.log('[v18] No Show More. Recovery scroll...');
         
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        await wait(1000, 2000);
-        harvest(seenUrls, seenCards, allPosts);
+        window.scrollTo({ top: 0, behavior: 'auto' });
+        await wait(300, 700);
+        harvest(seenUrls, seenCards, allPosts, { deepScan: true });
         for (let r = 0; r < 5; r++) {
            aggressiveScroll(1500);
-           await wait(1000, 1500);
-           harvest(seenUrls, seenCards, allPosts);
+           await wait(350, 700);
+           harvest(seenUrls, seenCards, allPosts, { deepScan: r % 2 === 0 });
         }
         
         const seenAfterRecovery = seenUrls.size;
@@ -914,14 +1067,22 @@ window.__linkedInExtractorReady = true;
            // Ultimate fallback to force LinkedIn's lazy loader
            for (let r = 0; r < 8; r++) {
                window.scrollTo(0, document.body.scrollHeight);
-               await wait(1500, 2000);
+               await wait(400, 800);
                window.scrollTo(0, document.body.scrollHeight - 2000);
-               await wait(500, 1000);
+               await wait(200, 450);
            }
-           harvest(seenUrls, seenCards, allPosts);
+           harvest(seenUrls, seenCards, allPosts, { deepScan: true });
            if (seenUrls.size <= seenAfterRecovery) {
-               console.log('[v18] Page is genuinely exhausted (no more posts exist). Breaking loop.');
-               break;
+               const currentReal = countReal(allPosts);
+               exhaustedRounds++;
+               console.log(`[v18] Exhausted attempt ${exhaustedRounds} with ${currentReal} posts. Continuing toward 100-scroll limit.`);
+               for (let z = 0; z < 6; z++) {
+                 aggressiveScroll(1100);
+                 await wait(300, 650);
+                 harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+               }
+           } else {
+               exhaustedRounds = 0;
            }
         }
         stallCount = 0;
@@ -930,8 +1091,7 @@ window.__linkedInExtractorReady = true;
       step++;
       
       if (seenUrls.size >= SCANNED_RESULTS_LIMIT) {
-        console.log('[v18] Limit reached: 100 results scanned. Finishing keyword.');
-        heartbeat('Phase1-Limit', '✅ 100 results scanned. Moving to next keyword.');
+        console.log('[v18] URL discovery pool reached limit; continuing to 100 scrolls for consistency.');
       }
 
       // ── HIGH-QUALITY INCREMENTAL SAVE ──
@@ -939,34 +1099,64 @@ window.__linkedInExtractorReady = true;
       // Posts that do not perfectly match constraints are pooled until the final 
       // fallback calculation at the end, ensuring they are globally scored.
       if (isSearchOnly) {
+          ensureActiveRun();
           const unsynced = allPosts.filter(p => p.hasRealUrl && !syncedUrls.has(p.url));
-          const exactMatches = unsynced.filter(p => {
+
+          // Keep quality strict in real-time streaming: only high/mid quality
+          // (no low/unknown filler during incremental saves).
+          const qualityCandidates = unsynced.filter(p => {
               const likes = p.likes || 0;
               const comms = p.postComments || p.comments || 0;
-              if (likes === 0 && comms === 0) return false; // Wait for final fallback to score these
-              return likes >= SETTINGS_MIN_LIKES && likes <= SETTINGS_MAX_LIKES &&
-                     comms >= SETTINGS_MIN_COMMENTS && comms <= SETTINGS_MAX_COMMENTS;
+              const engagement = likes + comms;
+              const pos = p.discoveryIndex ?? 999;
+              const inUserRange =
+                likes >= SETTINGS_MIN_LIKES && likes <= SETTINGS_MAX_LIKES &&
+                comms >= SETTINGS_MIN_COMMENTS && comms <= SETTINGS_MAX_COMMENTS;
+              const isHigh = engagement >= 20 || likes >= 15 || comms >= 8;
+              const isMid = engagement >= 5 || likes >= 4 || comms >= 2;
+              // If metrics are not rendered yet (0/0), trust early discovery position
+              // so real-time sync still persists real posts while scrolling.
+              const posHighOrMid = engagement === 0 && pos < 40;
+              return (inUserRange && (isHigh || isMid)) || posHighOrMid;
           });
 
-          if (exactMatches.length >= 2) {
-              const serializedChunk = exactMatches.map(p => ({
+          // Stream in small real-time batches to avoid waiting until end of scroll.
+          // Also force a flush every few steps if at least one candidate exists.
+          const shouldFlushNow =
+            qualityCandidates.length >= 3 ||
+            (qualityCandidates.length > 0 && step - lastIncrementalSyncAtStep >= 4);
+
+          if (shouldFlushNow) {
+              const batch = qualityCandidates
+                .sort((a, b) => ((b.likes || 0) + (b.postComments || 0)) - ((a.likes || 0) + (a.postComments || 0)))
+                .slice(0, 8);
+
+              const serializedChunk = batch.map(p => ({
                   url: p.url, likes: p.likes, postComments: p.postComments,
                   author: p.author, textSnippet: p.textSnippet,
                   commentable: p.commentable || false, hasRealUrl: true,
                   discoveryIndex: p.discoveryIndex
               }));
 
-              const savedCount = await syncPosts(serializedChunk, keyword, dashboardUrl, userId, linkedInProfileId, false, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
-              exactMatches.forEach(p => syncedUrls.add(p.url));
-              console.log(`[v25] Incremental sync: streamed ${exactMatches.length} HIGH-REACH posts. Total streamed: ${syncedUrls.size}`);
-              heartbeat('Phase1-Stream', `📤 Streamed ${syncedUrls.size} high-quality posts so far...`);
+              const savedCount = await syncPosts(serializedChunk, keyword, dashboardUrl, userId, linkedInProfileId, false, {
+                SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS
+              });
+              if (savedCount > 0) {
+                batch.slice(0, savedCount).forEach(p => syncedUrls.add(p.url));
+              }
+              lastIncrementalSyncAtStep = step;
+              console.log(`[v29] Incremental sync: attempted ${batch.length}, saved ${savedCount}. Total streamed: ${syncedUrls.size}`);
+              heartbeat('Phase1-Stream', `📤 Live saved ${syncedUrls.size} high/mid posts so far...`);
           }
       }
     }
+    console.log(`[v18] 📜 Reached max scroll steps: ${ABSOLUTE_SAFETY_LIMIT}. Finishing keyword.`);
+    heartbeat('Phase1-Limit', '✅ 100 scroll limit reached. Moving to next keyword.');
 
     // ── Step 5: Active HTTP Validation (on ALL posts, once, after scrolling) ──
     console.log(`[v22] 📊 PRE-VALIDATION: ${allPosts.length} total posts, ${countReal(allPosts)} real`);
     heartbeat('Phase1-Validate', `🛡️ Actively verifying ${allPosts.length} posts...`);
+    ensureActiveRun();
     const validPosts = await validatePostsConcurrently(allPosts);
 
     const totalReal = countReal(validPosts);
@@ -1052,6 +1242,7 @@ window.__linkedInExtractorReady = true;
 
     } else {
       heartbeat('Phase4', '📤 Final sync: ' + totalReal + ' validated posts...');
+      ensureActiveRun();
       const savedThisPass = await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
       
       console.log(`[v25] ✅ Final sync: Evaluated ${remainingPosts.length} remaining pooled posts. Saved ${savedThisPass}.`);
@@ -1141,11 +1332,92 @@ window.__linkedInExtractorReady = true;
   // SYNC TO DASHBOARD
   // ═══════════════════════════════════════════════════════════
   async function syncPosts(posts, keyword, dashboardUrl, userId, linkedInProfileId, isFinal = false, constraints = {}) {
+    function escapeRegExp(s) {
+      return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function tokenizeKeyword(kw) {
+      return String(kw || '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+        .split(/\s+/)
+        .map(t => t.trim())
+        .filter(t => t.length >= 3);
+    }
+
+    function isKeywordRelevant(post, kw) {
+      const rawKw = String(kw || '').trim().toLowerCase();
+      if (!rawKw) return true;
+
+      const corpus = [
+        String(post?.textSnippet || ''),
+        String(post?.author || ''),
+        String(post?.url || '')
+      ].join(' ').toLowerCase();
+
+      // Strongest signal: exact keyword phrase appears.
+      if (rawKw.length >= 3 && corpus.includes(rawKw)) return true;
+
+      // Otherwise require meaningful token coverage.
+      const tokens = tokenizeKeyword(rawKw);
+      if (tokens.length === 0) return true;
+
+      const matches = tokens.filter(t => {
+        const r = new RegExp(`\\b${escapeRegExp(t)}\\b`, 'i');
+        return r.test(corpus);
+      }).length;
+
+      // Soft stem support for single-word keywords (plan -> planning/planned/plans)
+      // to avoid false zero-matches from strict boundary checks.
+      if (tokens.length === 1) {
+        const t = tokens[0];
+        const stem = t.length >= 4 ? t.slice(0, Math.max(3, t.length - 1)) : t;
+        const stemRx = new RegExp(`\\b${escapeRegExp(stem)}\\w*\\b`, 'i');
+        const hasStem = stemRx.test(corpus);
+        return matches >= 1 || hasStem;
+      }
+
+      // 2-word keyword -> both should appear
+      if (tokens.length === 2) return matches >= 2;
+      // 3+ words -> require at least 2 (balances strictness vs natural phrasing)
+      return matches >= 2;
+    }
+
+    const MAX_POSTS_PER_KEYWORD = 120;
     const SETTINGS_MIN_LIKES = constraints.SETTINGS_MIN_LIKES || 0;
     const SETTINGS_MAX_LIKES = constraints.SETTINGS_MAX_LIKES || Infinity;
     const SETTINGS_MIN_COMMENTS = constraints.SETTINGS_MIN_COMMENTS || 0;
     const SETTINGS_MAX_COMMENTS = constraints.SETTINGS_MAX_COMMENTS || Infinity;
-    const realPosts = posts.filter(p => p.hasRealUrl || (p.url && !p.url.startsWith('discovered:') && !p.url.includes('synthetic:')));
+    const baseRealPosts = posts.filter(p =>
+      (p.hasRealUrl || (p.url && !p.url.startsWith('discovered:') && !p.url.includes('synthetic:'))) &&
+      p.url && isValidCanonicalPostUrl(p.url)
+    );
+    const relevantRealPosts = baseRealPosts.filter(p => isKeywordRelevant(p, keyword));
+
+    // Incremental sync must stay stable and keep accumulating while scrolling.
+    // Apply strict keyword gate only on final authoritative sync.
+    let realPosts = baseRealPosts;
+    if (isFinal) {
+      realPosts = relevantRealPosts;
+      if (baseRealPosts.length > 0 && relevantRealPosts.length === 0) {
+        const fallbackCount = Math.min(Math.max(10, Math.ceil(baseRealPosts.length * 0.35)), baseRealPosts.length);
+        realPosts = baseRealPosts
+          .slice()
+          .sort((a, b) => (a.discoveryIndex ?? 999) - (b.discoveryIndex ?? 999))
+          .slice(0, fallbackCount);
+        console.warn(`[v30] Keyword gate produced 0 matches for "${keyword}". Using ${fallbackCount} early discovered posts as safe fallback.`);
+      } else if (baseRealPosts.length > relevantRealPosts.length && relevantRealPosts.length > 0 && relevantRealPosts.length < 6) {
+        const existing = new Set(relevantRealPosts.map(p => p.url));
+        const supplementCount = Math.min(8, baseRealPosts.length - relevantRealPosts.length);
+        const supplements = baseRealPosts
+          .filter(p => !existing.has(p.url))
+          .slice()
+          .sort((a, b) => (a.discoveryIndex ?? 999) - (b.discoveryIndex ?? 999))
+          .slice(0, supplementCount);
+        realPosts = [...relevantRealPosts, ...supplements];
+        console.warn(`[v30] Keyword gate produced only ${relevantRealPosts.length} matches for "${keyword}". Added ${supplements.length} adaptive fallback posts.`);
+      }
+    }
 
     const labeled = realPosts.map(p => {
       const eng = (p.likes || 0) + (p.postComments || 0);
@@ -1202,8 +1474,8 @@ window.__linkedInExtractorReady = true;
       final = exactMatches;
       console.log(`[v22] ✅ ${exactMatches.length} posts EXACTLY match constraints (Likes ${SETTINGS_MIN_LIKES}-${SETTINGS_MAX_LIKES}, Comments ${SETTINGS_MIN_COMMENTS}-${SETTINGS_MAX_COMMENTS}).`);
 
-      // If exact matches are sparse, supplement with closest-match fallback
-      if (exactMatches.length < 10) {
+      // If exact matches are sparse, supplement with closest-match fallback (up to per-keyword cap)
+      if (exactMatches.length < MAX_POSTS_PER_KEYWORD) {
         const exactUrls = new Set(exactMatches.map(p => p.url));
         const remaining = labeled.filter(p => !exactUrls.has(p.url));
 
@@ -1225,8 +1497,8 @@ window.__linkedInExtractorReady = true;
         scored.sort((a, b) => a._deviation - b._deviation);
         const maxAcceptableDev = Math.max(SETTINGS_MIN_LIKES, SETTINGS_MIN_COMMENTS, 5) * 0.5;
         const fallbacks = scored.filter(p => p._deviation <= maxAcceptableDev);
-        const needed = Math.min(fallbacks.length, 10 - exactMatches.length);
-        if (needed > 0) postsToSync = [...exactMatches, ...fallbacks.slice(0, needed)];
+        const needed = Math.min(fallbacks.length, MAX_POSTS_PER_KEYWORD - exactMatches.length);
+        if (needed > 0) final = [...exactMatches, ...fallbacks.slice(0, needed)];
       }
     } else if (isFinal) {
       const scored = labeled.map(p => {
@@ -1249,18 +1521,53 @@ window.__linkedInExtractorReady = true;
       final = scored.filter(p => p._deviation <= maxFallbackDev);
 
       if (final.length === 0) {
-        // Absolute last resort: take top 10 closest, regardless of deviation
-        final = scored.slice(0, 10);
+        // Absolute last resort: take top N closest, regardless of deviation
+        final = scored.slice(0, Math.min(80, scored.length));
         console.log(`[v22] ⚠️ No posts within fallback tolerance. Sending top ${final.length} closest posts.`);
       } else {
         console.log(`[v22] 🔄 Selected ${final.length} posts via closest-match fallback (tolerance: ${maxFallbackDev}).`);
       }
+      if (final.length > MAX_POSTS_PER_KEYWORD) final = final.slice(0, MAX_POSTS_PER_KEYWORD);
     } else {
-      console.log(`[v25] ⚠️ 0 exact matches and isFinal=false. Skipping fallback during incremental sync.`);
+      // Incremental sync fallback: do not drop to empty.
+      // Keep quality strict (high/mid first) using engagement tier + discovery position.
+      const qualityIncremental = labeled.filter(p => {
+        const eng = (p.likes || 0) + (p.postComments || p.comments || 0);
+        const pos = p.discoveryIndex ?? 999;
+        if (p.engagementTier === 'high' || p.engagementTier === 'mid') return true;
+        // When engagement metrics are missing in DOM, allow early discovered posts only.
+        if (eng === 0 && pos < 40) return true;
+        return false;
+      });
+      final = qualityIncremental.slice(0, Math.min(20, qualityIncremental.length));
+      console.log(`[v29] Incremental fallback selected ${final.length} high/mid candidates.`);
+    }
+
+    if (!Array.isArray(final)) final = [];
+
+    // Hard floor (final pass only): when real candidates exist, do not end a keyword with a tiny batch.
+    // Incremental syncs remain strict high/mid only.
+    if (isFinal && final.length < 10 && labeled.length > final.length) {
+      const selected = new Set(final.map(p => p.url));
+      const supplements = labeled.filter(p => p.url && !selected.has(p.url)).slice(0, 10 - final.length);
+      if (supplements.length > 0) {
+        final = [...final, ...supplements];
+        console.log(`[v28] Filled batch with ${supplements.length} ranked fallback posts to reach minimum floor.`);
+      }
     }
 
     // Clean up internal scoring field before sending
     final = final.map(p => { const { _deviation, ...clean } = p; return clean; });
+
+    final.sort((a, b) => {
+      const tierOrder = { high: 3, mid: 2, low: 1, unknown: 0 };
+      const tierDiff = (tierOrder[b.engagementTier] || 0) - (tierOrder[a.engagementTier] || 0);
+      if (tierDiff !== 0) return tierDiff;
+      const engDiff = ((b.likes || 0) + (b.postComments || 0)) - ((a.likes || 0) + (a.postComments || 0));
+      if (engDiff !== 0) return engDiff;
+      return (a.discoveryIndex || 999) - (b.discoveryIndex || 999);
+    });
+    final = final.slice(0, MAX_POSTS_PER_KEYWORD);
 
     if (final.length === 0) {
       console.log('[v18] ⚠️ 0 valid posts met the strict criteria. Skipping sync to prevent empty batches.');
@@ -1283,40 +1590,46 @@ window.__linkedInExtractorReady = true;
     console.log('[v18]   📦 TOTAL sending: ' + final.length + ' (from ' + realPosts.length + ' real)');
     console.log('[v18] ══════════════════════════════════════════════');
 
-    const payload = final.map(p => ({
-      url: p.url, likes: p.likes, comments: p.postComments,
-      author: p.author, preview: (p.textSnippet || '').substring(0, 200),
-      engagementTier: p.engagementTier
-    }));
+    const payload = final.map(p => {
+      const u = cleanUrl(p.url);
+      return {
+        url: u, likes: p.likes, comments: p.postComments,
+        author: p.author, preview: (p.textSnippet || '').substring(0, 200),
+        engagementTier: p.engagementTier
+      };
+    }).filter(p => p.url && isValidCanonicalPostUrl(p.url));
 
-    // ACTIVE GHOST POST VALIDATION
-    console.log(`[v26] 🛡️ Actively verifying ${payload.length} finalized posts via direct network check...`);
-    const verifiedPayload = [];
-    for (const p of payload) {
-        try {
-            // Do NOT use credentials: 'omit', this triggers HTTP 999 WAF blocks.
-            const res = await fetch(p.url, { method: 'GET' });
-            
-            // Only drop the post if we specifically load the page and confirm it is a Ghost Post.
-            // If res.ok is false (e.g. 404 or 999), we CANNOT prove it's a Ghost Post, so we MUST
-            // accept it to avoid dropping 90% of valid posts during rate limits.
-            if (res.ok) {
-                const html = await res.text();
-                if (html.includes('This post cannot be displayed') || html.includes('Post not found')) {
-                    console.warn(`[v26] 🚫 Rejected Ghost Post: ${p.url}`);
-                    continue; // DROP IT
-                }
-            }
-            verifiedPayload.push(p); // ACCEPT IT
-            await wait(300, 800);
-        } catch(e) {
-            // Network error (CORS) -> Accept it
-            verifiedPayload.push(p); 
-        }
+    // Strict HTTP verification is reserved for final sync.
+    // Incremental sync should be fast and continuously accumulating.
+    let verifiedPayload = [];
+    if (!isFinal) {
+      verifiedPayload = payload;
+    } else {
+      console.log(`[v27] 🛡️ Verifying ${payload.length} posts (strict — unverified URLs are dropped)...`);
+      for (const p of payload) {
+          try {
+              const res = await fetch(p.url, { method: 'GET', credentials: 'include', cache: 'no-store' });
+              if (!res.ok) {
+                console.warn(`[v27] ⏭️ Skip (HTTP ${res.status}): ${p.url}`);
+                await wait(200, 500);
+                continue;
+              }
+              const html = await res.text();
+              if (htmlIndicatesBrokenOrLogin(html)) {
+                console.warn(`[v27] 🚫 Rejected broken/login page: ${p.url}`);
+                await wait(200, 500);
+                continue;
+              }
+              verifiedPayload.push(p);
+              await wait(250, 600);
+          } catch (e) {
+              console.warn(`[v27] ⏭️ Skip (fetch error): ${p.url}`);
+          }
+      }
     }
 
     if (verifiedPayload.length === 0) {
-        console.warn(`[v26] All ${payload.length} candidates failed Ghost Post verification.`);
+        console.warn(`[v27] All ${payload.length} candidates failed verification (strict mode).`);
         return 0;
     }
 
