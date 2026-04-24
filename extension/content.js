@@ -228,7 +228,7 @@ window.__linkedInExtractorReady = true;
     if (!card) return null;
 
     try {
-      const WIDE_URN_REGEX = /urn:li:(activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{18,22})/i;
+      const WIDE_URN_REGEX = /urn:li:(activity|ugcPost|share|update|fsd_update|fs_updateV2):(\d{10,22})/i;
 
       function buildPostUrl(urnType, digits) {
         const t = urnType.toLowerCase();
@@ -259,14 +259,14 @@ window.__linkedInExtractorReady = true;
       }
 
       // Method 3: Explicit URN data attributes (SAFE DEEP EXTRACTION)
-      // We safely search deep into the card but explicitly ignore any element
-      // that is inside a comment container, preventing Ghost Posts.
-      const urnEls = [card, ...card.querySelectorAll('[data-urn], [data-id], [data-chameleon-result-urn], [data-update-urn]')];
+      // We explicitly DO NOT extract 'data-chameleon-result-urn' because it generates
+      // tracking URNs that cause "This post cannot be displayed" errors (Ghost Posts).
+      const urnEls = [card, ...card.querySelectorAll('[data-urn], [data-id], [data-entity-urn], [data-update-urn], [data-search-result-urn]')];
       for (const el of urnEls) {
         // STRICT GHOST POST PREVENTION: Ignore anything inside a comment section
         if (el.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, article.comment')) continue;
 
-        for (const attr of ['data-urn', 'data-id', 'data-chameleon-result-urn', 'data-update-urn']) {
+        for (const attr of ['data-urn', 'data-id', 'data-entity-urn', 'data-update-urn', 'data-search-result-urn']) {
           const val = el.getAttribute(attr);
           if (!val) continue;
           
