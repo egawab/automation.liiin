@@ -277,6 +277,22 @@ window.__linkedInExtractorReady = true;
         }
       }
 
+      // Method 4: Fallback to Raw HTML scanning (CATCHES REACT JSON BLOBS)
+      // LinkedIn frequently stores URNs inside hidden <code> blocks containing JSON state.
+      // These lack data-attributes, so querySelector fails. We must regex the raw HTML.
+      // Any Ghost Posts generated here will be actively rejected by the final fetch() verification.
+      const html = card.innerHTML || '';
+      const fallbackMatch = html.match(WIDE_URN_REGEX);
+      if (fallbackMatch) {
+         // Ensure we aren't accidentally grabbing a comment URN
+         // If "comments" appears within 50 characters before the match, skip it.
+         const idx = fallbackMatch.index;
+         const contextBefore = html.substring(Math.max(0, idx - 50), idx).toLowerCase();
+         if (!contextBefore.includes('comment')) {
+             return buildPostUrl(fallbackMatch[1], fallbackMatch[2]);
+         }
+      }
+
     } catch(e) {}
 
     return null;
