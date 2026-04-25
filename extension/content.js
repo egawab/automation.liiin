@@ -32,12 +32,71 @@ window.__linkedInExtractorReady = true;
       sendResponse({ received: true });
       runExtraction(request.keyword, request.settings, request.comments, request.dashboardUrl, request.userId);
     }
+    if (request.action === 'START_COMMENT_CAMPAIGN') {
+      sendResponse({ received: true });
+      runCommentCampaignEntry(request.keyword, request.settings, request.comments, request.dashboardUrl, request.userId);
+    }
+    if (request.action === 'START_SEARCH_ONLY') {
+      sendResponse({ received: true });
+      runSearchOnlyEntry(request.keyword, request.settings, request.dashboardUrl, request.userId);
+    }
   }
   chrome.runtime.onMessage.addListener(messageHandler);
 
+  window.__startCommentCampaign = function (keyword, settings, comments, dashboardUrl, userId) {
+    console.log('[CommentCampaign] start: "' + keyword + '" on ' + window.location.href);
+    runCommentCampaignEntry(keyword, settings, comments, dashboardUrl, userId);
+  };
+
+  window.__startSearchOnly = function (keyword, settings, dashboardUrl, userId) {
+    console.log('[SearchOnly] start: "' + keyword + '" on ' + window.location.href);
+    runSearchOnlyEntry(keyword, settings, dashboardUrl, userId);
+  };
+
+  window.__resumeSingleCommentTarget = async function (plan) {
+    const targetUrl = cleanUrl(plan?.targetUrl || window.location.href);
+    const commentText = String(plan?.commentText || '').trim();
+    if (!targetUrl || !commentText) return 'FAILED';
+
+    heartbeat('Phase3-Target', 'Opening target post for direct comment execution...');
+    await sleep(1200);
+
+    let container = findLivePostContainerByUrl(targetUrl);
+    if (!container) {
+      const visibleCards = Array.from(document.querySelectorAll('article, .feed-shared-update-v2, .feed-shared-update-v3, .feed-shared-update-v2__commentary'))
+        .filter(el => isLikelyVisible(el));
+      container = visibleCards.find(el => {
+        try {
+          const btn = Array.from(el.querySelectorAll('button')).find(b => {
+            const txt = (b.innerText || '').trim().toLowerCase();
+            const lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+            return txt === 'comment' || (lbl.includes('comment') && !lbl.includes('copy'));
+          });
+          return !!btn;
+        } catch (e) {
+          return false;
+        }
+      }) || null;
+    }
+
+    if (!container) {
+      container = await locateLiveContainerForPostUrl(targetUrl, 4);
+    }
+    if (!container || !document.contains(container)) return 'FAILED';
+
+    try { container.scrollIntoView({ block: 'center', behavior: 'auto' }); } catch (e) {}
+    await sleep(700);
+    heartbeat('Phase3-Target', 'Commenting on ranked target post...');
+    return await tryPostCommentWithRetries(container, commentText, targetUrl, 1);
+  };
+
   window.__startExtraction = function (keyword, settings, comments, dashboardUrl, userId) {
     console.log('[v18] start: "' + keyword + '" on ' + window.location.href);
-    runExtraction(keyword, settings, comments, dashboardUrl, userId);
+    if (settings && (settings.searchOnlyMode === true || settings.engineMode === 'SEARCH_ONLY')) {
+      runSearchOnlyEntry(keyword, settings, dashboardUrl, userId);
+    } else {
+      runCommentCampaignEntry(keyword, settings, comments, dashboardUrl, userId);
+    }
   };
 
   window.__linkedInExtractorCleanup = function () {
@@ -47,25 +106,53 @@ window.__linkedInExtractorReady = true;
     window.__linkedInExtractorActiveRunId = ++window.__linkedInExtractorRunCounter;
   };
 
-  async function runExtraction(keyword, settings, comments, dashboardUrl, userId) {
-    if (isExtracting) { console.log('[v18] Already extracting.'); return; }
+  async function runCommentCampaignEntry(keyword, settings, comments, dashboardUrl, userId) {
+    if (isExtracting) { console.log('[CommentCampaign] Already running.'); return; }
     isExtracting = true;
     const runId = ++window.__linkedInExtractorRunCounter;
     window.__linkedInExtractorActiveRunId = runId;
     try {
-      await extractPipeline(keyword, settings, comments, dashboardUrl, userId, runId);
+      await extractPipeline(keyword, { ...settings, engineMode: 'COMMENT_CAMPAIGN', searchOnlyMode: false }, comments, dashboardUrl, userId, runId);
     } catch (e) {
       if (String(e?.message || e).includes('EXTRACTION_CANCELLED')) {
-        console.log('[v18] Extraction run cancelled due to reinjection/newer run.');
+        console.log('[CommentCampaign] Cancelled (reinject).');
         return;
       }
-      console.error('[v18] Fatal:', e);
-      safeSend({ action: 'JOB_FAILED', error: String(e) });
+      console.error('[CommentCampaign] Fatal:', e);
+      safeSend({ action: 'JOB_FAILED', error: String(e), engineMode: 'COMMENT_CAMPAIGN' });
     } finally {
       if (window.__linkedInExtractorActiveRunId === runId) {
         isExtracting = false;
       }
     }
+  }
+
+  async function runSearchOnlyEntry(keyword, settings, dashboardUrl, userId) {
+    if (isExtracting) { console.log('[SearchOnly] Already running.'); return; }
+    isExtracting = true;
+    const runId = ++window.__linkedInExtractorRunCounter;
+    window.__linkedInExtractorActiveRunId = runId;
+    try {
+      await extractPipeline(keyword, { ...settings, engineMode: 'SEARCH_ONLY', searchOnlyMode: true }, [], dashboardUrl, userId, runId);
+    } catch (e) {
+      if (String(e?.message || e).includes('EXTRACTION_CANCELLED')) {
+        console.log('[SearchOnly] Cancelled (reinject).');
+        return;
+      }
+      console.error('[SearchOnly] Fatal:', e);
+      safeSend({ action: 'JOB_FAILED', error: String(e), engineMode: 'SEARCH_ONLY' });
+    } finally {
+      if (window.__linkedInExtractorActiveRunId === runId) {
+        isExtracting = false;
+      }
+    }
+  }
+
+  async function runExtraction(keyword, settings, comments, dashboardUrl, userId) {
+    if (settings && (settings.searchOnlyMode === true || settings.engineMode === 'SEARCH_ONLY')) {
+      return runSearchOnlyEntry(keyword, settings, dashboardUrl, userId);
+    }
+    return runCommentCampaignEntry(keyword, settings, comments, dashboardUrl, userId);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -114,6 +201,45 @@ window.__linkedInExtractorReady = true;
     if (/linkedin\.com\/feed\/update\/urn:li:ugcPost:\d{10,30}$/i.test(url)) return true;
     if (/linkedin\.com\/feed\/update\/urn:li:share:[^\s"?'#/]+$/i.test(url)) return true;
     return false;
+  }
+
+  /** Ads / promoted / suggested blocks — excluded from both modes. */
+  function isAdOrSuggestedBlock(card) {
+    if (!card) return true;
+    if (card.closest('[data-sponsored], [data-ad-detail], .sponsored-update')) return true;
+    if (card.querySelector('.feed-shared-actor__sponsored-label, [data-ad-detail], .sponsored-update__label')) return true;
+    const sub = card.querySelector('.feed-shared-actor__sub-description, .update-components-actor__sub-description, .update-components-actor__meta');
+    const st = ((sub && sub.innerText) || '').toLowerCase();
+    if (/\bpromoted\b/.test(st) || /\bsponsored\b/.test(st)) return true;
+    const aria = ((card.getAttribute('aria-label') || '') + ' ' + (card.innerText || '')).slice(0, 500).toLowerCase();
+    if (aria.includes('suggested') && (aria.includes('follow') || aria.includes('people you may'))) return true;
+    return false;
+  }
+
+  function parsePostTimeMsFromCard(card) {
+    if (!card) return 0;
+    const t = card.querySelector('time[datetime], .update-components-actor__sub-description time[datetime]');
+    if (t) {
+      const raw = t.getAttribute('datetime') || '';
+      const ms = Date.parse(raw);
+      if (!isNaN(ms)) return ms;
+    }
+    return 0;
+  }
+
+  function detectMediaTypeFromCard(card) {
+    if (!card) return 'text';
+    if (card.querySelector('video, .feed-shared-update-v2__video, .update-components-video')) return 'video';
+    if (card.querySelector('.update-components-image__image, .feed-shared-image__image-link, .feed-shared-image img')) return 'image';
+    return 'text';
+  }
+
+  function postIdFromCanonicalUrl(url) {
+    const u = cleanUrl(url || '').split('?')[0];
+    if (!u) return '';
+    let h = 0;
+    for (let i = 0; i < u.length; i++) h = ((h << 5) - h + u.charCodeAt(i)) | 0;
+    return 'urn:urlhash:' + Math.abs(h).toString(36);
   }
 
   function htmlIndicatesBrokenOrLogin(html) {
@@ -207,15 +333,95 @@ window.__linkedInExtractorReady = true;
     return likeCount;
   }
 
+  function hasLinkedInPostSignal(node) {
+    if (!node || node.nodeType !== 1) return false;
+    const cls = typeof node.className === 'string' ? node.className : '';
+    if (
+      node.matches?.('.feed-shared-update-v2,[role="article"][data-urn],.occludable-update,[data-view-name="feed-full-update"],li.artdeco-card,.reusable-search__result-container,.search-result__wrapper')
+    ) {
+      return true;
+    }
+    if (
+      cls.includes('feed-shared-update-v2') ||
+      cls.includes('occludable-update') ||
+      cls.includes('reusable-search__result-container')
+    ) {
+      return true;
+    }
+    const urn = node.getAttribute?.('data-urn') || '';
+    if (/urn:li:(activity|ugcPost|share):/i.test(urn)) return true;
+    if (node.getAttribute?.('data-view-name') === 'feed-full-update') return true;
+    return false;
+  }
+
+  function resolvePostCard(node) {
+    if (!node || node.nodeType !== 1) return null;
+
+    const direct = node.closest?.('.feed-shared-update-v2[role="article"][data-urn], [role="article"][data-urn], .feed-shared-update-v2[role="article"], [data-view-name="feed-full-update"], .occludable-update, li.artdeco-card, .reusable-search__result-container, div.search-result__wrapper');
+    if (direct) {
+      const inner = direct.matches?.('.feed-shared-update-v2[role="article"][data-urn], [role="article"][data-urn]')
+        ? direct
+        : direct.querySelector?.('.feed-shared-update-v2[role="article"][data-urn], [role="article"][data-urn], .feed-shared-update-v2[role="article"], [data-urn].feed-shared-update-v2');
+      return inner || direct;
+    }
+
+    const nested = node.querySelector?.('.feed-shared-update-v2[role="article"][data-urn], [role="article"][data-urn], .feed-shared-update-v2[role="article"], [data-urn].feed-shared-update-v2');
+    if (nested) return nested;
+    return node;
+  }
+
+  function collectCardEvidenceNodes(card) {
+    if (!card || card.nodeType !== 1) return [];
+    const nodes = [];
+    const seen = new Set();
+    const push = (el) => {
+      if (!el || el.nodeType !== 1 || seen.has(el)) return;
+      seen.add(el);
+      nodes.push(el);
+    };
+
+    push(card);
+    let walker = card;
+    for (let i = 0; i < 6 && walker; i++) {
+      push(walker);
+      walker = walker.parentElement;
+    }
+
+    const selectors = [
+      '.feed-shared-update-v2[role="article"][data-urn]',
+      '[role="article"][data-urn]',
+      '.feed-shared-update-v2[role="article"]',
+      '[data-view-name="feed-full-update"]',
+      '.occludable-update',
+      'li.artdeco-card',
+      '.reusable-search__result-container',
+      'div.search-result__wrapper'
+    ];
+
+    for (const sel of selectors) {
+      try { push(card.closest?.(sel)); } catch (e) {}
+      try { push(card.querySelector?.(sel)); } catch (e) {}
+    }
+
+    return nodes;
+  }
+
   function isLikelySinglePostContainer(node) {
     if (!node) return false;
+    const resolved = resolvePostCard(node) || node;
+    if (hasLinkedInPostSignal(resolved)) {
+      const rect = resolved.getBoundingClientRect ? resolved.getBoundingClientRect() : { height: 0, width: 0 };
+      const h = rect.height || resolved.offsetHeight || 0;
+      const w = rect.width || resolved.offsetWidth || 0;
+      if (h >= 40 && w >= 160) return true;
+    }
     const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { height: 0, width: 0 };
     const h = rect.height || node.offsetHeight || 0;
     const w = rect.width || node.offsetWidth || 0;
     if (h < 80 || w < 200) return false;
     const likeCount = countMainActionLikeButtons(node);
     // Wrapper/feed containers usually include many action bars.
-    if (likeCount > 2) return false;
+    if (likeCount > 6) return false;
     return true;
   }
 
@@ -253,6 +459,25 @@ window.__linkedInExtractorReady = true;
     if (t === 'ugcpost') return cleanUrl('https://www.linkedin.com/feed/update/urn:li:ugcPost:' + idPart);
     if (t === 'activity') return cleanUrl('https://www.linkedin.com/feed/update/urn:li:activity:' + idPart);
     if (t === 'share') return cleanUrl('https://www.linkedin.com/feed/update/urn:li:share:' + idPart);
+    return null;
+  }
+
+  function extractCanonicalFromTrackingBlob(text) {
+    if (!text) return null;
+    const src = String(text);
+    const direct = src.match(/(?:updateUrn|updateEntityUrn|entityUrn|trackingUrn)"?\s*[:=]\s*"?(urn:li:(activity|ugcPost|share):[A-Za-z0-9:_-]{8,64})/i);
+    if (direct) {
+      const urn = direct[1].match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
+      if (urn) {
+        const built = canonicalFromUrn(urn[1], urn[2]);
+        if (built && isValidCanonicalPostUrl(built)) return built;
+      }
+    }
+    const loose = src.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
+    if (loose) {
+      const built = canonicalFromUrn(loose[1], loose[2]);
+      if (built && isValidCanonicalPostUrl(built)) return built;
+    }
     return null;
   }
 
@@ -309,35 +534,73 @@ window.__linkedInExtractorReady = true;
       node = node.parentElement;
       if (!node || node.nodeType !== 1) break;
 
-      const tag = node.tagName;
+      const resolved = resolvePostCard(node);
+      if (!resolved) continue;
+      if (!isLikelySinglePostContainer(resolved)) continue;
 
-      // ARTICLE is always a card boundary
-      if (tag === 'ARTICLE' && isLikelySinglePostContainer(node)) return node;
-
-      // If it's an LI or DIV, check if it's a valid individual card
-      if (tag === 'LI' || tag === 'DIV') {
-        if (!isLikelySinglePostContainer(node)) continue;
-
-        // 1. FIRST: Check if this element has URN data attributes (strong signal)
-        for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn','data-id']) {
-          const v = node.getAttribute(attr) || '';
-          if (v.includes('activity') || v.includes('ugcPost') || v.includes('share')) {
-            return node;
-          }
-        }
-
-        // 2. Anchor signal: a true post card usually contains post permalinks internally.
-        const hasPostAnchor = !!node.querySelector('a[href*="/feed/update/"],a[href*="/posts/"]');
-        if (hasPostAnchor) return node;
-
-        // 3. Fallback: first good candidate on the climb.
-        if (!fallbackCandidate) {
-          fallbackCandidate = node;
+      for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn','data-id']) {
+        const v = (resolved.getAttribute(attr) || node.getAttribute(attr) || '');
+        if (v.includes('activity') || v.includes('ugcPost') || v.includes('share')) {
+          return resolved;
         }
       }
+
+      const hasPostAnchor = !!resolved.querySelector('a[href*="/feed/update/"],a[href*="/posts/"],a[href*="urn:li:activity"],a[href*="urn:li:ugcPost"],a[href*="urn:li:share"]');
+      if (hasPostAnchor || hasLinkedInPostSignal(resolved)) return resolved;
+
+      if (!fallbackCandidate) fallbackCandidate = resolved;
     }
 
     return fallbackCandidate;
+  }
+
+  /**
+   * After long scrolls, LinkedIn drops old nodes from the document; `post.container` is often stale.
+   * Find a currently attached card by matching canonical post URLs in the live DOM.
+   */
+  function findLivePostContainerByUrl(postUrl) {
+    if (!postUrl) return null;
+    const key = cleanUrl(postUrl);
+    if (!key) return null;
+
+    const anchorSel = 'a[href*="/feed/update/"],a[href*="/posts/"],a[href*="urn:li:activity"],a[href*="urn:li:ugcPost"],a[href*="urn:li:share"]';
+    for (const a of document.querySelectorAll(anchorSel)) {
+      try {
+        const canon = extractCanonicalFromHref(a.getAttribute('href') || a.href || '');
+        if (!canon || cleanUrl(canon) !== key) continue;
+        const card = walkUpToCard(a) || resolvePostCard(a.closest('.feed-shared-update-v2,.occludable-update,[data-view-name="feed-full-update"],li.artdeco-card,.reusable-search__result-container,li.reusable-search__result-container,article,div.search-result__wrapper'));
+        if (card && document.contains(card)) return card;
+      } catch (e) {}
+    }
+
+    const cardSelectors = ['.feed-shared-update-v2[role="article"]', '[role="article"][data-urn]', '.occludable-update', '[data-view-name="feed-full-update"]', 'li.artdeco-card', '.reusable-search__result-container', 'li.reusable-search__result-container', 'article'];
+    for (const sel of cardSelectors) {
+      for (const card of document.querySelectorAll(sel)) {
+        try {
+          const resolved = resolvePostCard(card);
+          if (!resolved || !isLikelySinglePostContainer(resolved) || !document.contains(resolved)) continue;
+          const u = extractUrlFromCard(resolved);
+          if (u && cleanUrl(u) === key) return resolved;
+        } catch (e) {}
+      }
+    }
+    return null;
+  }
+
+  async function locateLiveContainerForPostUrl(postUrl, maxScrollSteps = 12) {
+    let live = findLivePostContainerByUrl(postUrl);
+    if (live) return live;
+    try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch (e) { try { window.scrollTo(0, 0); } catch (e2) {} }
+    await wait(450, 750);
+    live = findLivePostContainerByUrl(postUrl);
+    if (live) return live;
+    for (let i = 0; i < maxScrollSteps; i++) {
+      aggressiveScroll(700 + Math.floor(Math.random() * 400));
+      await wait(260, 480);
+      live = findLivePostContainerByUrl(postUrl);
+      if (live) return live;
+    }
+    return null;
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -347,6 +610,7 @@ window.__linkedInExtractorReady = true;
     if (!card) return null;
 
     try {
+      const target = resolvePostCard(card) || card;
       // NEVER synthesize /feed/update/ URLs from searchResult, entity, organizationPost, fsd_update, etc.
       // Those IDs are not activity IDs — they produce "This post cannot be displayed".
       const ATTR_URN_REGEX = /urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i;
@@ -359,14 +623,14 @@ window.__linkedInExtractorReady = true;
       }
 
       // 1. ANCHOR LINKS (highest signal — use full href as LinkedIn emitted it)
-      for (const a of card.querySelectorAll('a[href]')) {
+      for (const a of target.querySelectorAll('a[href]')) {
         const href = a.href || '';
         const extracted = extractCanonicalFromHref(href);
         if (extracted) return extracted;
       }
 
       // 2. CONTROL MENU / copy-link targets
-      for (const btn of card.querySelectorAll('[data-clipboard-text], [data-share-url]')) {
+      for (const btn of target.querySelectorAll('[data-clipboard-text], [data-share-url]')) {
         const url = btn.getAttribute('data-clipboard-text') || btn.getAttribute('data-share-url');
         if (url && (url.includes('linkedin.com/posts/') || url.includes('linkedin.com/feed/update/'))) {
           const built = cleanUrl(url);
@@ -375,8 +639,16 @@ window.__linkedInExtractorReady = true;
       }
 
       // 3. data-* attributes — only activity / ugcPost digit IDs
-      const attrList = ['data-urn', 'data-id', 'data-update-urn', 'data-entity-urn', 'data-chameleon-result-urn'];
-      const safeEls = [card, ...card.querySelectorAll(attrList.map(a => `[${a}]`).join(', '))];
+      const attrList = ['data-urn', 'data-id', 'data-update-urn', 'data-entity-urn', 'data-chameleon-result-urn', 'updateUrn', 'data-view-tracking-scope'];
+      const safeEls = [];
+      const seenEls = new Set();
+      const pushEl = (el) => {
+        if (!el || el.nodeType !== 1 || seenEls.has(el)) return;
+        seenEls.add(el);
+        safeEls.push(el);
+      };
+      collectCardEvidenceNodes(target).forEach(pushEl);
+      target.querySelectorAll(attrList.map(a => `[${a}]`).join(', ')).forEach(pushEl);
       for (const el of safeEls) {
         for (const attr of attrList) {
           const val = el.getAttribute(attr);
@@ -386,19 +658,27 @@ window.__linkedInExtractorReady = true;
           const u = buildFromUrn(m[1], m[2]);
             if (u && isValidCanonicalPostUrl(u)) return cleanUrl(u);
           }
+          const tracked = extractCanonicalFromTrackingBlob(val);
+          if (tracked) return tracked;
         }
       }
 
-      // 4. Raw HTML fallback
-      const html = card.outerHTML || card.innerHTML || '';
-      const m = html.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
-      if (m) {
-        const u = buildFromUrn(m[1], m[2]);
-        if (u && isValidCanonicalPostUrl(u)) return cleanUrl(u);
+      // 4. Wrapper HTML / text fallback
+      for (const node of collectCardEvidenceNodes(target)) {
+        const html = node.outerHTML || node.innerHTML || '';
+        const m = html.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
+        if (m) {
+          const u = buildFromUrn(m[1], m[2]);
+          if (u && isValidCanonicalPostUrl(u)) return cleanUrl(u);
+        }
+        const tracked = extractCanonicalFromTrackingBlob(html);
+        if (tracked) return tracked;
+        const textTracked = extractCanonicalFromTrackingBlob(node.textContent || '');
+        if (textTracked) return textTracked;
       }
 
       // 5. Emergency extraction from embedded JSON/text blobs.
-      const emergency = extractCanonicalPostUrlFromText(html);
+      const emergency = extractCanonicalPostUrlFromText((target.outerHTML || target.innerHTML || ''));
       if (emergency) return emergency;
 
     } catch(e) {}
@@ -475,7 +755,7 @@ window.__linkedInExtractorReady = true;
             const lbl = (node.getAttribute('aria-label') || '').toLowerCase();
             const n = num(lbl);
             if (n > 0) {
-                if (lbl.includes('reaction') || lbl.includes('like') || lbl.includes('إعجاب') || lbl.includes('other')) likes = Math.max(likes, n);
+                if (lbl.includes('reaction') || lbl.includes('like') || lbl.includes('إعجاب')) likes = Math.max(likes, n);
                 if (lbl.includes('comment') || lbl.includes('تعليق')) postComments = Math.max(postComments, n);
             }
         });
@@ -549,7 +829,14 @@ window.__linkedInExtractorReady = true;
     }
     if (!textSnippet) textSnippet = (el.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 300);
 
-    return { likes, postComments, author, textSnippet };
+    return {
+      likes,
+      postComments,
+      author,
+      textSnippet,
+      postedAtMs: parsePostTimeMsFromCard(el),
+      mediaType: detectMediaTypeFromCard(el)
+    };
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -568,6 +855,11 @@ window.__linkedInExtractorReady = true;
 
     // ── Primary: Direct container discovery (strict single-post containers only) ──
     const cardSelectors = [
+      '.feed-shared-update-v2[role="article"]',
+      '[role="article"][data-urn]',
+      '.occludable-update',
+      '[data-view-name="feed-full-update"]',
+      'li.artdeco-card',
       '.reusable-search__result-container', 
       '.feed-shared-update-v2',
       '.search-entity',
@@ -579,12 +871,14 @@ window.__linkedInExtractorReady = true;
 
     document.querySelectorAll(cardSelectors.join(', ')).forEach(card => {
       try {
-        if (seenCards.has(card)) return;
+        const resolvedCard = resolvePostCard(card);
+        if (!resolvedCard || seenCards.has(resolvedCard) || seenCards.has(card)) return;
         _diag.cards++;
 
-        if (!isLikelySinglePostContainer(card)) { _diag.tooSmall++; return; }
+        if (isAdOrSuggestedBlock(resolvedCard)) return;
+        if (!isLikelySinglePostContainer(resolvedCard)) { _diag.tooSmall++; return; }
 
-        let url = extractUrlFromCard(card);
+        let url = extractUrlFromCard(resolvedCard);
         let cleanedUrl = url ? cleanUrl(url) : null;
 
         if (!cleanedUrl || !isValidCanonicalPostUrl(cleanedUrl)) {
@@ -593,20 +887,22 @@ window.__linkedInExtractorReady = true;
         }
 
         if (seenUrls.has(cleanedUrl)) {
+           seenCards.add(resolvedCard);
            seenCards.add(card);
            _diag.duplicate++;
            return; 
         }
 
         seenUrls.add(cleanedUrl);
+        seenCards.add(resolvedCard);
         seenCards.add(card);
 
         // DO NOT block collection based on commentability.
         // Store the flag for later use by comment-mode, but always collect the post.
-        const isCommentable = checkIsCommentable(card);
+        const isCommentable = checkIsCommentable(resolvedCard);
         if (!isCommentable) _diag.uncommentable++;
 
-        const metrics = extractMetrics(card);
+        const metrics = extractMetrics(resolvedCard);
         
         allPosts.push({
           url: cleanedUrl,
@@ -614,8 +910,10 @@ window.__linkedInExtractorReady = true;
           postComments: metrics.postComments,
           author: metrics.author,
           textSnippet: metrics.textSnippet,
+          postedAtMs: metrics.postedAtMs,
+          mediaType: metrics.mediaType,
           commentable: isCommentable,
-          container: card,
+          container: resolvedCard,
           hasRealUrl: true,
           discoveryIndex: allPosts.length
         });
@@ -631,6 +929,7 @@ window.__linkedInExtractorReady = true;
       try {
         const card = walkUpToCard(btn);
         if (!card || processedCards.has(card) || seenCards.has(card)) continue;
+        if (isAdOrSuggestedBlock(card)) continue;
         processedCards.add(card);
         _diag.btnCards++;
 
@@ -656,6 +955,8 @@ window.__linkedInExtractorReady = true;
           postComments: metrics.postComments,
           author: metrics.author,
           textSnippet: metrics.textSnippet,
+          postedAtMs: metrics.postedAtMs,
+          mediaType: metrics.mediaType,
           commentable: isCommentable,
           container: card,
           hasRealUrl: true,
@@ -667,21 +968,23 @@ window.__linkedInExtractorReady = true;
 
     // Always-on canonical anchor scan: robust against LinkedIn DOM structure changes.
     // This is the primary anti-zero guarantee path.
-    document.querySelectorAll('a[href*="/feed/update/"], a[href*="/posts/"]').forEach(a => {
+    document.querySelectorAll('a[href*="/feed/update/"], a[href*="/posts/"], a[href*="urn:li:activity"], a[href*="urn:li:ugcPost"], a[href*="urn:li:share"]').forEach(a => {
       try {
         const href = a.href || '';
         const postUrl = extractCanonicalFromHref(href);
         if (!postUrl || !isValidCanonicalPostUrl(postUrl) || seenUrls.has(postUrl)) return;
         _diag.anchors++;
         const parentCard = walkUpToCard(a);
-        const finalCard = parentCard || a.closest('article,li,div') || a.parentElement;
+        const finalCard = parentCard || resolvePostCard(a.closest('article,li,div')) || a.parentElement;
+        if (finalCard && isAdOrSuggestedBlock(finalCard)) return;
         seenUrls.add(postUrl);
         if (finalCard) seenCards.add(finalCard);
         const isCommentable = finalCard ? checkIsCommentable(finalCard) : true;
-        const metrics = finalCard ? extractMetrics(finalCard) : { likes: 0, postComments: 0, author: '', textSnippet: '' };
+        const metrics = finalCard ? extractMetrics(finalCard) : { likes: 0, postComments: 0, author: '', textSnippet: '', postedAtMs: 0, mediaType: 'text' };
         allPosts.push({
           url: postUrl, likes: metrics.likes, postComments: metrics.postComments,
           author: metrics.author, textSnippet: metrics.textSnippet,
+          postedAtMs: metrics.postedAtMs, mediaType: metrics.mediaType,
           commentable: isCommentable, container: finalCard, hasRealUrl: true,
           discoveryIndex: allPosts.length
         });
@@ -694,10 +997,11 @@ window.__linkedInExtractorReady = true;
       // ── Tertiary: data-urn attribute elements ──
       document.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn]').forEach(el => {
         try {
-          if (seenCards.has(el)) return;
-          if (!isLikelySinglePostContainer(el)) return;
+          const resolved = resolvePostCard(el) || el;
+          if (seenCards.has(resolved) || seenCards.has(el)) return;
+          if (!isLikelySinglePostContainer(resolved) || isAdOrSuggestedBlock(resolved)) return;
           for (const attr of ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn']) {
-            const v = el.getAttribute(attr) || '';
+            const v = resolved.getAttribute(attr) || el.getAttribute(attr) || '';
           const m = v.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
             if (m) {
               _diag.urnEls++;
@@ -709,13 +1013,15 @@ window.__linkedInExtractorReady = true;
                 : cleanUrl('https://www.linkedin.com/feed/update/urn:li:activity:' + m[2]);
               if (fixed && isValidCanonicalPostUrl(fixed) && !seenUrls.has(fixed)) {
                 seenUrls.add(fixed);
+                seenCards.add(resolved);
                 seenCards.add(el);
-                const isCommentable = checkIsCommentable(el);
-                const metrics = extractMetrics(el);
+                const isCommentable = checkIsCommentable(resolved);
+                const metrics = extractMetrics(resolved);
                 allPosts.push({
                   url: fixed, likes: metrics.likes, postComments: metrics.postComments,
                   author: metrics.author, textSnippet: metrics.textSnippet,
-                  commentable: isCommentable, container: el, hasRealUrl: true,
+                  postedAtMs: metrics.postedAtMs, mediaType: metrics.mediaType,
+                  commentable: isCommentable, container: resolved, hasRealUrl: true,
                   discoveryIndex: allPosts.length
                 });
                 added++;
@@ -734,6 +1040,7 @@ window.__linkedInExtractorReady = true;
           seenUrls.add(emergency);
           allPosts.push({
             url: emergency, likes: 0, postComments: 0, author: 'Unknown', textSnippet: '',
+            postedAtMs: 0, mediaType: 'text',
             commentable: true, container: null, hasRealUrl: true, discoveryIndex: allPosts.length
           });
           added++;
@@ -746,6 +1053,159 @@ window.__linkedInExtractorReady = true;
       console.log(`[v22-harvest] +${added} | cards=${_diag.cards} tooSmall=${_diag.tooSmall} noUrl=${_diag.noUrl} dup=${_diag.duplicate} uncomm=${_diag.uncommentable} | btns=${_diag.btnCards} urns=${_diag.urnEls} anchors=${_diag.anchors} | deep=${deepScan ? 1 : 0}`);
     }
 
+    try { window.__lastHarvestDiag = { ..._diag, added, deepScan, ts: Date.now() }; } catch (e) {}
+    return added;
+  }
+
+  function recordHarvestedPost(card, cleanedUrl, seenUrls, seenCards, allPosts) {
+    if (!cleanedUrl || !isValidCanonicalPostUrl(cleanedUrl) || seenUrls.has(cleanedUrl)) return false;
+    const resolved = resolvePostCard(card) || card;
+    seenUrls.add(cleanedUrl);
+    if (resolved) seenCards.add(resolved);
+    if (card) seenCards.add(card);
+    const isCommentable = resolved ? checkIsCommentable(resolved) : true;
+    const metrics = resolved ? extractMetrics(resolved) : { likes: 0, postComments: 0, author: '', textSnippet: '', postedAtMs: 0, mediaType: 'text' };
+    allPosts.push({
+      url: cleanedUrl,
+      likes: metrics.likes,
+      postComments: metrics.postComments,
+      author: metrics.author,
+      textSnippet: metrics.textSnippet,
+      postedAtMs: metrics.postedAtMs,
+      mediaType: metrics.mediaType,
+      commentable: isCommentable,
+      container: resolved || card || null,
+      hasRealUrl: true,
+      discoveryIndex: allPosts.length
+    });
+    return true;
+  }
+
+  function getVisibleActionCards(limit = 6) {
+    const cards = [];
+    const seen = new Set();
+    for (const { el: btn } of findAllActionButtons()) {
+      const card = walkUpToCard(btn);
+      if (!card || seen.has(card)) continue;
+      const rect = card.getBoundingClientRect ? card.getBoundingClientRect() : { width: 0, height: 0, bottom: 0, top: 0 };
+      if (rect.width < 120 || rect.height < 80) continue;
+      if (rect.bottom < -100 || rect.top > window.innerHeight + 200) continue;
+      seen.add(card);
+      cards.push(card);
+      if (cards.length >= limit) break;
+    }
+    return cards;
+  }
+
+  function findControlMenuTrigger(card) {
+    if (!card) return null;
+    const evidence = collectCardEvidenceNodes(card);
+    for (const node of evidence) {
+      const trigger = node.querySelector?.('.feed-shared-control-menu__trigger, button[aria-label*="control menu" i], button[aria-label^="Open control menu" i], .artdeco-dropdown__trigger[aria-label*="control menu" i]');
+      if (trigger) return trigger;
+    }
+    return null;
+  }
+
+  function getOpenControlMenus(trigger = null) {
+    const menus = [];
+    const seen = new Set();
+    const push = (el) => {
+      if (!el || seen.has(el)) return;
+      const hidden = el.getAttribute?.('aria-hidden');
+      if (hidden === 'true') return;
+      seen.add(el);
+      menus.push(el);
+    };
+
+    try {
+      const controls = trigger?.getAttribute?.('aria-controls');
+      if (controls) push(document.getElementById(controls));
+    } catch (e) {}
+
+    document.querySelectorAll('.artdeco-dropdown__content, [role="menu"], [id^="ember"][class*="dropdown__content"]').forEach(push);
+    return menus;
+  }
+
+  function extractCanonicalFromMenuRoot(root) {
+    if (!root) return null;
+    for (const el of root.querySelectorAll('[data-clipboard-text],[data-share-url],a[href],button,a,[role="menuitem"],div[role="button"]')) {
+      const direct = extractCanonicalFromHref(
+        el.getAttribute('data-clipboard-text') ||
+        el.getAttribute('data-share-url') ||
+        el.getAttribute('href') ||
+        el.href ||
+        ''
+      );
+      if (direct) return direct;
+      const tracked = extractCanonicalFromTrackingBlob(
+        (el.getAttribute('data-clipboard-text') || '') + ' ' +
+        (el.getAttribute('data-share-url') || '') + ' ' +
+        (el.getAttribute('href') || '') + ' ' +
+        (el.outerHTML || '')
+      );
+      if (tracked) return tracked;
+    }
+    const htmlTracked = extractCanonicalFromTrackingBlob(root.outerHTML || root.innerHTML || '');
+    if (htmlTracked) return htmlTracked;
+    return extractCanonicalPostUrlFromText(root.outerHTML || root.innerHTML || '');
+  }
+
+  async function closeOpenMenus() {
+    try { document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape', code: 'Escape' })); } catch (e) {}
+    try { document.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'Escape', code: 'Escape' })); } catch (e) {}
+    await sleep(120);
+  }
+
+  async function resolveUrlViaControlMenu(card) {
+    const trigger = findControlMenuTrigger(card);
+    if (!trigger) return null;
+
+    try { trigger.scrollIntoView({ block: 'center', behavior: 'auto' }); } catch (e) {}
+    await sleep(120);
+
+    try { trigger.click(); } catch (e) {}
+    try {
+      trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    } catch (e) {}
+
+    await sleep(220);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const roots = getOpenControlMenus(trigger);
+      for (const root of roots) {
+        const found = extractCanonicalFromMenuRoot(root);
+        if (found) {
+          await closeOpenMenus();
+          return cleanUrl(found);
+        }
+      }
+      await sleep(120);
+    }
+
+    await closeOpenMenus();
+    return null;
+  }
+
+  async function activeHarvestVisibleCards(seenUrls, seenCards, allPosts, limit = 4) {
+    let added = 0;
+    const cards = getVisibleActionCards(limit);
+    for (const card of cards) {
+      let url = extractUrlFromCard(card);
+      let cleanedUrl = url ? cleanUrl(url) : null;
+      if (!cleanedUrl || !isValidCanonicalPostUrl(cleanedUrl)) {
+        cleanedUrl = await resolveUrlViaControlMenu(card);
+      }
+      if (!cleanedUrl || !isValidCanonicalPostUrl(cleanedUrl)) continue;
+      if (recordHarvestedPost(card, cleanedUrl, seenUrls, seenCards, allPosts)) {
+        added++;
+      }
+      await sleep(120);
+    }
+    if (added > 0) {
+      console.log('[SearchOnly] active menu harvest added=' + added + ' visibleCards=' + cards.length + ' totalUrls=' + seenUrls.size);
+    }
     return added;
   }
 
@@ -786,7 +1246,7 @@ window.__linkedInExtractorReady = true;
   function domSignalSnapshot() {
     return {
       h: Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0),
-      cards: document.querySelectorAll('.reusable-search__result-container,.feed-shared-update-v2,article').length
+      cards: document.querySelectorAll('.reusable-search__result-container,.feed-shared-update-v2,article,.occludable-update,[data-view-name="feed-full-update"],li.artdeco-card').length
     };
   }
 
@@ -848,6 +1308,84 @@ window.__linkedInExtractorReady = true;
       return posts;
   }
 
+  function reachScoreUi(p) {
+    return (Number(p.likes) || 0) + (Number(p.postComments) || Number(p.comments) || 0);
+  }
+
+  function commentCampaignScore(post) {
+    const likes = Number(post?.likes) || 0;
+    const commentsCount = Number(post?.postComments) || Number(post?.comments) || 0;
+    const reach = likes + commentsCount;
+    const pos = Number(post?.discoveryIndex ?? 999999);
+    const recency = Number(post?.postedAtMs) || 0;
+    const strong =
+      reach >= 5 ||
+      (reach > 0 && pos < 12);
+    return {
+      reach,
+      commentsCount,
+      pos,
+      recency,
+      strong,
+      sortScore: (reach * 1000000) + (commentsCount * 1000) + Math.max(0, 500 - pos)
+    };
+  }
+
+  /** Comment-campaign ranking: exclude previously used URLs, prefer strong reach, then comments/recency/first seen. */
+  function rankPostsForCommentCampaign(posts, opts = {}) {
+    const excluded = new Set(
+      Array.from(opts.excludeUrls || [])
+        .map(u => cleanUrl(u))
+        .filter(Boolean)
+        .map(u => u.split('?')[0])
+    );
+    const pool = posts.filter(p =>
+      p.url && isValidCanonicalPostUrl(p.url) &&
+      (p.hasRealUrl || (p.url && !p.url.startsWith('discovered:') && !p.url.includes('synthetic:'))) &&
+      p.commentable !== false
+    );
+    const byUrl = new Map();
+    for (const p of pool) {
+      const u = cleanUrl(p.url).split('?')[0];
+      if (!u || excluded.has(u)) continue;
+      if (!byUrl.has(u)) byUrl.set(u, p);
+    }
+    const arr = Array.from(byUrl.values());
+    const scored = arr.map(p => ({ p, s: commentCampaignScore(p) }));
+    const need = Math.max(1, Number(opts.need) || 2);
+    const strongEnough = scored.filter(x => x.s.strong);
+    const firstSeen = (p) => Number(p.discoveryIndex ?? 999999);
+    scored.sort((a, b) => {
+      if (a.s.strong !== b.s.strong) return Number(b.s.strong) - Number(a.s.strong);
+      if (a.s.reach !== b.s.reach) return b.s.reach - a.s.reach;
+      if (a.s.commentsCount !== b.s.commentsCount) return b.s.commentsCount - a.s.commentsCount;
+      if (a.s.recency !== b.s.recency) return b.s.recency - a.s.recency;
+      if (a.s.pos !== b.s.pos) return a.s.pos - b.s.pos;
+      return firstSeen(a.p) - firstSeen(b.p);
+    });
+    const strongRanked = strongEnough
+      .slice()
+      .sort((a, b) => {
+        if (a.s.reach !== b.s.reach) return b.s.reach - a.s.reach;
+        if (a.s.commentsCount !== b.s.commentsCount) return b.s.commentsCount - a.s.commentsCount;
+        if (a.s.recency !== b.s.recency) return b.s.recency - a.s.recency;
+        if (a.s.pos !== b.s.pos) return a.s.pos - b.s.pos;
+        return firstSeen(a.p) - firstSeen(b.p);
+      })
+      .map(x => x.p);
+
+    if (opts.requireStrong && strongRanked.length >= need) {
+      return strongRanked;
+    }
+
+    return scored.map(x => x.p);
+  }
+
+  function pickTopReachCommentTargets(posts, need, opts = {}) {
+    const n = Math.max(1, parseInt(String(need), 10) || 2);
+    return rankPostsForCommentCampaign(posts, { ...opts, need: n }).slice(0, n);
+  }
+
   // ═══════════════════════════════════════════════════════════
   // MAIN PIPELINE
   // ═══════════════════════════════════════════════════════════
@@ -857,7 +1395,7 @@ window.__linkedInExtractorReady = true;
         throw new Error('EXTRACTION_CANCELLED');
       }
     };
-    const isSearchOnly = settings.searchOnlyMode === true;
+    const isSearchOnly = settings.searchOnlyMode === true || settings.engineMode === 'SEARCH_ONLY';
     const passIndex = settings.passIndex || 0;
     const priorPosts = settings.priorPosts || [];
     const seenUrls = new Set(priorPosts.map(p => p.url).filter(Boolean));
@@ -980,26 +1518,163 @@ window.__linkedInExtractorReady = true;
     console.log('[v18] Initial harvest: +' + initCount + ' (total=' + allPosts.length + ', real=' + countReal(allPosts) + ')');
     heartbeat('Phase1-Init', '✅ Initial: ' + countReal(allPosts) + ' real posts');
 
-    // ── Step 4: Scroll loop — CAPPED AT 100/150 SCANNED RESULTS ──
-    const STALL_LIMIT = 10;
-    const SCANNED_RESULTS_LIMIT = 300; 
-    const ABSOLUTE_SAFETY_LIMIT = 100;
-    let stallCount = 0;
-    let exhaustedRounds = 0;
+    // ── Step 4: Scroll / harvest ──
+    // Comment campaign: ≤30 passes; stop as soon as N distinct top-by-reach targets exist (no extra scrolling).
+    // Search-only: up to 100 steps + incremental sync + stall recovery.
+    const isCommentCampaign = !isSearchOnly && Array.isArray(comments) && comments.length > 0;
+    const COMMENT_SCROLL_STEPS = 30;
+    const COMMENT_MIN_EVAL_SCROLLS = 6;
+    let commentScrollPassesUsed = 0;
+
+    if (isCommentCampaign) {
+      let commentedHistory = [], usedCommentHistory = [];
+      try {
+        const s = await chrome.storage.local.get(['commentedPosts', 'usedCommentIds']);
+        commentedHistory = s.commentedPosts || [];
+        usedCommentHistory = s.usedCommentIds || [];
+      } catch(e) {}
+      const commentedSet = new Set(commentedHistory.map(u => cleanUrl(u)).filter(Boolean));
+      const usedCommentSet = new Set(usedCommentHistory);
+      const commentNeed = Math.max(1, comments.length);
+      const haveEnoughTargets = () => pickTopReachCommentTargets(allPosts, commentNeed, { excludeUrls: commentedSet }).length >= commentNeed;
+
+      heartbeat(
+        'Phase1-Scroll',
+        `CommentCampaign: ≤${COMMENT_SCROLL_STEPS} scrolls — stop early when ${commentNeed} distinct posts (reach) — then comment`
+      );
+      if (typeof window.__lastSeenSize === 'undefined') window.__lastSeenSize = seenUrls.size;
+
+      if (haveEnoughTargets()) {
+        console.log('[CommentCampaign] targets ready after initial harvest (0 scroll passes)');
+        heartbeat('Phase1-Scroll', `✅ ${commentNeed} targets ready before scroll loop`);
+      } else {
+        for (let step = 0; step < COMMENT_SCROLL_STEPS; step++) {
+          commentScrollPassesUsed = step + 1;
+          ensureActiveRun();
+          harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+          if (commentScrollPassesUsed >= COMMENT_MIN_EVAL_SCROLLS && haveEnoughTargets()) {
+            console.log('[CommentCampaign] early stop scroll pass=' + commentScrollPassesUsed + '/' + COMMENT_SCROLL_STEPS);
+            heartbeat('Phase1-Scroll', `✅ ${commentNeed} targets after ${commentScrollPassesUsed} pass(es)`);
+            break;
+          }
+          aggressiveScroll(500 + Math.floor(Math.random() * 450));
+          await wait(450, 900);
+          if (step % 5 === 4) {
+            await clickShowMore();
+            await wait(400, 700);
+            harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+            if (commentScrollPassesUsed >= COMMENT_MIN_EVAL_SCROLLS && haveEnoughTargets()) {
+              console.log('[CommentCampaign] early stop after show-more pass=' + (step + 1));
+              break;
+            }
+          }
+        }
+      }
+      while (commentScrollPassesUsed < COMMENT_MIN_EVAL_SCROLLS) {
+        ensureActiveRun();
+        commentScrollPassesUsed++;
+        aggressiveScroll(420 + Math.floor(Math.random() * 260));
+        await wait(420, 780);
+        harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+      }
+      harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+      const rankedPreview = rankPostsForCommentCampaign(allPosts, { excludeUrls: commentedSet, need: commentNeed });
+      console.log('[CommentCampaign] scrollPasses=' + commentScrollPassesUsed + ' rankedDistinct=' + rankedPreview.length + ' need=' + commentNeed + ' keyword="' + keyword + '" excluded=' + commentedSet.size);
+    } else {
+    const SEARCH_SCROLL_TARGET = 80;
+    const SEARCH_ONLY_SAVE_TARGET = 10;
+    const SEARCH_PROGRESS_BATCH = 10;
     let step = 0;
     let lastIncrementalSyncAtStep = -1;
-    const START_TIME = Date.now();
-    const HARD_TIMEOUT_MS = 1500000; // 25 minutes absolute cap
+    let totalSavedIncremental = 0;
+    let noGrowthSteps = 0;
+    let lastActiveHarvestStep = -99;
 
-    heartbeat('Phase1-Scroll', '📜 Scrolling until up to 100 results scanned...');
+    const getUnsyncedRealPosts = () => allPosts.filter(p =>
+      p.url &&
+      p.hasRealUrl &&
+      !syncedUrls.has(p.url) &&
+      isValidCanonicalPostUrl(cleanUrl(p.url))
+    );
 
-    while (step < ABSOLUTE_SAFETY_LIMIT) {
+    const scoreSearchOnlyQuality = p => {
+      const likes = Number(p.likes) || 0;
+      const commentsCount = Number(p.postComments ?? p.comments) || 0;
+      const reach = likes + commentsCount;
+      const pos = Number(p.discoveryIndex ?? 999);
+      const isMediumOrHigh =
+        reach >= 5 ||
+        pos < 10 ||
+        (reach > 0 && pos < 25);
+      return {
+        reach,
+        isMediumOrHigh,
+        sortScore: (reach * 1000) - pos
+      };
+    };
+
+    const rankUnsyncedSearchOnlyPosts = () => {
+      return getUnsyncedRealPosts()
+        .map(p => ({ p, q: scoreSearchOnlyQuality(p) }))
+        .sort((a, b) => {
+          if (a.q.isMediumOrHigh !== b.q.isMediumOrHigh) return Number(b.q.isMediumOrHigh) - Number(a.q.isMediumOrHigh);
+          if (a.q.reach !== b.q.reach) return b.q.reach - a.q.reach;
+          return (a.p.discoveryIndex ?? 999999) - (b.p.discoveryIndex ?? 999999);
+        });
+    };
+
+    const getUnsyncedQualityPosts = () => {
+      return rankUnsyncedSearchOnlyPosts()
+        .filter(x => x.q.isMediumOrHigh && x.q.reach > 0 || (x.q.isMediumOrHigh && (x.p.discoveryIndex ?? 999) < 12))
+        .sort((a, b) => b.q.sortScore - a.q.sortScore)
+        .map(x => x.p);
+    };
+
+    async function flushSearchOnlyBatch(force = false) {
       ensureActiveRun();
-      const elapsed = Date.now() - START_TIME;
-      if (elapsed > HARD_TIMEOUT_MS) {
-        console.warn(`[v18] ⏰ Hard 20-minute timeout reached. Stopping scroll.`);
-        break;
+      const qualityUnsynced = getUnsyncedQualityPosts();
+      const minBatchSize = force
+        ? 1
+        : ((step - lastIncrementalSyncAtStep >= 5) ? 1 : 2);
+      if (qualityUnsynced.length === 0 || (!force && qualityUnsynced.length < minBatchSize)) {
+        return { savedCount: 0, candidateCount: qualityUnsynced.length };
       }
+
+      const batch = qualityUnsynced.slice(0, Math.min(12, qualityUnsynced.length));
+      const serializedChunk = batch.map(p => ({
+        url: p.url,
+        likes: p.likes,
+        postComments: p.postComments,
+        author: p.author,
+        textSnippet: p.textSnippet,
+        postedAtMs: p.postedAtMs,
+        mediaType: p.mediaType,
+        commentable: p.commentable || false,
+        hasRealUrl: true,
+        discoveryIndex: p.discoveryIndex
+      }));
+
+      const savedCount = await syncPosts(serializedChunk, keyword, dashboardUrl, userId, linkedInProfileId, false, {
+        SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS,
+        SEARCH_ONLY_LOOSE_INCREMENTAL: true
+      });
+
+      if (savedCount > 0) {
+        batch.slice(0, Math.min(savedCount, batch.length)).forEach(p => syncedUrls.add(p.url));
+        totalSavedIncremental += savedCount;
+      }
+      lastIncrementalSyncAtStep = step;
+      console.log('[SearchOnly] incremental save keyword="' + keyword + '" candidates=' + batch.length + ' saved=' + savedCount + ' totalSaved=' + totalSavedIncremental);
+      heartbeat('Phase1-Stream', `Saved ${totalSavedIncremental} posts so far`);
+      return { savedCount, candidateCount: qualityUnsynced.length };
+    }
+
+    console.log('[SearchOnly] keyword="' + keyword + '" forcedScrolls=' + SEARCH_SCROLL_TARGET + ' mode=deep-scan');
+    heartbeat('Phase1-Scroll', `Search-only: forced ${SEARCH_SCROLL_TARGET} scrolls with incremental saving`);
+
+    while (step < SEARCH_SCROLL_TARGET) {
+      ensureActiveRun();
+      const seenBeforeStep = seenUrls.size;
 
       const scrollAmt = 1000 + Math.floor(Math.random() * 700);
       const beforeDom = domSignalSnapshot();
@@ -1007,153 +1682,107 @@ window.__linkedInExtractorReady = true;
       const grew = await waitForDomGrowth(beforeDom, 900);
       if (!grew) await wait(150, 350);
 
-      const doDeepScan = true;
-      harvest(seenUrls, seenCards, allPosts, { deepScan: doDeepScan });
+      harvest(seenUrls, seenCards, allPosts, { deepScan: true });
 
-      // Every 3rd step, click Load More aggressively
       if (step % 3 === 2) {
         scrollToBottom();
         await wait(180, 420);
-        await clickShowMore(); 
+        await clickShowMore();
         harvest(seenUrls, seenCards, allPosts, { deepScan: true });
       }
 
-      // Stall detection: TRACK DISCOVERED URLS, NOT DOM SIZE
-      const currentSeenSize = seenUrls.size;
-      if (typeof window.__lastSeenSize === 'undefined') window.__lastSeenSize = 0;
-      
-      if (currentSeenSize > window.__lastSeenSize) {
-        stallCount = 0;
-        window.__lastSeenSize = currentSeenSize;
-      } else {
-        stallCount++;
+      let currentSeenSize = seenUrls.size;
+      let real = countReal(allPosts);
+      let qualityUnsyncedCount = getUnsyncedQualityPosts().length;
+      noGrowthSteps = currentSeenSize > seenBeforeStep ? 0 : (noGrowthSteps + 1);
+
+      const lastDiag = window.__lastHarvestDiag || null;
+      const shouldActiveHarvest =
+        lastDiag &&
+        (lastDiag.btnCards || 0) > 0 &&
+        (step - lastActiveHarvestStep >= 3) &&
+        (
+          step < 4 ||
+          noGrowthSteps >= 2 ||
+          qualityUnsyncedCount < 2 ||
+          ((step + 1) % SEARCH_PROGRESS_BATCH === 0)
+        );
+
+      if (shouldActiveHarvest) {
+        const activeAdded = await activeHarvestVisibleCards(
+          seenUrls,
+          seenCards,
+          allPosts,
+          currentSeenSize < 4 ? 4 : 2
+        );
+        if (activeAdded > 0) noGrowthSteps = 0;
+        lastActiveHarvestStep = step;
+        currentSeenSize = seenUrls.size;
+        real = countReal(allPosts);
+        qualityUnsyncedCount = getUnsyncedQualityPosts().length;
       }
 
-      const real = countReal(allPosts);
-      console.log('[v18] Scroll ' + (step + 1) + ' | Scanned: ' + currentSeenSize + ' | Real: ' + real + ' | Stall: ' + stallCount + '/' + STALL_LIMIT);
-      heartbeat('Phase1-Scroll', '📜 Scrolled ' + step + ' | ' + real + ' posts');
+      console.log('[SearchOnly] keyword="' + keyword + '" scroll=' + (step + 1) + ' / ' + SEARCH_SCROLL_TARGET + ' distinctUrls=' + currentSeenSize + ' realPosts=' + real + ' validQuality=' + qualityUnsyncedCount + ' saved=' + totalSavedIncremental);
+      heartbeat(`Phase1-Scroll`, `scroll ${step + 1} / ${SEARCH_SCROLL_TARGET} | URLs ${currentSeenSize} | valid ${qualityUnsyncedCount} | saved ${totalSavedIncremental}`);
 
-      // Stall handling
-      if (stallCount >= STALL_LIMIT) {
-        console.log('[v18] Stall at ' + stallCount + '. Trying Show More...');
-        const seenBeforeRecovery = seenUrls.size;
-        
-        const clicked = await clickShowMore();
-        if (clicked) {
-           await wait(700, 1200);
-           harvest(seenUrls, seenCards, allPosts, { deepScan: true });
-           if (seenUrls.size > seenBeforeRecovery) {
-               stallCount = 0;
-               continue;
-           } else {
-               console.log('[v18] Clicked Show More but no new posts found. Continuing to hard recovery...');
-           }
-        }
-
-        console.log('[v18] No Show More. Recovery scroll...');
-        
-        window.scrollTo({ top: 0, behavior: 'auto' });
-        await wait(300, 700);
-        harvest(seenUrls, seenCards, allPosts, { deepScan: true });
-        for (let r = 0; r < 5; r++) {
-           aggressiveScroll(1500);
-           await wait(350, 700);
-           harvest(seenUrls, seenCards, allPosts, { deepScan: r % 2 === 0 });
-        }
-        
-        const seenAfterRecovery = seenUrls.size;
-        if (seenAfterRecovery <= seenBeforeRecovery) {
-           console.log('[v18] Recovery found no new URLs. Attempting ultimate hard-refresh scroll...');
-           // Ultimate fallback to force LinkedIn's lazy loader
-           for (let r = 0; r < 8; r++) {
-               window.scrollTo(0, document.body.scrollHeight);
-               await wait(400, 800);
-               window.scrollTo(0, document.body.scrollHeight - 2000);
-               await wait(200, 450);
-           }
-           harvest(seenUrls, seenCards, allPosts, { deepScan: true });
-           if (seenUrls.size <= seenAfterRecovery) {
-               const currentReal = countReal(allPosts);
-               exhaustedRounds++;
-               console.log(`[v18] Exhausted attempt ${exhaustedRounds} with ${currentReal} posts. Continuing toward 100-scroll limit.`);
-               for (let z = 0; z < 6; z++) {
-                 aggressiveScroll(1100);
-                 await wait(300, 650);
-                 harvest(seenUrls, seenCards, allPosts, { deepScan: true });
-               }
-           } else {
-               exhaustedRounds = 0;
-           }
-        }
-        stallCount = 0;
-        window.__lastSeenSize = seenUrls.size;
-      }
-      step++;
-      
-      if (seenUrls.size >= SCANNED_RESULTS_LIMIT) {
-        console.log('[v18] URL discovery pool reached limit; continuing to 100 scrolls for consistency.');
-      }
-
-      // ── HIGH-QUALITY INCREMENTAL SAVE ──
-      // Automatically save HIGH-REACH posts in real-time.
-      // Posts that do not perfectly match constraints are pooled until the final 
-      // fallback calculation at the end, ensuring they are globally scored.
-      if (isSearchOnly) {
-          ensureActiveRun();
-          const unsynced = allPosts.filter(p => p.hasRealUrl && !syncedUrls.has(p.url));
-
-          // Keep quality strict in real-time streaming: only high/mid quality
-          // (no low/unknown filler during incremental saves).
-          const qualityCandidates = unsynced.filter(p => {
-              const likes = p.likes || 0;
-              const comms = p.postComments || p.comments || 0;
-              const engagement = likes + comms;
-              const pos = p.discoveryIndex ?? 999;
-              const inUserRange =
-                likes >= SETTINGS_MIN_LIKES && likes <= SETTINGS_MAX_LIKES &&
-                comms >= SETTINGS_MIN_COMMENTS && comms <= SETTINGS_MAX_COMMENTS;
-              const isHigh = engagement >= 20 || likes >= 15 || comms >= 8;
-              const isMid = engagement >= 5 || likes >= 4 || comms >= 2;
-              // If metrics are not rendered yet (0/0), trust early discovery position
-              // so real-time sync still persists real posts while scrolling.
-              const posHighOrMid = engagement === 0 && pos < 40;
-              return (inUserRange && (isHigh || isMid)) || posHighOrMid;
-          });
-
-          // Stream in small real-time batches to avoid waiting until end of scroll.
-          // Also force a flush every few steps if at least one candidate exists.
-          const shouldFlushNow =
-            qualityCandidates.length >= 3 ||
-            (qualityCandidates.length > 0 && step - lastIncrementalSyncAtStep >= 4);
-
-          if (shouldFlushNow) {
-              const batch = qualityCandidates
-                .sort((a, b) => ((b.likes || 0) + (b.postComments || 0)) - ((a.likes || 0) + (a.postComments || 0)))
-                .slice(0, 8);
-
-              const serializedChunk = batch.map(p => ({
-                  url: p.url, likes: p.likes, postComments: p.postComments,
-                  author: p.author, textSnippet: p.textSnippet,
-                  commentable: p.commentable || false, hasRealUrl: true,
-                  discoveryIndex: p.discoveryIndex
-              }));
-
-              const savedCount = await syncPosts(serializedChunk, keyword, dashboardUrl, userId, linkedInProfileId, false, {
-                SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS
-              });
-              if (savedCount > 0) {
-                batch.slice(0, savedCount).forEach(p => syncedUrls.add(p.url));
-              }
-              lastIncrementalSyncAtStep = step;
-              console.log(`[v29] Incremental sync: attempted ${batch.length}, saved ${savedCount}. Total streamed: ${syncedUrls.size}`);
-              heartbeat('Phase1-Stream', `📤 Live saved ${syncedUrls.size} high/mid posts so far...`);
+      if ((step + 1) % SEARCH_PROGRESS_BATCH === 0) {
+        const batchQuality = getUnsyncedQualityPosts().length;
+        if (batchQuality < 2) {
+          console.warn('[SearchOnly] low yield after scroll batch ' + (step + 1) + '/' + SEARCH_SCROLL_TARGET + ' — widening harvest/retrying');
+          for (let retry = 0; retry < 3; retry++) {
+            aggressiveScroll(320 + Math.floor(Math.random() * 180));
+            await wait(240, 420);
+            harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+            if (retry === 1) {
+              await clickShowMore();
+              await wait(250, 420);
+              harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+            }
+            if (
+              ((window.__lastHarvestDiag?.btnCards || 0) > 0) &&
+              (retry === 2 || noGrowthSteps >= 2)
+            ) {
+              const retryAdded = await activeHarvestVisibleCards(
+                seenUrls,
+                seenCards,
+                allPosts,
+                seenUrls.size < 4 ? 3 : 2
+              );
+              if (retryAdded > 0) noGrowthSteps = 0;
+              lastActiveHarvestStep = step;
+            }
           }
+          const refreshedQuality = getUnsyncedQualityPosts().length;
+          console.log('[SearchOnly] post-retry batch quality count=' + refreshedQuality + ' after scroll ' + (step + 1));
+        }
       }
-    }
-    console.log(`[v18] 📜 Reached max scroll steps: ${ABSOLUTE_SAFETY_LIMIT}. Finishing keyword.`);
-    heartbeat('Phase1-Limit', '✅ 100 scroll limit reached. Moving to next keyword.');
 
-    // ── Step 5: Active HTTP Validation (on ALL posts, once, after scrolling) ──
+      if (isSearchOnly) {
+        ensureActiveRun();
+        const qualityUnsynced = getUnsyncedQualityPosts();
+        const shouldFlushNow =
+          qualityUnsynced.length >= 3 ||
+          (qualityUnsynced.length >= 2 && step - lastIncrementalSyncAtStep >= 2) ||
+          (qualityUnsynced.length >= 1 && step - lastIncrementalSyncAtStep >= 5);
+
+        if (shouldFlushNow) {
+          await flushSearchOnlyBatch(false);
+          if (totalSavedIncremental >= SEARCH_ONLY_SAVE_TARGET) {
+            console.log('[SearchOnly] save target reached keyword="' + keyword + '" totalSaved=' + totalSavedIncremental + ' at scroll=' + (step + 1) + ' — stopping early');
+            heartbeat('Phase1-Target', `Search-only target reached (${totalSavedIncremental}/${SEARCH_ONLY_SAVE_TARGET}) | stopping early`);
+            break;
+          }
+        }
+      }
+
+      step++;
+    }
+    await flushSearchOnlyBatch(true);
+    console.log('[SearchOnly] scroll loop done steps=' + step + ' keyword="' + keyword + '" totalSaved=' + totalSavedIncremental);
+    heartbeat('Phase1-Limit', `Search-only scroll finished (${step}/${SEARCH_SCROLL_TARGET}) | saved ${totalSavedIncremental}`);
+    } // end search-only deep scroll branch
+
+    // ── Step 5: Single validation pass (after all scrolling; no loops) ──
     console.log(`[v22] 📊 PRE-VALIDATION: ${allPosts.length} total posts, ${countReal(allPosts)} real`);
     heartbeat('Phase1-Validate', `🛡️ Actively verifying ${allPosts.length} posts...`);
     ensureActiveRun();
@@ -1165,22 +1794,23 @@ window.__linkedInExtractorReady = true;
     console.log('[v22] ══ FINAL: ' + totalReal + ' real / ' + validPosts.length + ' total (' + newPosts + ' new this pass) ══');
     heartbeat('Phase1-Done', '✅ Extraction finished: ' + totalReal + ' real posts');
 
-    // ── Step 6: Serialize with discoveryIndex for position-based quality boosting ──
+    const needsCommenting = !isSearchOnly && comments && comments.length > 0;
+    const syncConstraints = {
+      SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS,
+      SKIP_KEYWORD_GATE_FOR_FINAL: needsCommenting,
+      SEARCH_ONLY_SKIP_HTTP_VERIFY: isSearchOnly === true
+    };
+
+    // ── Step 6: Serialize (search-only: full pool; comment: top-by-reach targets only) ──
     const remainingPosts = validPosts.filter(p => !syncedUrls.has(p.url));
-    const serializedPosts = remainingPosts.map(p => ({
+    let serializedPosts = remainingPosts.map(p => ({
       url: p.url, likes: p.likes, postComments: p.postComments,
       author: p.author, textSnippet: p.textSnippet,
       commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
       discoveryIndex: p.discoveryIndex
     }));
 
-    const needsCommenting = !isSearchOnly && comments && comments.length > 0;
-
     // ── Step 7: Comment or sync ──
-    // v19 FIX: We removed PASS_DONE completely to guarantee ONE stable extraction cycle.
-    // All extracted posts from this single deep pass are now ALWAYS saved.
-    // v20 FIX: Posts are streamed progressively during scrolling for real-time visibility.
-    // Final authoritative sync here ensures validated posts replace any broken ones.
     if (needsCommenting) {
       let commentedHistory = [], usedCommentHistory = [];
       try {
@@ -1188,65 +1818,211 @@ window.__linkedInExtractorReady = true;
         commentedHistory = s.commentedPosts || [];
         usedCommentHistory = s.usedCommentIds || [];
       } catch(e) {}
-      const commentedSet = new Set(commentedHistory);
+      const commentedSet = new Set(commentedHistory.map(u => cleanUrl(u)).filter(Boolean));
       const usedCommentSet = new Set(usedCommentHistory);
 
       let availableComments = comments.filter(c => !usedCommentSet.has(c.id));
+      if (availableComments.length === 0) availableComments = comments.slice();
       if (availableComments.length === 0) {
-        await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
-        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: comments.length, assignedCommentsCount: comments.length, searchOnlyMode: false });
+        safeSend({ action: 'JOB_FAILED', reason: 'COMMENT_TEXT_MISSING', commentsPostedCount: 0, assignedCommentsCount: 2, searchOnlyMode: false, postsExtracted: countReal(validPosts), keyword });
         return;
       }
 
-      const requiredComments = availableComments.length;
-      heartbeat('Phase2', '📊 Selecting targets...');
+      const requiredComments = 2;
+      const commentTextsForCycle = [];
+      for (let i = 0; i < requiredComments; i++) {
+        const slot = availableComments[i % availableComments.length];
+        commentTextsForCycle.push(String(slot?.text || '').trim());
+      }
+      if (commentTextsForCycle.some(t => !t)) {
+        safeSend({ action: 'JOB_FAILED', reason: 'COMMENT_TEXT_MISSING', commentsPostedCount: 0, assignedCommentsCount: requiredComments, searchOnlyMode: false, postsExtracted: countReal(validPosts), keyword });
+        return;
+      }
+      const cycleNum = Number(settings.commentCycleNumber) || 1;
+      const rankedAll = rankPostsForCommentCampaign(validPosts, { excludeUrls: commentedSet, need: requiredComments });
 
-      const pool = validPosts.filter(p =>
-        p.container && document.contains(p.container) &&
-        !commentedSet.has(p.url) && p.commentable
-      );
-      const targets = pool.sort((a, b) => (b.likes + b.postComments) - (a.likes + a.postComments)).slice(0, requiredComments * 3);
-
-      if (targets.length === 0) {
-        await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
-        safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: requiredComments, searchOnlyMode: false });
+      if (rankedAll.length < requiredComments) {
+        console.log('[CommentCampaign] CYCLE_INSUFFICIENT_TARGETS ranked=' + rankedAll.length + ' need=' + requiredComments + ' cycle=' + cycleNum);
+        safeSend({
+          action: 'JOB_FAILED',
+          reason: 'CYCLE_INSUFFICIENT_TARGETS',
+          insufficientRetryPass: settings.insufficientRetryPass === true,
+          commentsPostedCount: 0,
+          assignedCommentsCount: requiredComments,
+          searchOnlyMode: false,
+          postsExtracted: countReal(validPosts),
+          keyword,
+          commentCycleNumber: cycleNum,
+          commentScrollPassesUsed
+        });
         return;
       }
 
-      heartbeat('Phase3', '⌨️ Posting comments...');
+      const strongAvailable = rankedAll.filter(p => commentCampaignScore(p).strong).length;
+      const rankedPreviewSummary = rankedAll
+        .slice(0, requiredComments)
+        .map((p, idx) => `#${idx + 1}:${reachScoreUi(p)}@${cleanUrl(p.url).slice(0, 80)}`)
+        .join(' | ');
+      console.log('[CommentCampaign] cycle=' + cycleNum + ' selected=' + rankedPreviewSummary + ' strongAvailable=' + strongAvailable + ' fallbackUsed=' + (strongAvailable < requiredComments ? 1 : 0));
+      heartbeat('Phase2', `CommentCampaign cycle ${cycleNum}: strict top-${requiredComments} by reach`);
+      serializedPosts = rankedAll.slice(0, requiredComments).map(p => ({
+        url: p.url, likes: p.likes, postComments: p.postComments,
+        author: p.author, textSnippet: p.textSnippet,
+        commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
+        discoveryIndex: p.discoveryIndex
+      }));
+      heartbeat('Phase4', 'Preparing strict top-2 execution plan...');
+      await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, syncConstraints);
+
+      const executionPlan = rankedAll.slice(0, requiredComments).map((target, idx) => ({
+        targetUrl: target.url,
+        commentText: commentTextsForCycle[idx],
+        commentId: availableComments[idx % availableComments.length]?.id || null
+      }));
+
+      heartbeat('Phase3', 'Posting comments (strict top-2 flow)…');
+      safeSend({
+        action: 'EXECUTE_COMMENT_PLAN',
+        keyword,
+        commentCycleNumber: cycleNum,
+        commentScrollPassesUsed,
+        postsExtracted: countReal(validPosts),
+        assignedCommentsCount: requiredComments,
+        executionPlan
+      });
+      return;
+
+      heartbeat('Phase3', '⌨️ Posting comments (strict top-2 flow)…');
       let posted = 0, ci = 0, blocked = false;
-      for (const target of targets) {
-        if (ci >= requiredComments || blocked) break;
-        if (!target.container || !document.contains(target.container)) continue;
-        const r = await tryPostComment(target.container, availableComments[ci].text, target.url);
+      let rankIdx = 0;
+      let commentsAttempted = 0;
+      let commentsFailed = 0;
+      while (ci < requiredComments && !blocked && rankIdx < rankedAll.length) {
+        const target = rankedAll[rankIdx++];
+        let liveCard =
+          (target.container && document.contains(target.container) ? target.container : null) ||
+          findLivePostContainerByUrl(target.url);
+        if (!liveCard) {
+          console.warn('[CommentCampaign] Re-anchor card…', (target.url || '').slice(0, 96));
+          liveCard = await locateLiveContainerForPostUrl(target.url, 10);
+        }
+        if (!liveCard) {
+          console.warn('[CommentCampaign] No live DOM card — try next ranked post.');
+          commentsFailed++;
+          continue;
+        }
+        commentsAttempted++;
+        const r = await tryPostCommentWithRetries(liveCard, commentTextsForCycle[ci], target.url, 1);
         if (r === 'BLOCKED') { blocked = true; break; }
         if (r === 'SUCCESS') {
-          posted++; ci++;
+          posted++;
           commentedSet.add(target.url);
           try {
             commentedHistory = [...commentedHistory, target.url].slice(-200);
-            usedCommentHistory = [...usedCommentHistory, availableComments[ci - 1].id].slice(-100);
+            const usedId = availableComments[ci % availableComments.length]?.id;
+            if (usedId) usedCommentHistory = [...usedCommentHistory, usedId].slice(-100);
             await chrome.storage.local.set({ commentedPosts: commentedHistory, usedCommentIds: usedCommentHistory });
           } catch(e) {}
-          if (ci < requiredComments) await wait(8000, 15000);
+          ci++;
+          if (ci < requiredComments) await wait(1000, 2000);
+        } else {
+          commentsFailed++;
         }
       }
 
-      heartbeat('Phase4', '📤 Syncing...');
-      await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
-      
-      // ISSUE 2 FIX: Single-Pass Coverage
-      // Complete extraction locally within 100 scrolls.
-      console.log(`[v21] ✅ Keyword extraction complete.`);
-      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: posted, assignedCommentsCount: requiredComments, searchOnlyMode: false, linkedinBlocked: blocked });
+      console.log('[CommentCampaign] cycle=' + cycleNum + ' scrollPasses=' + commentScrollPassesUsed + ' ranked=' + rankedAll.length + ' attempted=' + commentsAttempted + ' ok=' + posted + ' fail=' + commentsFailed);
+
+      heartbeat('Phase4', '📤 Syncing…');
+      await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, syncConstraints);
+
+      if (blocked) {
+        safeSend({
+          action: 'JOB_COMPLETED',
+          commentsPostedCount: posted,
+          assignedCommentsCount: requiredComments,
+          searchOnlyMode: false,
+          linkedinBlocked: true,
+          postsExtracted: countReal(validPosts),
+          keyword,
+          commentCycleNumber: cycleNum,
+          commentScrollPassesUsed,
+          commentsAttempted,
+          commentsFailed
+        });
+        return;
+      }
+
+      if (requiredComments > 0 && posted < requiredComments) {
+        safeSend({
+          action: 'JOB_FAILED',
+          reason: posted === 0 ? 'NO_COMMENTS_POSTED' : 'COMMENT_CYCLE_INCOMPLETE',
+          commentsPostedCount: posted,
+          assignedCommentsCount: requiredComments,
+          searchOnlyMode: false,
+          postsExtracted: countReal(validPosts),
+          keyword,
+          commentCycleNumber: cycleNum,
+          commentScrollPassesUsed,
+          commentsAttempted,
+          commentsFailed
+        });
+        return;
+      }
+
+      safeSend({
+        action: 'JOB_COMPLETED',
+        commentsPostedCount: posted,
+        assignedCommentsCount: requiredComments,
+        searchOnlyMode: false,
+        linkedinBlocked: false,
+        postsExtracted: countReal(validPosts),
+        keyword,
+        commentCycleNumber: cycleNum,
+        commentScrollPassesUsed,
+        commentsAttempted,
+        commentsFailed
+      });
 
     } else {
       heartbeat('Phase4', '📤 Final sync: ' + totalReal + ' validated posts...');
       ensureActiveRun();
-      const savedThisPass = await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, { SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS });
+      const savedThisPass = await syncPosts(serializedPosts, keyword, dashboardUrl, userId, linkedInProfileId, true, syncConstraints);
       
       console.log(`[v25] ✅ Final sync: Evaluated ${remainingPosts.length} remaining pooled posts. Saved ${savedThisPass}.`);
-      safeSend({ action: 'JOB_COMPLETED', commentsPostedCount: 0, assignedCommentsCount: 0, searchOnlyMode: true, postsExtracted: syncedUrls.size + savedThisPass });
+      const urlKeys = new Set();
+      validPosts.forEach(p => {
+        if (p.url && isValidCanonicalPostUrl(p.url)) urlKeys.add(cleanUrl(p.url).split('?')[0]);
+      });
+      syncedUrls.forEach(u => {
+        if (u && isValidCanonicalPostUrl(u)) urlKeys.add(cleanUrl(u).split('?')[0]);
+      });
+      const distinctCollected = urlKeys.size;
+      const resultStatus = distinctCollected >= 10 ? 'SUCCESS' : (distinctCollected > 0 ? 'PARTIAL_SUCCESS' : 'EMPTY_RESULT');
+      console.log('[SearchOnly] keyword="' + keyword + '" distinctPosts=' + distinctCollected + ' resultStatus=' + resultStatus);
+      if (distinctCollected === 0) {
+        safeSend({
+          action: 'JOB_FAILED',
+          reason: 'SEARCH_ONLY_NO_POSTS',
+          commentsPostedCount: 0,
+          assignedCommentsCount: 0,
+          searchOnlyMode: true,
+          engineMode: 'SEARCH_ONLY',
+          postsExtracted: 0,
+          resultStatus,
+          keyword
+        });
+        return;
+      }
+      safeSend({
+        action: 'JOB_COMPLETED',
+        commentsPostedCount: 0,
+        assignedCommentsCount: 0,
+        searchOnlyMode: true,
+        engineMode: 'SEARCH_ONLY',
+        postsExtracted: distinctCollected,
+        resultStatus,
+        keyword
+      });
     }
   }
 
@@ -1261,71 +2037,714 @@ window.__linkedInExtractorReady = true;
     return null;
   }
 
-  function injectText(editor, text) {
+  function isLikelyVisible(el) {
+    if (!el || !document.contains(el)) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const st = window.getComputedStyle(el);
+    if (st.visibility === 'hidden' || st.display === 'none' || Number(st.opacity || '1') < 0.05) return false;
+    return true;
+  }
+
+  function rectsOverlapViewport(a, b) {
+    if (!a || !b) return false;
+    const ax = a.left, ay = a.top, ar = a.right, ab = a.bottom;
+    const bx = b.left, by = b.top, br = b.right, bb = b.bottom;
+    return !(br < ax || bx > ar || bb < ay || by > ab);
+  }
+
+  /** Layer 1: inline in card / near comment button. */
+  function pickCommentEditorInline(commentBtn, container) {
+    if (container) {
+      const direct = container.querySelector(
+        '.comments-comment-box div.ql-editor[contenteditable="true"], .comments-comment-box [contenteditable="true"][role="textbox"], [class*="comment-box"] div.ql-editor[contenteditable="true"], .update-components-comment-box div[contenteditable="true"], .feed-shared-update-v2__commentary div.ql-editor[contenteditable="true"], .feed-shared-update-v2__commentary [contenteditable="true"][role="textbox"]'
+      );
+      if (direct && isLikelyVisible(direct)) return direct;
+    }
+    const roots = [];
+    if (commentBtn) {
+      roots.push(
+        commentBtn.closest('.feed-shared-update-v2, .feed-shared-update-v3, .feed-shared-update-v2__commentary, li.reusable-search__result-container, .reusable-search__result-container, article, [data-urn*="activity"], [data-urn*="ugcPost"]')
+      );
+    }
+    roots.push(container);
+    const editorSelectors = [
+      'div.ql-editor[contenteditable="true"]',
+      'div.comments-comment-box-comment__text-editor div[contenteditable="true"]',
+      '.comments-comment-texteditor div[contenteditable="true"]',
+      'div[contenteditable="true"][role="textbox"]',
+      'div[contenteditable="true"][data-placeholder]',
+      'div[aria-label][contenteditable="true"]'
+    ];
+    for (const root of roots) {
+      if (!root) continue;
+      for (const sel of editorSelectors) {
+        for (const ed of root.querySelectorAll(sel)) {
+          if (isLikelyVisible(ed)) return ed;
+        }
+      }
+    }
+    const cr = container.getBoundingClientRect();
+    if (cr.width >= 1 && cr.height >= 1) {
+      const candidates = document.querySelectorAll('div[contenteditable="true"]');
+      let best = null;
+      let bestScore = -1;
+      for (const ed of candidates) {
+        if (!isLikelyVisible(ed)) continue;
+        const ph = ((ed.getAttribute('data-placeholder') || '') + (ed.getAttribute('aria-label') || '')).toLowerCase();
+        if (!ph.includes('comment') && !ph.includes('add') && ed.closest('.comments-comment-box, .comments-comment-texteditor, .update-components-comment, [class*="comment-box"]') == null) continue;
+        const er = ed.getBoundingClientRect();
+        if (!rectsOverlapViewport(cr, er)) continue;
+        const score = ph.includes('comment') ? 100 : 50;
+        if (score > bestScore) { bestScore = score; best = ed; }
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  /** Layer 2: modal / overlay / outlet (React portals). */
+  function pickCommentEditorModal() {
+    const modalSelectors = [
+      '.artdeco-modal[aria-hidden="false"] div.ql-editor[contenteditable="true"]',
+      '.artdeco-modal:not([aria-hidden="true"]) div.ql-editor[contenteditable="true"]',
+      '[role="dialog"]:not([aria-hidden="true"]) div.ql-editor[contenteditable="true"]',
+      '#artdeco-modal-outlet div.ql-editor[contenteditable="true"]',
+      '.artdeco-modal--layer-default div[contenteditable="true"][role="textbox"]',
+      '.artdeco-overlay div.comments-comment-box div.ql-editor[contenteditable="true"]'
+    ];
+    for (const sel of modalSelectors) {
+      for (const ed of document.querySelectorAll(sel)) {
+        if (isLikelyVisible(ed)) return ed;
+      }
+    }
+    return null;
+  }
+
+  /** Layer 3: focused contenteditable in comment context. */
+  function pickCommentEditorActiveElement(container) {
     try {
-      editor.focus(); editor.innerHTML = ''; editor.innerText = text;
-      editor.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
-      editor.dispatchEvent(new Event('change', { bubbles: true }));
+      const ae = document.activeElement;
+      if (!ae || !ae.isContentEditable || !document.contains(ae) || !isLikelyVisible(ae)) return null;
+      if (ae.closest('.comments-comment-box, .comments-comment-texteditor, .update-components-comment, [class*="comment-box"], .artdeco-modal')) return ae;
+      const cr = container.getBoundingClientRect();
+      if (cr.width >= 1 && rectsOverlapViewport(cr, ae.getBoundingClientRect())) return ae;
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  /** Layer 4: any visible composer in viewport tied to comment UI. */
+  function pickCommentEditorGlobalNearCard(container) {
+    const cr = container.getBoundingClientRect();
+    let best = null;
+    let bestArea = -1;
+    for (const ed of document.querySelectorAll('div.ql-editor[contenteditable="true"], div[contenteditable="true"][role="textbox"]')) {
+      if (!isLikelyVisible(ed)) continue;
+      const box = ed.closest('.comments-comment-box, .comments-comment-texteditor, .update-components-comment, .feed-shared-update-v2__commentary, [class*="comment-box"]');
+      if (!box) continue;
+      const er = ed.getBoundingClientRect();
+      if (er.bottom < 0 || er.top > (window.innerHeight || 900)) continue;
+      if (cr.width >= 1 && cr.height >= 1 && !rectsOverlapViewport(cr, er) && er.top > cr.bottom + 400) continue;
+      const area = er.width * er.height;
+      if (area > bestArea) { bestArea = area; best = ed; }
+    }
+    return best;
+  }
+
+  /** All layers; failure only if every layer returns null. */
+  function resolveCommentEditorMultiLayer(commentBtn, container) {
+    if (!container) return null;
+    return (
+      pickCommentEditorInline(commentBtn, container) ||
+      pickCommentEditorModal() ||
+      pickCommentEditorActiveElement(container) ||
+      pickCommentEditorGlobalNearCard(container)
+    );
+  }
+
+  async function waitForCommentEditor(commentBtn, container, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const ed = resolveCommentEditorMultiLayer(commentBtn, container);
+      if (ed && document.contains(ed) && isLikelyVisible(ed)) return ed;
+      await sleep(320);
+    }
+    return null;
+  }
+
+  function hasCommentUiSignals(commentBtn, container) {
+    try {
+      if (pickCommentEditorModal()) return true;
+      if (container && container.querySelector(
+        '.comments-comment-box, .comments-comment-texteditor, .feed-shared-update-v2__commentary, [class*="comment-box"], [data-test-id*="comment"]'
+      )) return true;
+      const ae = document.activeElement;
+      if (ae && ae.isContentEditable) return true;
+      if (commentBtn) {
+        const expanded = (commentBtn.getAttribute('aria-expanded') || '').toLowerCase();
+        if (expanded === 'true') return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function forceCommentComposerActivation(commentBtn, container) {
+    const targets = [];
+    if (commentBtn && document.contains(commentBtn)) targets.push(commentBtn);
+    if (container && document.contains(container)) {
+      const hot = container.querySelectorAll(
+        '.comments-comment-box, .comments-comment-texteditor, .feed-shared-update-v2__commentary, [class*="comment-box"], div[role="textbox"], div[contenteditable="true"]'
+      );
+      hot.forEach(el => targets.push(el));
+    }
+    for (const t of targets.slice(0, 6)) {
+      try {
+        t.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
+        t.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        t.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      } catch (e) { /* noop */ }
+      try { if (typeof t.focus === 'function') t.focus({ preventScroll: true }); } catch (e2) {}
+    }
+    try {
+      window.dispatchEvent(new Event('scroll'));
+      document.dispatchEvent(new Event('selectionchange', { bubbles: false }));
+    } catch (e) { /* noop */ }
+  }
+
+  async function acquireCommentEditorResilient(commentBtn, container, maxWindowMs) {
+    const deadline = Date.now() + maxWindowMs;
+    let rounds = 0;
+    let lastActivateAt = 0;
+    while (Date.now() < deadline) {
+      const editor = resolveCommentEditorMultiLayer(commentBtn, container);
+      if (editor && document.contains(editor) && isLikelyVisible(editor)) return editor;
+
+      const uiWarm = hasCommentUiSignals(commentBtn, container);
+      // Avoid focus/click thrashing: only force activation occasionally.
+      const now = Date.now();
+      const canActivate = now - lastActivateAt > (uiWarm ? 1200 : 1800);
+      if (canActivate) {
+        lastActivateAt = now;
+        if (uiWarm || rounds % 3 === 0) {
+          forceCommentComposerActivation(commentBtn, container);
+        } else if (commentBtn && document.contains(commentBtn)) {
+          try { commentBtn.click(); } catch (e) { /* noop */ }
+        }
+      }
+      rounds++;
+      await sleep(380 + Math.min(rounds * 30, 260));
+    }
+    return null;
+  }
+
+  function activeElementMatchesEditor(editor) {
+    try {
+      const ae = document.activeElement;
+      if (!ae) return false;
+      if (ae === editor) return true;
+      if (editor && editor.contains && editor.contains(ae)) return true;
+      if (ae.contains && ae.contains(editor)) return true;
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function waitForStableEditor(editor, minStableMs = 900, maxWaitMs = 6000) {
+    const start = Date.now();
+    let stableStart = 0;
+    let lastKey = '';
+    let sample = 0;
+
+    while (Date.now() - start < maxWaitMs) {
+      if (!editor || !document.contains(editor) || !isLikelyVisible(editor)) {
+        return false;
+      }
+
+      const aeOk = activeElementMatchesEditor(editor);
+      const rect = editor.getBoundingClientRect();
+      const key = `${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${aeOk ? 1 : 0}`;
+
+      // Stable means: visible + attached + either activeElement matches OR position not flickering.
+      const stableNow = aeOk || (rect.width > 10 && rect.height > 10);
+
+      if (stableNow && key === lastKey) {
+        if (!stableStart) stableStart = Date.now();
+      } else {
+        stableStart = 0;
+        lastKey = key;
+      }
+
+      // After some samples, accept stable window even if activeElement isn't perfect.
+      if (stableStart && Date.now() - stableStart >= minStableMs) return true;
+
+      // Passive waiting only: do NOT re-focus here (prevents focus/blur loops).
+      await sleep(180);
+      sample++;
+      if (sample % 10 === 0) {
+        // Small passive nudge: scroll into view only.
+        try { editor.scrollIntoView({ block: 'center', behavior: 'auto' }); } catch (e) {}
+      }
+    }
+    return false;
+  }
+
+  function findCommentSubmitFromEditor(editor) {
+    if (!editor) return null;
+    const boxRoot = editor.closest('.comments-comment-box, .comments-comment-texteditor, .comments-comment-box--cr, .artdeco-modal, [class*="comment-box"]') || editor;
+    const candidates = [];
+    let sp = boxRoot;
+    for (let d = 0; d < 24 && sp; d++) {
+      const btns = sp.querySelectorAll ? sp.querySelectorAll('button') : [];
+      for (const b of btns) {
+        if (!isLikelyVisible(b)) continue;
+        const t = (b.innerText || '').trim().toLowerCase();
+        const al = (b.getAttribute('aria-label') || '').toLowerCase();
+        if (b.classList.contains('comments-comment-box__submit-button') || b.classList.contains('comments-comment-box__submit-button--cr')) candidates.push({ b, rank: 0 });
+        else if (t === 'comment') candidates.push({ b, rank: 1 });
+        else if (al.includes('comment') && (al.includes('submit') || al.includes('post your'))) candidates.push({ b, rank: 2 });
+        else if (t === 'post' || al === 'post') candidates.push({ b, rank: 4 });
+      }
+      const direct = sp.querySelector('button.comments-comment-box__submit-button, button.comments-comment-box__submit-button--cr');
+      if (direct && isLikelyVisible(direct)) candidates.push({ b: direct, rank: 0 });
+      sp = sp.parentElement;
+    }
+    candidates.sort((x, y) => x.rank - y.rank);
+    return candidates.length ? candidates[0].b : null;
+  }
+
+  async function waitSubmitEnabled(submitBtn, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!submitBtn || !document.contains(submitBtn)) return false;
+      const dis = submitBtn.disabled || submitBtn.getAttribute('aria-disabled') === 'true';
+      if (!dis) return true;
+      await sleep(220);
+    }
+    return !!(submitBtn && !submitBtn.disabled && submitBtn.getAttribute('aria-disabled') !== 'true');
+  }
+
+  function readEditorPlainText(el) {
+    if (!el || !document.contains(el)) return '';
+    return String((el.innerText != null ? el.innerText : '') || (el.textContent != null ? el.textContent : '') || '').trim();
+  }
+
+  function normalizeTextForCompare(s) {
+    return String(s || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\u00A0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function editorLooksWritable(editor) {
+    if (!editor || !document.contains(editor)) return false;
+    if (!isLikelyVisible(editor)) return false;
+    const ce = (editor.getAttribute('contenteditable') || '').toLowerCase();
+    if (ce === 'false') return false;
+    if (!editor.isContentEditable && ce !== 'true') return false;
+    if (editor.getAttribute('aria-readonly') === 'true') return false;
+    return true;
+  }
+
+  function editorContainsExpectedText(editor, expectedText) {
+    const got = normalizeTextForCompare(readEditorPlainText(editor));
+    const want = normalizeTextForCompare(expectedText);
+    if (!got || !want) return false;
+    if (got.includes(want)) return true;
+    // Relaxed check for LinkedIn transforms/whitespace differences.
+    const shortWant = want.slice(0, Math.min(24, want.length));
+    return shortWant.length >= 8 && got.includes(shortWant);
+  }
+
+  function normalizeCommentText(text) {
+    return String(text || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/\u00A0/g, ' ');
+  }
+
+  function createInputLikeEvent(type, opts) {
+    const cfg = Object.assign({ bubbles: true, cancelable: type === 'beforeinput' }, opts || {});
+    try {
+      return new InputEvent(type, cfg);
+    } catch (e) {
+      const ev = new Event(type, { bubbles: !!cfg.bubbles, cancelable: !!cfg.cancelable });
+      if (cfg.data !== undefined) Object.defineProperty(ev, 'data', { configurable: true, value: cfg.data });
+      if (cfg.inputType !== undefined) Object.defineProperty(ev, 'inputType', { configurable: true, value: cfg.inputType });
+      return ev;
+    }
+  }
+
+  function fireSelectionChange() {
+    try { document.dispatchEvent(new Event('selectionchange')); } catch (e) {}
+  }
+
+  function placeCaretAtEnd(editor) {
+    try {
+      const sel = window.getSelection && window.getSelection();
+      if (!sel) return false;
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      fireSelectionChange();
       return true;
-    } catch(e) { return false; }
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function selectEditorContents(editor) {
+    try {
+      const sel = window.getSelection && window.getSelection();
+      if (!sel) return false;
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      fireSelectionChange();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function focusEditorForInput(editor) {
+    try { editor.scrollIntoView({ block: 'center', behavior: 'auto' }); } catch (e) {}
+    try { editor.focus({ preventScroll: true }); } catch (e) { try { editor.focus(); } catch (e2) {} }
+    placeCaretAtEnd(editor);
+    return activeElementMatchesEditor(editor);
+  }
+
+  function dispatchTypingSignals(editor, data, inputType = 'insertText') {
+    const payload = data == null ? '' : String(data);
+    const key = inputType === 'insertParagraph' ? 'Enter' : (payload.slice(-1) || ' ');
+    const code = key === 'Enter' ? 'Enter' : (key.length === 1 ? `Key${key.toUpperCase()}` : '');
+    try { editor.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, code })); } catch (e) {}
+    try { editor.dispatchEvent(createInputLikeEvent('beforeinput', { inputType, data: inputType === 'insertParagraph' ? null : payload })); } catch (e) {}
+    try { editor.dispatchEvent(createInputLikeEvent('input', { inputType, data: inputType === 'insertParagraph' ? null : payload })); } catch (e) {}
+    try { editor.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key, code })); } catch (e) {}
+    try { editor.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+    fireSelectionChange();
+  }
+
+  function findQuillInstance(editor) {
+    if (!editor) return null;
+    const candidates = [
+      editor,
+      editor.closest && editor.closest('.ql-container'),
+      editor.parentElement,
+      editor.closest && editor.closest('.comments-comment-box, .comments-comment-texteditor, [class*="comment-box"]')
+    ];
+    for (const node of candidates) {
+      if (node && node.__quill) return node.__quill;
+    }
+    return null;
+  }
+
+  function clearEditorDom(editor) {
+    try {
+      if (selectEditorContents(editor)) {
+        try { document.execCommand('delete', false, null); } catch (e) {}
+        try { document.execCommand('insertText', false, ''); } catch (e2) {}
+      }
+      editor.innerHTML = '';
+      editor.textContent = '';
+      placeCaretAtEnd(editor);
+      dispatchTypingSignals(editor, '', 'deleteContentBackward');
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function insertViaQuill(editor, text) {
+    try {
+      const quill = findQuillInstance(editor);
+      if (!quill || typeof quill.setText !== 'function') return false;
+      const want = normalizeCommentText(text);
+      quill.focus();
+      quill.setText('', 'user');
+      quill.setSelection(0, 0, 'user');
+      quill.setText(want, 'user');
+      const len = typeof quill.getLength === 'function' ? quill.getLength() : want.length + 1;
+      if (typeof quill.setSelection === 'function') quill.setSelection(Math.max(0, len - 1), 0, 'user');
+      dispatchTypingSignals(editor, want);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function insertViaExecCommand(editor, text) {
+    const want = normalizeCommentText(text);
+    try {
+      focusEditorForInput(editor);
+      clearEditorDom(editor);
+      focusEditorForInput(editor);
+      const lines = want.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i]) {
+          dispatchTypingSignals(editor, lines[i], 'insertText');
+          const ok = document.execCommand('insertText', false, lines[i]);
+          if (!ok && !writeBySelectionRange(editor, lines[i])) return false;
+        }
+        if (i < lines.length - 1) {
+          dispatchTypingSignals(editor, '\n', 'insertParagraph');
+          const paraOk = document.execCommand('insertParagraph', false, null);
+          if (!paraOk) {
+            if (!writeBySelectionRange(editor, '\n')) return false;
+          }
+        }
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function insertViaSyntheticPaste(editor, text) {
+    const want = normalizeCommentText(text);
+    try {
+      focusEditorForInput(editor);
+      clearEditorDom(editor);
+      focusEditorForInput(editor);
+      let dataTransfer = null;
+      try {
+        dataTransfer = new DataTransfer();
+        dataTransfer.setData('text/plain', want);
+      } catch (e) {}
+      try {
+        const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dataTransfer });
+        editor.dispatchEvent(pasteEvent);
+      } catch (e) {}
+      dispatchTypingSignals(editor, want, 'insertFromPaste');
+      const ok = document.execCommand('insertText', false, want);
+      if (!ok) return writeBySelectionRange(editor, want);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function writeBySelectionRange(editor, text) {
+    try {
+      focusEditorForInput(editor);
+      const sel = window.getSelection && window.getSelection();
+      if (!sel) return false;
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      editor.focus({ preventScroll: true });
+      const tn = document.createTextNode(String(text || ''));
+      range.insertNode(tn);
+      range.setStartAfter(tn);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      fireSelectionChange();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function typeCommentCharacterByCharacter(editor, text) {
+    const want = normalizeCommentText(text);
+    let liveEditor = editor;
+    try {
+      clearEditorDom(liveEditor);
+      focusEditorForInput(liveEditor);
+      for (let i = 0; i < want.length; i++) {
+        if (!document.contains(liveEditor) || !editorLooksWritable(liveEditor)) {
+          liveEditor = resolveCommentEditorMultiLayer(null, liveEditor.closest('article, .feed-shared-update-v2, .reusable-search__result-container, [data-urn*="activity"], [data-urn*="ugcPost"]')) || liveEditor;
+        }
+        if (!document.contains(liveEditor) || !editorLooksWritable(liveEditor)) return false;
+        focusEditorForInput(liveEditor);
+        const ch = want[i];
+        if (ch === '\n') {
+          dispatchTypingSignals(liveEditor, ch, 'insertParagraph');
+          const ok = document.execCommand('insertParagraph', false, null);
+          if (!ok && !writeBySelectionRange(liveEditor, '\n')) return false;
+        } else {
+          dispatchTypingSignals(liveEditor, ch, 'insertText');
+          const ok = document.execCommand('insertText', false, ch);
+          if (!ok && !writeBySelectionRange(liveEditor, ch)) return false;
+        }
+        await wait(18, 45);
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function verifyComposerTextPersists(editor, expectedText) {
+    for (let i = 0; i < 4; i++) {
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await wait(80, 180);
+      if (!document.contains(editor)) return false;
+      if (!editorContainsExpectedText(editor, expectedText)) return false;
+    }
+    return true;
+  }
+
+  async function setComposerTextAtomic(editor, text) {
+    const want = normalizeCommentText(text);
+    if (!want.trim()) return false;
+    const strategies = [
+      async ed => insertViaQuill(ed, want),
+      async ed => insertViaExecCommand(ed, want),
+      async ed => insertViaSyntheticPaste(ed, want),
+      async ed => {
+        clearEditorDom(ed);
+        focusEditorForInput(ed);
+        if (!writeBySelectionRange(ed, want)) return false;
+        dispatchTypingSignals(ed, want);
+        return true;
+      },
+      async ed => typeCommentCharacterByCharacter(ed, want)
+    ];
+
+    for (let pass = 0; pass < 4; pass++) {
+      try {
+        if (!editorLooksWritable(editor)) {
+          await sleep(180);
+          continue;
+        }
+        for (let i = 0; i < strategies.length; i++) {
+          const currentEditor = document.contains(editor) ? editor : resolveCommentEditorMultiLayer(null, editor.closest('article, .feed-shared-update-v2, .reusable-search__result-container, [data-urn*="activity"], [data-urn*="ugcPost"]'));
+          if (!currentEditor || !document.contains(currentEditor) || !editorLooksWritable(currentEditor)) break;
+          focusEditorForInput(currentEditor);
+          const wrote = await strategies[i](currentEditor);
+          if (!wrote) {
+            await wait(120, 220);
+            continue;
+          }
+          await wait(180, 320);
+          if (editorContainsExpectedText(currentEditor, want) && await verifyComposerTextPersists(currentEditor, want)) {
+            return true;
+          }
+          console.warn('[CommentCampaign] Strategy ' + (i + 1) + ' wrote text but LinkedIn cleared it; escalating.');
+        }
+      } catch (e) { /* continue */ }
+      await wait(220, 450);
+    }
+    return false;
   }
 
   async function tryPostComment(container, text, postUrl) {
     if (!container || !document.contains(container)) return 'FAILED';
     if (detectRestriction()) return 'BLOCKED';
     container.scrollIntoView({ behavior: 'auto', block: 'center' });
-    await wait(600, 1000);
+    await sleep(900);
 
     let commentBtn = null;
     for (const btn of container.querySelectorAll('button')) {
       const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
       const txt = (btn.innerText || '').toLowerCase().trim();
-      if (lbl.includes('comment') || txt === 'comment') { commentBtn = btn; break; }
+      if (lbl.includes('view') && lbl.includes('comment')) continue;
+      if (/^\d+\s+comments?$/.test(txt) || (txt.includes('comments') && /^\d+/.test(txt))) continue;
+      if (txt === 'comment') { commentBtn = btn; break; }
+      if (lbl.includes('comment') && !lbl.includes('copy') && !lbl.includes('see ') && !lbl.includes('read ')) {
+        commentBtn = btn;
+        break;
+      }
     }
     if (!commentBtn) return 'FAILED';
 
-    commentBtn.click();
-    await wait(1800, 2800);
+    let openOk = false;
+    for (let i = 0; i < 2; i++) {
+      if (!document.contains(commentBtn)) break;
+      try { commentBtn.click(); } catch (e) {}
+      await sleep(900);
+      if (hasCommentUiSignals(commentBtn, container)) {
+        openOk = true;
+        break;
+      }
+    }
+    if (!openOk) return 'FAILED';
     if (detectRestriction()) return 'BLOCKED';
 
-    let editor = container.querySelector('div.ql-editor[contenteditable="true"],div[contenteditable="true"][role="textbox"],div[contenteditable="true"]');
-    if (!editor && commentBtn) {
-      // Find the true parent boundary of this specific post without escaping into the global feed
-      const safeBoundary = commentBtn.closest('.feed-shared-update-v2, li, article') || container;
-      editor = safeBoundary.querySelector('div.ql-editor[contenteditable="true"],div[contenteditable="true"]');
-    }
-    if (!editor) return 'FAILED';
+    const editor = await acquireCommentEditorResilient(commentBtn, container, 12000);
+    if (!editor || !document.contains(editor)) return 'FAILED';
 
-    injectText(editor, text);
-    await wait(600, 1000);
-    if ((editor.innerText || '').trim().length === 0) {
-      editor.focus();
-      document.execCommand('selectAll', false, null);
-      document.execCommand('insertText', false, text);
-      await wait(400, 700);
-    }
-    if ((editor.innerText || '').trim().length === 0) return 'FAILED';
+    const stable = await waitForStableEditor(editor, 900, 5000);
+    if (!stable) return 'FAILED';
+    if (!editorLooksWritable(editor)) return 'FAILED';
 
-    let submitBtn = null;
-    let sp = editor.parentElement;
-    for (let d = 0; d < 12 && sp && !submitBtn; d++) {
-      submitBtn = sp.querySelector('button.comments-comment-box__submit-button,button[type="submit"]')
-        || Array.from(sp.querySelectorAll('button')).find(b => ['comment', 'post', 'submit'].includes((b.innerText || '').trim().toLowerCase()));
-      sp = sp.parentElement;
+    let textVerified = false;
+    let verifiedEditor = editor;
+    for (let inj = 0; inj < 3; inj++) {
+      const currentEditor = document.contains(editor) ? editor : resolveCommentEditorMultiLayer(commentBtn, container);
+      if (!currentEditor || !document.contains(currentEditor)) break;
+      if (!editorLooksWritable(currentEditor)) {
+        await sleep(240);
+        continue;
+      }
+      const okStable = await waitForStableEditor(currentEditor, 600, 2800);
+      if (!okStable) await sleep(350);
+      const writeOk = await setComposerTextAtomic(currentEditor, text);
+      await sleep(280);
+      // Detect React/contentEditable override by validating twice.
+      const firstCheck = writeOk && editorContainsExpectedText(currentEditor, text);
+      await sleep(320);
+      const secondCheck = writeOk && editorContainsExpectedText(currentEditor, text);
+      if (firstCheck && secondCheck) {
+        textVerified = true;
+        verifiedEditor = currentEditor;
+        break;
+      }
+      console.warn('[CommentCampaign] Text injection rejected/overridden — retrying injection.');
     }
+    if (!textVerified) return 'FAILED';
+
+    let liveEditor = document.contains(verifiedEditor) ? verifiedEditor : resolveCommentEditorMultiLayer(commentBtn, container);
+    let submitBtn = findCommentSubmitFromEditor(liveEditor);
+    if (!submitBtn) await sleep(350);
+    liveEditor = document.contains(verifiedEditor) ? verifiedEditor : resolveCommentEditorMultiLayer(commentBtn, container);
+    submitBtn = submitBtn || findCommentSubmitFromEditor(liveEditor);
     if (!submitBtn) return 'FAILED';
-    if (submitBtn.disabled) { submitBtn.removeAttribute('disabled'); await wait(200, 400); }
 
-    submitBtn.click();
-    await wait(2500, 4000);
+    const submitLabel = (submitBtn.innerText || '').trim().toLowerCase();
+    const submitAria = (submitBtn.getAttribute('aria-label') || '').trim().toLowerCase();
+    if (submitLabel !== 'comment' && submitAria !== 'comment') return 'FAILED';
+
+    const enabled = await waitSubmitEnabled(submitBtn, 7000);
+    if (!enabled) return 'FAILED';
+
+    try { submitBtn.click(); } catch (e) { return 'FAILED'; }
+    await sleep(2400);
     if (detectRestriction()) return 'BLOCKED';
 
-    const consumed = !document.contains(editor) || (editor.innerText || '').trim().length === 0;
-    if (consumed) { safeSend({ action: 'COMMENT_POSTED', url: postUrl }); return 'SUCCESS'; }
-    submitBtn.click();
-    await wait(2500, 4000);
+    liveEditor = document.contains(verifiedEditor) ? verifiedEditor : resolveCommentEditorMultiLayer(commentBtn, container);
+    const textLeft = liveEditor && document.contains(liveEditor) && readEditorPlainText(liveEditor).length > 0;
+    if (textLeft) return 'FAILED';
+
     safeSend({ action: 'COMMENT_POSTED', url: postUrl });
     return 'SUCCESS';
+  }
+
+  /** Bounded retry wrapper. BLOCKED is never retried. */
+  async function tryPostCommentWithRetries(container, text, postUrl, maxAttempts) {
+    const n = Math.max(1, Number(maxAttempts) || 1);
+    for (let attempt = 1; attempt <= n; attempt++) {
+      const r = await tryPostComment(container, text, postUrl);
+      if (r === 'SUCCESS' || r === 'BLOCKED') return r;
+      if (attempt < n) {
+        console.log(`[CommentCampaign] Comment attempt ${attempt}/${n} failed, retrying after cooldown…`);
+        await wait(2200, 3800);
+      }
+    }
+    return 'FAILED';
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -1392,30 +2811,74 @@ window.__linkedInExtractorReady = true;
       (p.hasRealUrl || (p.url && !p.url.startsWith('discovered:') && !p.url.includes('synthetic:'))) &&
       p.url && isValidCanonicalPostUrl(p.url)
     );
+
+    if (!isFinal && constraints.SEARCH_ONLY_LOOSE_INCREMENTAL === true) {
+      if (baseRealPosts.length === 0) return 0;
+      const payloadQuick = baseRealPosts.map(p => {
+        const u = cleanUrl(p.url);
+        const ts = p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null;
+        return {
+          url: u,
+          likes: p.likes || 0,
+          comments: p.postComments ?? p.comments ?? 0,
+          author: p.author || '',
+          preview: (p.textSnippet || '').substring(0, 200),
+          postText: p.textSnippet || '',
+          timestamp: ts,
+          mediaType: p.mediaType || 'text',
+          id: postIdFromCanonicalUrl(u),
+          engagementTier: 'search_only',
+          commentable: p.commentable || false,
+          hasRealUrl: true,
+          discoveryIndex: p.discoveryIndex
+        };
+      });
+      return await new Promise(resolve => {
+        try {
+          chrome.runtime.sendMessage({
+            action: 'SYNC_RESULTS',
+            posts: payloadQuick,
+            keyword,
+            dashboardUrl,
+            userId,
+            linkedInProfileId,
+            debugInfo: { searchOnlyIncremental: true, sending: payloadQuick.length }
+          }, () => {
+            if (chrome.runtime.lastError) {}
+            resolve(payloadQuick.length);
+          });
+        } catch (e) { resolve(0); }
+      });
+    }
+
     const relevantRealPosts = baseRealPosts.filter(p => isKeywordRelevant(p, keyword));
 
     // Incremental sync must stay stable and keep accumulating while scrolling.
-    // Apply strict keyword gate only on final authoritative sync.
+    // Final sync: optional keyword gate. Comment-cycle payloads are already chosen posts — skip gate.
     let realPosts = baseRealPosts;
     if (isFinal) {
-      realPosts = relevantRealPosts;
-      if (baseRealPosts.length > 0 && relevantRealPosts.length === 0) {
-        const fallbackCount = Math.min(Math.max(10, Math.ceil(baseRealPosts.length * 0.35)), baseRealPosts.length);
-        realPosts = baseRealPosts
-          .slice()
-          .sort((a, b) => (a.discoveryIndex ?? 999) - (b.discoveryIndex ?? 999))
-          .slice(0, fallbackCount);
-        console.warn(`[v30] Keyword gate produced 0 matches for "${keyword}". Using ${fallbackCount} early discovered posts as safe fallback.`);
-      } else if (baseRealPosts.length > relevantRealPosts.length && relevantRealPosts.length > 0 && relevantRealPosts.length < 6) {
-        const existing = new Set(relevantRealPosts.map(p => p.url));
-        const supplementCount = Math.min(8, baseRealPosts.length - relevantRealPosts.length);
-        const supplements = baseRealPosts
-          .filter(p => !existing.has(p.url))
-          .slice()
-          .sort((a, b) => (a.discoveryIndex ?? 999) - (b.discoveryIndex ?? 999))
-          .slice(0, supplementCount);
-        realPosts = [...relevantRealPosts, ...supplements];
-        console.warn(`[v30] Keyword gate produced only ${relevantRealPosts.length} matches for "${keyword}". Added ${supplements.length} adaptive fallback posts.`);
+      if (constraints.SKIP_KEYWORD_GATE_FOR_FINAL === true) {
+        realPosts = baseRealPosts;
+      } else {
+        realPosts = relevantRealPosts;
+        if (baseRealPosts.length > 0 && relevantRealPosts.length === 0) {
+          const fallbackCount = Math.min(Math.max(10, Math.ceil(baseRealPosts.length * 0.35)), baseRealPosts.length);
+          realPosts = baseRealPosts
+            .slice()
+            .sort((a, b) => (a.discoveryIndex ?? 999) - (b.discoveryIndex ?? 999))
+            .slice(0, fallbackCount);
+          console.warn(`[v30] Keyword gate produced 0 matches for "${keyword}". Using ${fallbackCount} early discovered posts as safe fallback.`);
+        } else if (baseRealPosts.length > relevantRealPosts.length && relevantRealPosts.length > 0 && relevantRealPosts.length < 6) {
+          const existing = new Set(relevantRealPosts.map(p => p.url));
+          const supplementCount = Math.min(8, baseRealPosts.length - relevantRealPosts.length);
+          const supplements = baseRealPosts
+            .filter(p => !existing.has(p.url))
+            .slice()
+            .sort((a, b) => (a.discoveryIndex ?? 999) - (b.discoveryIndex ?? 999))
+            .slice(0, supplementCount);
+          realPosts = [...relevantRealPosts, ...supplements];
+          console.warn(`[v30] Keyword gate produced only ${relevantRealPosts.length} matches for "${keyword}". Added ${supplements.length} adaptive fallback posts.`);
+        }
       }
     }
 
@@ -1433,13 +2896,8 @@ window.__linkedInExtractorReady = true;
       // SECONDARY: Position-based boosting using LinkedIn's own relevance sort
       // LinkedIn puts the highest-engagement posts FIRST in relevance-sorted search.
       // If DOM extraction failed (eng=0), use feed position as a reliable quality proxy.
-      if (eng === 0) {
-        if (pos < 15) engagementTier = 'high';       // Top 15 in LinkedIn's relevance = high reach
-        else if (pos < 40) engagementTier = 'mid';    // Positions 16-40 = medium reach
-        else engagementTier = 'low';                   // Below 40 = normal/low
-      }
       // BOOST: If DOM found some engagement but position is very early, upgrade tier
-      else if (eng > 0 && eng < 5 && pos < 10) engagementTier = 'mid';
+      if (eng > 0 && eng < 5 && pos < 10) engagementTier = 'mid';
       else if (eng >= 5 && eng < 20 && pos < 5) engagementTier = 'high';
       
       return { ...p, engagementTier };
@@ -1533,10 +2991,8 @@ window.__linkedInExtractorReady = true;
       // Keep quality strict (high/mid first) using engagement tier + discovery position.
       const qualityIncremental = labeled.filter(p => {
         const eng = (p.likes || 0) + (p.postComments || p.comments || 0);
-        const pos = p.discoveryIndex ?? 999;
+        if (eng <= 0) return false;
         if (p.engagementTier === 'high' || p.engagementTier === 'mid') return true;
-        // When engagement metrics are missing in DOM, allow early discovered posts only.
-        if (eng === 0 && pos < 40) return true;
         return false;
       });
       final = qualityIncremental.slice(0, Math.min(20, qualityIncremental.length));
@@ -1592,9 +3048,17 @@ window.__linkedInExtractorReady = true;
 
     const payload = final.map(p => {
       const u = cleanUrl(p.url);
+      const ts = p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null;
       return {
-        url: u, likes: p.likes, comments: p.postComments,
-        author: p.author, preview: (p.textSnippet || '').substring(0, 200),
+        url: u,
+        likes: p.likes,
+        comments: p.postComments,
+        author: p.author,
+        preview: (p.textSnippet || '').substring(0, 200),
+        postText: p.textSnippet || '',
+        timestamp: ts,
+        mediaType: p.mediaType || 'text',
+        id: postIdFromCanonicalUrl(u),
         engagementTier: p.engagementTier
       };
     }).filter(p => p.url && isValidCanonicalPostUrl(p.url));
@@ -1603,6 +3067,8 @@ window.__linkedInExtractorReady = true;
     // Incremental sync should be fast and continuously accumulating.
     let verifiedPayload = [];
     if (!isFinal) {
+      verifiedPayload = payload;
+    } else if (constraints.SEARCH_ONLY_SKIP_HTTP_VERIFY === true) {
       verifiedPayload = payload;
     } else {
       console.log(`[v27] 🛡️ Verifying ${payload.length} posts (strict — unverified URLs are dropped)...`);

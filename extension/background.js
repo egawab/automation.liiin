@@ -24,6 +24,19 @@
 console.log("[Worker] ═══ Safety Worker v11 (Multi-Pass Deep Extraction) Initialized ═══");
 
 // ── Persistent State (chrome.storage.local) ──
+if (!self.__nexoraControlledNavTabs) self.__nexoraControlledNavTabs = new Set();
+if (!self.__globalSyncedUrlsByKeyword) self.__globalSyncedUrlsByKeyword = new Map();
+
+function isControlledNavigation(tabId) {
+  return !!(tabId && self.__nexoraControlledNavTabs && self.__nexoraControlledNavTabs.has(tabId));
+}
+
+function setControlledNavigation(tabId, enabled) {
+  if (!tabId || !self.__nexoraControlledNavTabs) return;
+  if (enabled) self.__nexoraControlledNavTabs.add(tabId);
+  else self.__nexoraControlledNavTabs.delete(tabId);
+}
+
 let cachedDeviceFingerprint = null;
 async function getExtensionFingerprint() {
   if (cachedDeviceFingerprint) return cachedDeviceFingerprint;
@@ -77,7 +90,8 @@ async function loadState() {
     consecutiveFailures: 0,
     currentSearchCycle: 0,
     currentSearchKeywordIndex: 0,
-    activityLog: []
+    activityLog: [],
+    pendingCommentInsufficientRetry: null
   });
 }
 
@@ -180,7 +194,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // SEARCH_INTER_KEYWORD_MS: short pause between keywords within a group of 3
 // SEARCH_KEYWORD_COOLDOWN_MS: cooldown applied after every 3 keywords
 // SEARCH_FULL_CYCLE_COOLDOWN_MS: cooldown after all keywords are done
-const SEARCH_INTER_KEYWORD_MS = 20000;       // 20s between keywords within a group
+const SEARCH_INTER_KEYWORD_MS = 60000;       // 1 min between keywords within a group
 const SEARCH_KEYWORD_COOLDOWN_MS = 900000;   // 15 min cooldown every 3 keywords (User requested rule)
 const SEARCH_FULL_CYCLE_COOLDOWN_MS = 1200000; // 20 min after all keywords done
 const COMMENT_CYCLE_COOLDOWN_MS = 900000;    // 15 min (comment mode — unchanged)
@@ -218,6 +232,90 @@ function waitForTabLoad(tabId, timeoutMs = 20000) {
     };
     chrome.tabs.onUpdated.addListener(listener);
   });
+}
+
+async function navigateTabControlled(tabId, url, timeoutMs = 30000) {
+  setControlledNavigation(tabId, true);
+  try {
+    await chrome.tabs.update(tabId, { url });
+    await waitForTabLoad(tabId, timeoutMs);
+    await sleep(1800);
+  } finally {
+    setControlledNavigation(tabId, false);
+  }
+}
+
+async function injectContentScriptOnly(tabId) {
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+  await sleep(900);
+}
+
+async function runCommentExecutionPlan(tabId, plan) {
+  const executionPlan = Array.isArray(plan?.executionPlan) ? plan.executionPlan : [];
+  const keyword = plan?.keyword || '';
+  const assignedCommentsCount = Number(plan?.assignedCommentsCount) || executionPlan.length || 2;
+  const postsExtracted = Number(plan?.postsExtracted) || 0;
+  const commentCycleNumber = Number(plan?.commentCycleNumber) || 1;
+  const commentScrollPassesUsed = Number(plan?.commentScrollPassesUsed) || 0;
+
+  let posted = 0;
+  let commentsAttempted = 0;
+  let commentsFailed = 0;
+  let blocked = false;
+  const stateSnapshot = await chrome.storage.local.get(['commentedPosts', 'usedCommentIds']);
+  let commentedPosts = Array.isArray(stateSnapshot.commentedPosts) ? stateSnapshot.commentedPosts.slice() : [];
+  let usedCommentIds = Array.isArray(stateSnapshot.usedCommentIds) ? stateSnapshot.usedCommentIds.slice() : [];
+
+  for (let i = 0; i < executionPlan.length; i++) {
+    const target = executionPlan[i];
+    if (!target?.targetUrl || !target?.commentText) {
+      commentsFailed++;
+      continue;
+    }
+    commentsAttempted++;
+    console.log(`[Worker] Direct target execution ${i + 1}/${executionPlan.length}: ${target.targetUrl}`);
+    try {
+      await navigateTabControlled(tabId, target.targetUrl, 35000);
+      await injectContentScriptOnly(tabId);
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: async (payload) => {
+          if (!window.__resumeSingleCommentTarget) throw new Error('Direct comment executor missing.');
+          return await window.__resumeSingleCommentTarget(payload);
+        },
+        args: [{ targetUrl: target.targetUrl, commentText: target.commentText }]
+      });
+      const outcome = results && results[0] ? results[0].result : 'FAILED';
+      if (outcome === 'BLOCKED') {
+        blocked = true;
+        break;
+      }
+      if (outcome === 'SUCCESS') {
+        posted++;
+        commentedPosts = [...commentedPosts, target.targetUrl].slice(-200);
+        if (target.commentId) usedCommentIds = [...usedCommentIds, target.commentId].slice(-100);
+        await chrome.storage.local.set({ commentedPosts, usedCommentIds });
+      } else {
+        commentsFailed++;
+      }
+      await sleep(1200);
+    } catch (e) {
+      commentsFailed++;
+      console.error(`[Worker] Direct target execution failed for ${target.targetUrl}:`, e.message);
+    }
+  }
+
+  return {
+    blocked,
+    posted,
+    commentsAttempted,
+    commentsFailed,
+    assignedCommentsCount,
+    keyword,
+    postsExtracted,
+    commentCycleNumber,
+    commentScrollPassesUsed
+  };
 }
 
 async function tabExists(tabId) {
@@ -441,6 +539,9 @@ async function _checkJobsInner() {
 
       const kwStr = allKeywords[kwIndex];
       const pageNum = 1; // content.js handles all pagination internally
+      try {
+        if (self.__globalSyncedUrlsByKeyword) self.__globalSyncedUrlsByKeyword.delete(kwStr);
+      } catch (e) {}
 
       // v9 FIX 2: Log group position for visibility
       const groupNum = Math.floor(kwIndex / 3) + 1;
@@ -455,7 +556,10 @@ async function _checkJobsInner() {
         liveStatusText: `🔍 Searching "${kwStr}" (${kwIndex + 1}/${allKeywords.length})...`
       });
       // Save settings for PASS_DONE handler
-      await chrome.storage.local.set({ jobSettings: settings, jobComments: [] });
+      await chrome.storage.local.set({
+        jobSettings: { ...settings, engineMode: 'SEARCH_ONLY', searchOnlyMode: true },
+        jobComments: []
+      });
 
       const currentCycle = ((await loadState()).currentSearchCycle || 0) + 1;
       startScrapingCycle(kwStr, settings, [], dashboardUrl, userId, currentCycle, pageNum, 0, []);
@@ -468,26 +572,35 @@ async function _checkJobsInner() {
     const available = data.availableKeywords || [];
     if (available.length === 0) return;
 
-    const kwObj = available[Math.floor(Math.random() * available.length)];
+    const stPick = await loadState();
+    const forcedRetryKw = stPick.pendingCommentInsufficientRetry || null;
+    let kwObj = forcedRetryKw
+      ? available.find(k => k.keyword === forcedRetryKw)
+      : null;
+    if (!kwObj) {
+      kwObj = available[Math.floor(Math.random() * available.length)];
+    }
     const kw = kwObj.keyword;
     const kc = (await loadState()).keywordCycles || {};
     const cycleNum = (kc[kw] || 0) + 1;
+    const commentsPerCycle = Math.max(1, Number(kwObj.commentsPerCycle) || Number(settings.commentsPerCycle) || 2);
+    const insufficientRetryPass = !!(forcedRetryKw && forcedRetryKw === kw);
 
     const keywordComments = allComments.filter(c =>
       c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum
     );
-    console.log(`[Worker] Comments for "${kw}" cycle #${cycleNum}: ${keywordComments.length} found`);
+    console.log(`[Worker] Comments for "${kw}" cycle #${cycleNum}: ${keywordComments.length} found (expect ${commentsPerCycle})`);
 
-    if (keywordComments.length !== 2) {
-      console.error(`[Worker] ❌ VALIDATION FAILED: Expected 2 comments for cycle #${cycleNum} of "${kw}", found ${keywordComments.length}.`);
-      showPremiumToast('Configuration Error', `❌ "${kw}" cycle #${cycleNum} needs exactly 2 comments, found ${keywordComments.length}.`, true);
+    if (keywordComments.length !== commentsPerCycle) {
+      console.error(`[Worker] ❌ VALIDATION FAILED: Expected ${commentsPerCycle} comments for cycle #${cycleNum} of "${kw}", found ${keywordComments.length}.`);
+      showPremiumToast('Configuration Error', `❌ "${kw}" cycle #${cycleNum} needs ${commentsPerCycle} comments, found ${keywordComments.length}.`, true);
       return;
     }
 
     const cState = await loadState();
 
-    if (cState.hourlyCommentsMade >= 4) {
-      console.warn("🛡️ [Worker] Hourly comment cap (4/hr) reached.");
+    if (cState.hourlyCommentsMade >= 12) {
+      console.warn("🛡️ [Worker] Hourly comment cap (12/hr) reached.");
       showPremiumToast('Safety Limit', '🛡️ Hourly limit reached. Cooling down.', false);
       await saveState({ cooldownMs: COMMENT_CYCLE_COOLDOWN_MS, lastJobTime: Date.now() });
       return;
@@ -504,15 +617,26 @@ async function _checkJobsInner() {
       isJobRunning: true,
       currentKeyword: kw,
       cycleStartTime: Date.now(),
-      liveStatusText: `🚀 Starting cycle #${cycleNum} for "${kw}"...`
+      liveStatusText: `🚀 Starting cycle #${cycleNum} for "${kw}"...`,
+      ...(insufficientRetryPass ? { pendingCommentInsufficientRetry: null } : {})
     });
 
     const searchPages = (await loadState()).keywordSearchPages || {};
     const pageNum = (searchPages[kw] || 0) + 1;
 
-    console.log(`🚀 [Worker] Comment cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}" (Page ${pageNum})`);
+    const commentSurface = kwObj.surface === 'feed' ? 'feed' : 'search_posts';
+    const jobSettings = {
+      ...settings,
+      engineMode: 'COMMENT_CAMPAIGN',
+      searchOnlyMode: false,
+      commentSurface,
+      commentCycleNumber: cycleNum,
+      insufficientRetryPass
+    };
+
+    console.log(`🚀 [Worker] Comment cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}" (Page ${pageNum}) surface=${commentSurface}`);
     showPremiumToast('Nexora Engine', `Starting cycle #${cycleNum} for "${kw}" (Pg ${pageNum})`, false);
-    await startScrapingCycle(kw, settings, keywordComments, dashboardUrl, userId, cycleNum, pageNum);
+    await startScrapingCycle(kw, jobSettings, keywordComments, dashboardUrl, userId, cycleNum, pageNum);
 
   } catch (error) {
     console.error("❌ [Worker] Poll failed:", error.message);
@@ -527,11 +651,12 @@ async function _checkJobsInner() {
 // passIndex: 0 = relevance URL (all time ranges), 1 = date URL (recent)
 // priorPosts: serialized posts from pass 0, forwarded to content.js for pass 1
 async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId, cycleNum = 1, pageNum = 1, passIndex = 0, priorPosts = []) {
-  // Pass 0: relevance sort (all time ranges, maximum reach)
-  // Pass 1: date sort (recent posts)
-  const searchUrl = passIndex === 0
-    ? `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`
-    : `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
+  const isSearchOnlyJob = settings.searchOnlyMode === true || settings.engineMode === 'SEARCH_ONLY';
+  const searchPostsUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+  const feedUrl = 'https://www.linkedin.com/feed/';
+  const searchUrl = isSearchOnlyJob
+    ? searchPostsUrl
+    : (settings.commentSurface === 'feed' ? feedUrl : searchPostsUrl);
   let injectionCount = 0;
   const MAX_INJECTIONS = 3;
 
@@ -603,14 +728,19 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
         try {
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            func: (k, s, c, du, u) => {
-              if (window.__startExtraction) {
-                window.__startExtraction(k, s, c, du, u);
+            func: (k, s, c, du, u, useSearchOnly) => {
+              const merged = { ...s };
+              if (useSearchOnly) {
+                if (window.__startSearchOnly) window.__startSearchOnly(k, merged, du, u);
+                else if (window.__startExtraction) window.__startExtraction(k, merged, [], du, u);
+                else throw new Error('Search-only starter not defined on window.');
               } else {
-                throw new Error("Extractor function not defined on window.");
+                if (window.__startCommentCampaign) window.__startCommentCampaign(k, merged, c, du, u);
+                else if (window.__startExtraction) window.__startExtraction(k, merged, c, du, u);
+                else throw new Error('Comment-campaign starter not defined on window.');
               }
             },
-            args: [keyword, { ...settings, passIndex, priorPosts }, comments, dashboardUrl, userId]
+            args: [keyword, { ...settings, passIndex, priorPosts }, comments, dashboardUrl, userId, isSearchOnlyJob]
           });
           console.log("✅ [Worker] Content script started.");
           _lastContentHeartbeat = Date.now();
@@ -657,10 +787,9 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
     // IMPORTANT: Do NOT re-inject for pass-driven navigations — those are handled
     // by the PASS_DONE message handler which injects content.js itself.
     // Only re-inject on unexpected navigations (e.g. LinkedIn redirects).
-    let backgroundNavigating = false; // set true when background drives navigation
     const navListener = async (tabId, changeInfo) => {
       if (tabId !== tab.id) return;
-      if (changeInfo.status === 'complete' && !backgroundNavigating && injectionCount < MAX_INJECTIONS) {
+      if (changeInfo.status === 'complete' && !isControlledNavigation(tabId) && injectionCount < MAX_INJECTIONS) {
         const newTab = await chrome.tabs.get(tabId).catch(() => null);
         if (!newTab) return;
         // Treat ANY LinkedIn content-search URL as same-run navigation.
@@ -710,7 +839,7 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
       }
 
       const timeSinceHeartbeat = Date.now() - _lastContentHeartbeat;
-      if (timeSinceHeartbeat > 90000 && injectionCount < MAX_INJECTIONS) {
+      if (timeSinceHeartbeat > 90000 && !isControlledNavigation(tab.id) && injectionCount < MAX_INJECTIONS) {
         // v9: Raised re-inject threshold from 60s to 90s (content.js v10 pauses up to 3.5s/step × 5 = 17s between heartbeats)
         console.warn(`💀 [Worker] No heartbeat for ${Math.round(timeSinceHeartbeat / 1000)}s. Re-injecting...`);
         await injectAndStart();
@@ -795,19 +924,21 @@ async function finishCycle(tabId, incrementKeyword = true, searchOnlyMode = fals
         console.log(`[Worker] 🔄 Retrying "${state.currentKeyword}" on next cycle due to failure/0 posts.`);
       }
     } else {
-      // Comment mode
-      updates.currentSearchKeywordIndex = nextKwIndex;
-      updates.currentKeyword = null;
-      const searchPages = state.keywordSearchPages || {};
-      delete searchPages[state.currentKeyword];
-      updates.keywordSearchPages = searchPages;
-
+      // Comment mode — only advance keyword cycle / clear keyword on real success (same idea as search-only retry).
       if (incrementKeyword) {
+        updates.currentSearchKeywordIndex = nextKwIndex;
+        updates.currentKeyword = null;
+        const searchPages = state.keywordSearchPages || {};
+        delete searchPages[state.currentKeyword];
+        updates.keywordSearchPages = searchPages;
+
         const kc = state.keywordCycles || {};
         kc[state.currentKeyword] = (kc[state.currentKeyword] || 0) + 1;
         updates.keywordCycles = kc;
         updates.consecutiveFailures = 0;
         console.log(`[Worker] ✅ "${state.currentKeyword}" cycle → ${kc[state.currentKeyword]}.`);
+      } else {
+        console.log(`[Worker] 🔄 Comment job failed or 0 comments posted; "${state.currentKeyword}" cycle not advanced — will retry after cooldown.`);
       }
     }
   }
@@ -820,6 +951,55 @@ async function finishCycle(tabId, incrementKeyword = true, searchOnlyMode = fals
   showPremiumToast('Cycle Complete', `✅ Done! Cooling ${cdLabel} before next keyword...`, false);
 }
 
+async function handleTerminalJobResult(message, senderTabId) {
+  const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
+  const posted = message.commentsPostedCount || 0;
+  const assigned = message.assignedCommentsCount || 0;
+  const blocked = message.linkedinBlocked || false;
+  const isSearchOnly = message.searchOnlyMode === true;
+
+  console.log(`📐 [Worker] Job ${status}. Real posts extracted: ${message.postsExtracted || 'N/A'} | SearchOnly: ${isSearchOnly} | Blocked: ${blocked}${message.reason ? ` | reason=${message.reason}` : ''}${message.resultStatus ? ` | result=${message.resultStatus}` : ''}`);
+
+  let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
+
+  if (message.action === 'JOB_FAILED' && message.reason === 'CYCLE_INSUFFICIENT_TARGETS') {
+    const st = await loadState();
+    const kw = message.keyword || st.currentKeyword;
+    if (message.insufficientRetryPass) {
+      await saveState({ pendingCommentInsufficientRetry: null });
+      console.log(`[Worker] Comment campaign: insufficient targets after retry for "${kw}" — advancing.`);
+      showPremiumToast('Campaign', `Insufficient posts after retry for "${kw}".`, true);
+    } else if (kw) {
+      await saveState({ pendingCommentInsufficientRetry: kw });
+      console.log(`[Worker] Comment campaign: scheduling one retry for "${kw}" (insufficient targets).`);
+      showPremiumToast('Campaign', `Not enough posts — retrying once for "${kw}".`, false);
+    }
+    await finishCycle(senderTabId ?? st.activeTabId, message.insufficientRetryPass === true, false);
+    return;
+  }
+
+  if (isSuccessfulCycle && !isSearchOnly && assigned > 0 && posted < assigned) {
+    console.log(`[Worker] ✅ Partial comments: ${posted}/${assigned} — cycle complete.`);
+    showPremiumToast('Partial comments', `Posted ${posted}/${assigned}. Cycle complete.`, false);
+  }
+
+  if (message.action === 'JOB_FAILED' && !isSearchOnly && message.reason === 'NO_COMMENTS_POSTED') {
+    showPremiumToast('Comments not posted', 'No comments were posted this run; same cycle will retry after cooldown.', true);
+  }
+
+  if (blocked) {
+    console.error(`[Worker] 🚫 LINKEDIN RESTRICTION DETECTED. Pausing 30 min.`);
+    showPremiumToast('🚫 Account Restricted', `LinkedIn blocking comments. Pausing 30 min.`, true);
+    const s = await loadState();
+    await finishCycle(senderTabId ?? s.activeTabId, false, isSearchOnly);
+    await saveState({ cooldownMs: 1800000 });
+    return;
+  }
+
+  const s = await loadState();
+  await finishCycle(senderTabId ?? s.activeTabId, isSuccessfulCycle, isSearchOnly);
+}
+
 // ── Message Router ──
 // v9 FIX 3: Single listener handles all message types including both START_POLLING sources
 let _lastContentHeartbeat = 0;
@@ -827,11 +1007,11 @@ let _lastContentHeartbeat = 0;
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // ── START_POLLING (from popup OR from dashboard-bridge) ──
-  if (message.action === 'START_POLLING') {
-    console.log("🚀 [Worker] START command received.");
+  if (message.action === 'START_COMMENT_CAMPAIGN' || message.action === 'START_SEARCH_ONLY') {
+    console.log(`🚀 [Worker] ${message.action} received.`);
     if (sendResponse) sendResponse({ ok: true, ack: true });
-
     const triggerStart = () => {
+      try { self.__globalSyncedUrlsByKeyword = new Map(); } catch (e) {}
       chrome.storage.local.set({
         isPaused: false,
         keywordCycles: {},
@@ -842,7 +1022,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         hourlyCommentsMade: 0,
         currentSearchCycle: 0,
         currentSearchKeywordIndex: 0,
-        wasDashboardActive: false
+        wasDashboardActive: false,
+        pendingCommentInsufficientRetry: null
+      }, () => {
+        setTimeout(() => checkJobs(), 50);
+      });
+    };
+    if (message.dashboardUrl && message.userId) {
+      chrome.storage.sync.set({ dashboardUrl: message.dashboardUrl, userId: message.userId }, triggerStart);
+    } else {
+      triggerStart();
+    }
+    return true;
+  }
+
+  if (message.action === 'START_POLLING') {
+    console.log("🚀 [Worker] START command received.");
+    if (sendResponse) sendResponse({ ok: true, ack: true });
+
+    const triggerStart = () => {
+      try { self.__globalSyncedUrlsByKeyword = new Map(); } catch (e) {}
+      chrome.storage.local.set({
+        isPaused: false,
+        keywordCycles: {},
+        keywordSearchPages: {},
+        cooldownMs: 0,
+        cycleStartTime: 0,
+        consecutiveFailures: 0,
+        hourlyCommentsMade: 0,
+        currentSearchCycle: 0,
+        currentSearchKeywordIndex: 0,
+        wasDashboardActive: false,
+        pendingCommentInsufficientRetry: null
       }, () => {
         setTimeout(() => checkJobs(), 50);
       });
@@ -878,13 +1089,75 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
+  if (message.action === 'EXECUTE_COMMENT_PLAN') {
+    if (sendResponse) sendResponse({ ok: true, accepted: true });
+    (async () => {
+      const s = await loadState();
+      const tabId = sender.tab?.id || s.activeTabId;
+      if (!tabId) {
+        await handleTerminalJobResult({
+          action: 'JOB_FAILED',
+          reason: 'NO_ACTIVE_TAB_FOR_COMMENT_EXECUTION',
+          commentsPostedCount: 0,
+          assignedCommentsCount: message.assignedCommentsCount || 0,
+          searchOnlyMode: false,
+          postsExtracted: message.postsExtracted || 0,
+          keyword: message.keyword,
+          commentCycleNumber: message.commentCycleNumber || 1,
+          commentScrollPassesUsed: message.commentScrollPassesUsed || 0,
+          commentsAttempted: 0,
+          commentsFailed: message.assignedCommentsCount || 0
+        }, null);
+        return;
+      }
+
+      const result = await runCommentExecutionPlan(tabId, message);
+      console.log('[Worker] Direct comment execution summary:', JSON.stringify(result));
+
+      await handleTerminalJobResult({
+        action: result.blocked
+          ? 'JOB_COMPLETED'
+          : (result.assignedCommentsCount > 0 && result.posted < result.assignedCommentsCount ? 'JOB_FAILED' : 'JOB_COMPLETED'),
+        reason: result.blocked
+          ? undefined
+          : (result.posted === 0 ? 'NO_COMMENTS_POSTED' : (result.posted < result.assignedCommentsCount ? 'COMMENT_CYCLE_INCOMPLETE' : undefined)),
+        commentsPostedCount: result.posted,
+        assignedCommentsCount: result.assignedCommentsCount,
+        searchOnlyMode: false,
+        linkedinBlocked: result.blocked,
+        postsExtracted: result.postsExtracted,
+        keyword: result.keyword,
+        commentCycleNumber: result.commentCycleNumber,
+        commentScrollPassesUsed: result.commentScrollPassesUsed,
+        commentsAttempted: result.commentsAttempted,
+        commentsFailed: result.commentsFailed
+      }, tabId);
+    })().catch(async (e) => {
+      console.error('[Worker] EXECUTE_COMMENT_PLAN failed:', e.message);
+      await handleTerminalJobResult({
+        action: 'JOB_FAILED',
+        reason: 'COMMENT_EXECUTION_CRASHED',
+        commentsPostedCount: 0,
+        assignedCommentsCount: message.assignedCommentsCount || 0,
+        searchOnlyMode: false,
+        postsExtracted: message.postsExtracted || 0,
+        keyword: message.keyword,
+        commentCycleNumber: message.commentCycleNumber || 1,
+        commentScrollPassesUsed: message.commentScrollPassesUsed || 0,
+        commentsAttempted: 0,
+        commentsFailed: message.assignedCommentsCount || 0
+      }, sender.tab?.id || null);
+    });
+    return true;
+  }
+
   if (message.action === 'COMMENT_POSTED') {
     loadState().then(async s => {
       const newDaily = (s.dailyCommentsMade || 0) + 1;
       const newHourly = (s.hourlyCommentsMade || 0) + 1;
       await saveState({ dailyCommentsMade: newDaily, hourlyCommentsMade: newHourly });
-      console.log(`💬 [Worker] Comment posted. Daily: ${newDaily}/15 | Hourly: ${newHourly}/4`);
-      showPremiumToast('Comment Posted', `Comment #${newDaily}/15 today (${newHourly}/4 this hour)!`, false);
+      console.log(`💬 [Worker] Comment posted. Daily: ${newDaily}/15 | Hourly: ${newHourly}/12`);
+      showPremiumToast('Comment Posted', `Comment #${newDaily}/15 today (${newHourly}/12 this hour)!`, false);
       const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
       if (config.dashboardUrl && config.userId) {
         const deviceId = await getExtensionFingerprint();
@@ -908,13 +1181,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'SYNC_RESULTS') {
     const { posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo } = message;
     
-    // Global in-memory deduplication across the worker's lifetime
-    if (typeof self.globalSyncedUrls === 'undefined') self.globalSyncedUrls = new Set();
+    // Dedupe per keyword run so one keyword cannot suppress another.
+    if (!self.__globalSyncedUrlsByKeyword) self.__globalSyncedUrlsByKeyword = new Map();
+    const keywordKey = String(keyword || '__global__');
+    if (!self.__globalSyncedUrlsByKeyword.has(keywordKey)) {
+      self.__globalSyncedUrlsByKeyword.set(keywordKey, new Set());
+    }
+    const keywordSeen = self.__globalSyncedUrlsByKeyword.get(keywordKey);
     const uniquePosts = posts.filter(p => {
        if (!p.url) return false;
        const clean = p.url.split('?')[0];
-       if (self.globalSyncedUrls.has(clean)) return false;
-       self.globalSyncedUrls.add(clean);
+       if (keywordSeen.has(clean)) return false;
+       keywordSeen.add(clean);
        return true;
     });
 
@@ -994,36 +1272,58 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
+    handleTerminalJobResult(message, sender.tab?.id || null).catch(e => {
+      console.error('[Worker] Terminal result handling failed:', e.message);
+    });
+    return;
     const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
     const posted = message.commentsPostedCount || 0;
     const assigned = message.assignedCommentsCount || 0;
     const blocked = message.linkedinBlocked || false;
     const isSearchOnly = message.searchOnlyMode === true;
 
-    console.log(`🏁 [Worker] Job ${status}. Real posts extracted: ${message.postsExtracted || 'N/A'} | SearchOnly: ${isSearchOnly} | Blocked: ${blocked}`);
+    console.log(`🏁 [Worker] Job ${status}. Real posts extracted: ${message.postsExtracted || 'N/A'} | SearchOnly: ${isSearchOnly} | Blocked: ${blocked}${message.reason ? ` | reason=${message.reason}` : ''}${message.resultStatus ? ` | result=${message.resultStatus}` : ''}`);
 
     let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
 
+    if (message.action === 'JOB_FAILED' && message.reason === 'CYCLE_INSUFFICIENT_TARGETS') {
+      (async () => {
+        const st = await loadState();
+        const kw = message.keyword || st.currentKeyword;
+        if (message.insufficientRetryPass) {
+          await saveState({ pendingCommentInsufficientRetry: null });
+          console.log(`[Worker] Comment campaign: insufficient targets after retry for "${kw}" — advancing.`);
+          showPremiumToast('Campaign', `Insufficient posts after retry for "${kw}".`, true);
+        } else if (kw) {
+          await saveState({ pendingCommentInsufficientRetry: kw });
+          console.log(`[Worker] Comment campaign: scheduling one retry for "${kw}" (insufficient targets).`);
+          showPremiumToast('Campaign', `Not enough posts — retrying once for "${kw}".`, false);
+        }
+        await finishCycle(sender.tab?.id ?? st.activeTabId, message.insufficientRetryPass === true, false);
+      })();
+      return;
+    }
+
     if (isSuccessfulCycle && !isSearchOnly) {
-      if (assigned > 0 && posted === 0) {
-        console.warn(`[Worker] ❌ 0/${assigned} comments posted. NOT consuming cycle slot.`);
-        isSuccessfulCycle = false;
-        showPremiumToast('Cycle Failed', `❌ 0/${assigned} comments. Retrying after cooldown...`, true);
-      } else if (assigned > 0 && posted < assigned) {
-        console.warn(`[Worker] ⚠️ Partial: ${posted}/${assigned} comments. Consuming slot.`);
-        showPremiumToast('Partial Cycle', `⚠️ ${posted}/${assigned} comments. Moving on.`, true);
+      if (assigned > 0 && posted < assigned) {
+        console.log(`[Worker] ✅ Partial comments: ${posted}/${assigned} — cycle complete.`);
+        showPremiumToast('Partial comments', `Posted ${posted}/${assigned}. Cycle complete.`, false);
       }
+    }
+
+    if (message.action === 'JOB_FAILED' && !isSearchOnly && message.reason === 'NO_COMMENTS_POSTED') {
+      showPremiumToast('Comments not posted', 'No comments were posted this run; same cycle will retry after cooldown.', true);
     }
 
     if (blocked) {
       console.error(`[Worker] 🚫 LINKEDIN RESTRICTION DETECTED. Pausing 30 min.`);
       showPremiumToast('🚫 Account Restricted', `LinkedIn blocking comments. Pausing 30 min.`, true);
-      finishCycle(sender.tab?.id, false, isSearchOnly);
+      loadState().then(s => finishCycle(sender.tab?.id ?? s.activeTabId, false, isSearchOnly));
       saveState({ cooldownMs: 1800000 });
       return;
     }
 
-    finishCycle(sender.tab?.id, isSuccessfulCycle, isSearchOnly);
+    loadState().then(s => finishCycle(sender.tab?.id ?? s.activeTabId, isSuccessfulCycle, isSearchOnly));
   }
 });
 
