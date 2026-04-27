@@ -652,7 +652,7 @@ async function _checkJobsInner() {
 // priorPosts: serialized posts from pass 0, forwarded to content.js for pass 1
 async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId, cycleNum = 1, pageNum = 1, passIndex = 0, priorPosts = []) {
   const isSearchOnlyJob = settings.searchOnlyMode === true || settings.engineMode === 'SEARCH_ONLY';
-  const searchPostsUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+  const searchPostsUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=RELEVANCE&origin=SWITCH_SEARCH_VERTICAL`;
   const feedUrl = 'https://www.linkedin.com/feed/';
   const searchUrl = isSearchOnlyJob
     ? searchPostsUrl

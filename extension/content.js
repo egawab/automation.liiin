@@ -742,77 +742,242 @@ window.__linkedInExtractorReady = true;
   }
 
   function extractMetrics(el) {
-    let likes = 0, postComments = 0;
+    let likes = 0, postComments = 0, postShares = 0;
 
-    // RADICAL FIX: Surgical target on the social counts bar to completely avoid header social proofs
-    const bars = el.querySelectorAll('.update-components-social-counts, .social-details-social-counts, [class*="social-counts"]');
-    
+    // Helper: parse a number from a string like "1,247 reactions" or "1.2K reactions"
+    function parseMetricLabel(lbl) {
+      const n = num(lbl);
+      if (n <= 0) return;
+      const l = lbl.toLowerCase();
+      if (l.includes('reaction') || l.includes('like') || l.includes('إعجاب') ||
+          l.includes('j\'aime') || l.includes('gefällt') || l.includes('curtir')) {
+        likes = Math.max(likes, n);
+      }
+      if (l.includes('comment') || l.includes('تعليق') || l.includes('kommentar') ||
+          l.includes('comentario') || l.includes('commentaire')) {
+        postComments = Math.max(postComments, n);
+      }
+      if (l.includes('repost') || l.includes('share') || l.includes('partage') ||
+          l.includes('teilen') || l.includes('compartilhar')) {
+        postShares = Math.max(postShares, n);
+      }
+    }
+
+    // ── PASS 1: Social counts bar (primary — works on feed pages) ──
+    const COMMENT_GUARD = '.feed-shared-update-v2__comments-container, .comments-comments-list, article.comment, .comments-comment-item';
+    const bars = el.querySelectorAll(
+      '.update-components-social-counts, .social-details-social-counts, ' +
+      '[class*="social-counts"], [class*="social-activity-counts"], ' +
+      '[class*="reactions-count"], [class*="socialActivity"]'
+    );
     for (const bar of bars) {
-        // Guard against any comment components
-        if (bar.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, article.comment')) continue;
-        
-        bar.querySelectorAll('[aria-label]').forEach(node => {
-            const lbl = (node.getAttribute('aria-label') || '').toLowerCase();
-            const n = num(lbl);
-            if (n > 0) {
-                if (lbl.includes('reaction') || lbl.includes('like') || lbl.includes('إعجاب')) likes = Math.max(likes, n);
-                if (lbl.includes('comment') || lbl.includes('تعليق')) postComments = Math.max(postComments, n);
-            }
+      if (bar.closest(COMMENT_GUARD)) continue;
+      bar.querySelectorAll('[aria-label]').forEach(node => {
+        parseMetricLabel(node.getAttribute('aria-label') || '');
+      });
+      const txt = bar.innerText || bar.textContent || '';
+      const likeM = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:reactions?|likes?|إعجاب)/i);
+      if (likeM) likes = Math.max(likes, num(likeM[1]));
+      const commM = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:comments?|تعليق)/i);
+      if (commM) postComments = Math.max(postComments, num(commM[1]));
+      const shareM = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:reposts?|shares?)/i);
+      if (shareM) postShares = Math.max(postShares, num(shareM[1]));
+      // Bare-number fallback: extracts likes from spans like <span aria-hidden="true">247</span>
+      // CRITICAL: gate on likes===0 ONLY. If comments were already found via text regex,
+      // the old condition (likes===0 && comments===0 && shares===0) was FALSE, skipping likes entirely.
+      if (likes === 0) {
+        const spans = bar.querySelectorAll('span[aria-hidden="true"], li, button');
+        const numbers = [];
+        spans.forEach(s => {
+          const t = (s.innerText || s.textContent || '').trim();
+          if (/^[\d,.]+[KMBkmb]?$/.test(t)) numbers.push(num(t));
         });
-
-        const txt = bar.innerText || bar.textContent || '';
-        const likeMatch = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:reactions?|likes?|إعجاب)/i);
-        if (likeMatch) likes = Math.max(likes, num(likeMatch[1]));
-
-        const commMatch = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:comments?|تعليق)/i);
-        if (commMatch) postComments = Math.max(postComments, num(commMatch[1]));
-
-        if (likes === 0 && postComments === 0) {
-            const spans = bar.querySelectorAll('span[aria-hidden="true"], li, button');
-            const numbers = [];
-            spans.forEach(s => {
-                const t = (s.innerText || s.textContent || '').trim();
-                if (/^[\d,.]+[KMBkmb]?$/.test(t)) {
-                    numbers.push(num(t));
-                }
-            });
-            if (numbers.length > 0) likes = Math.max(likes, numbers[0]);
-            if (numbers.length > 1) postComments = Math.max(postComments, numbers[1]);
-        }
+        if (numbers.length > 0) likes = Math.max(likes, numbers[0]);
+        if (postComments === 0 && numbers.length > 1) postComments = Math.max(postComments, numbers[1]);
+        if (postShares === 0 && numbers.length > 2) postShares = Math.max(postShares, numbers[2]);
+      }
     }
 
+    // ── PASS 2: Full aria-label scan across the ENTIRE card ──
+    // KEY FIX for LinkedIn search result cards: social counts are NOT inside
+    // .update-components-social-counts on search pages. Instead they appear as
+    // aria-labels on button elements and span elements anywhere in the card.
+    // e.g. <button aria-label="247 reactions"> or <span aria-label="15 comments">
     if (likes === 0 || postComments === 0) {
-        const actionBars = el.querySelectorAll('.feed-shared-social-action-bar, .update-components-action-bar');
-        for (const bar of actionBars) {
-            if (bar.closest('.feed-shared-update-v2__comments-container, .comments-comments-list')) continue;
-            
-            bar.querySelectorAll('button').forEach(btn => {
-                const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
-                const text = (btn.innerText || '').toLowerCase();
-                if (lbl.includes('reaction') || lbl.includes('like') || text.includes('like')) {
-                    const n = num(lbl) || num(text);
-                    if (n > 0) likes = Math.max(likes, n);
-                }
-                if (lbl.includes('comment') || text.includes('comment')) {
-                    const n = num(lbl) || num(text);
-                    if (n > 0) postComments = Math.max(postComments, n);
-                }
-            });
-        }
+      el.querySelectorAll('[aria-label]').forEach(node => {
+        if (node.closest(COMMENT_GUARD)) return;
+        parseMetricLabel(node.getAttribute('aria-label') || '');
+      });
     }
 
-    let author = 'Unknown';
-    for (const sel of ['a[href*="/in/"] span[aria-hidden="true"]', 'a[href*="/company/"] span[aria-hidden="true"]', '.update-components-actor__title', '.feed-shared-actor__title', 'span[aria-hidden="true"]']) {
-        const nodes = el.querySelectorAll(sel);
-        for (const c of nodes) {
-            if (c.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, .update-components-header, .social-proof')) continue;
-            const t = (c.innerText || c.textContent || '').trim();
-            if (t.length > 2 && t.length < 100 && !/^\d/.test(t) && !t.includes('•') && !t.includes('·')) {
-                author = t.split('\n')[0].trim().substring(0, 80);
-                break;
+    // ── PASS 3: Action bar buttons — reaction/comment/share buttons carry counts ──
+    // LinkedIn search pages render like buttons as: aria-label="React Like 47 reactions"
+    // or aria-label="47 people reacted to this post"
+    if (likes === 0 || postComments === 0) {
+      const actionBars = el.querySelectorAll(
+        '.feed-shared-social-action-bar, .update-components-action-bar, ' +
+        '[class*="action-bar"], [class*="social-bar"], [class*="toolbar"]'
+      );
+      for (const bar of actionBars) {
+        if (bar.closest(COMMENT_GUARD)) continue;
+        bar.querySelectorAll('button, [role="button"]').forEach(btn => {
+          const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
+          const txt = (btn.innerText || btn.textContent || '').toLowerCase();
+          const combined = lbl + ' ' + txt;
+          const n = num(combined);
+          if (n > 0) {
+            if (combined.includes('reaction') || combined.includes('like') || combined.includes('إعجاب')) {
+              likes = Math.max(likes, n);
             }
+            if (combined.includes('comment') || combined.includes('تعليق')) {
+              postComments = Math.max(postComments, n);
+            }
+            if (combined.includes('repost') || combined.includes('share')) {
+              postShares = Math.max(postShares, n);
+            }
+          }
+        });
+      }
+    }
+
+    // ── PASS 4: Search-page specific element patterns ──
+    // LinkedIn search cards sometimes use these class patterns for engagement counts.
+    if (likes === 0 || postComments === 0) {
+      const searchSelectors = [
+        '[class*="social-proof"]',
+        '[class*="reaction-count"]',
+        '[class*="engagement-count"]',
+        '[class*="activity-count"]',
+        '[data-test-social-detail-count]',
+        '[data-testid*="reaction"]',
+        '[data-testid*="social-count"]',
+        'span[aria-hidden="true"] + [aria-label]',
+        '.update-components-actor__meta'
+      ].join(', ');
+      try {
+        el.querySelectorAll(searchSelectors).forEach(node => {
+          if (node.closest(COMMENT_GUARD)) return;
+          parseMetricLabel(node.getAttribute('aria-label') || '');
+          const txt = (node.innerText || node.textContent || '').trim();
+          if (/^[\d,.]+[KMBkmb]?$/.test(txt)) {
+            // A bare number adjacent to an engagement label — treat as likes if we have none yet
+            const n = num(txt);
+            if (n > 0 && likes === 0) likes = Math.max(likes, n);
+          } else {
+            const lM = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:reactions?|likes?)/i);
+            if (lM) likes = Math.max(likes, num(lM[1]));
+            const cM = txt.match(/([\d,.]+[KMBkmb]?)\s*comments?/i);
+            if (cM) postComments = Math.max(postComments, num(cM[1]));
+          }
+        });
+      } catch (e) {}
+    }
+
+    // ── PASS 5: Controlled footer text scan ──
+    if (likes === 0 && postComments === 0) {
+      const textCandidates = el.querySelectorAll(
+        '.update-components-footer, [class*="footer"], ' +
+        '[class*="social-detail"], [class*="engagement"], ' +
+        '.feed-shared-update-v2__meta, [class*="post-meta"]'
+      );
+      const candidateText = Array.from(textCandidates)
+        .filter(n => !n.closest(COMMENT_GUARD))
+        .map(n => n.innerText || n.textContent || '')
+        .join(' ');
+      if (candidateText) {
+        const lM = candidateText.match(/([\d,.]+[KMBkmb]?)\s*(?:reactions?|likes?|إعجاب)/i);
+        if (lM) likes = Math.max(likes, num(lM[1]));
+        const cM = candidateText.match(/([\d,.]+[KMBkmb]?)\s*(?:comments?|تعليق)/i);
+        if (cM) postComments = Math.max(postComments, num(cM[1]));
+        const sM = candidateText.match(/([\d,.]+[KMBkmb]?)\s*(?:reposts?|shares?)/i);
+        if (sM) postShares = Math.max(postShares, num(sM[1]));
+      }
+    }
+
+    // ── PASS 6: Scope expansion — search parent li/container ──
+    // On LinkedIn search pages, .social-details-social-counts may be a SIBLING of the
+    // article element, not a descendant. Walk up to the nearest li and re-scan.
+    if (likes === 0) {
+      const parentScope = el.closest('li, [class*="result-container"], [class*="cluster"]') || el.parentElement;
+      if (parentScope && parentScope !== el) {
+        parentScope.querySelectorAll(
+          '.social-details-social-counts, .update-components-social-counts, ' +
+          '[class*="social-counts"], [class*="reactions-count"]'
+        ).forEach(bar => {
+          if (bar.closest(COMMENT_GUARD)) return;
+          // Re-run all extraction on the wider scope bar
+          bar.querySelectorAll('[aria-label]').forEach(n => parseMetricLabel(n.getAttribute('aria-label') || ''));
+          const t = bar.innerText || bar.textContent || '';
+          const lM = t.match(/([\d,.]+[KMBkmb]?)\s*(?:reactions?|likes?)/i);
+          if (lM) likes = Math.max(likes, num(lM[1]));
+          const cM = t.match(/([\d,.]+[KMBkmb]?)\s*(?:comments?)/i);
+          if (cM) postComments = Math.max(postComments, num(cM[1]));
+          if (likes === 0) {
+            bar.querySelectorAll('span[aria-hidden="true"]').forEach(s => {
+              const v = (s.innerText || s.textContent || '').trim();
+              if (/^[\d,.]+[KMBkmb]?$/.test(v) && likes === 0) likes = Math.max(likes, num(v));
+            });
+          }
+        });
+      }
+    }
+
+    // ── PASS 7: Raw visible-text scan (absolute final fallback) ──
+    // LinkedIn always renders cards as visible text in the format:
+    //   "247"  (reaction count, standalone line, no label)
+    //   "15 comments • 8 reposts"
+    // This pass finds the number that immediately precedes "comments" in the raw text.
+    if (likes === 0) {
+      const textSource = el.closest('li') || el;
+      const raw = textSource.innerText || textSource.textContent || '';
+      // Pattern A: "247\n15 comments" — two adjacent numbers where 2nd is before "comments"
+      const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      for (let i = 0; i < lines.length; i++) {
+        const isCommentLine = /^([\d,.]+[KMBkmb]?)\s*comments?/i.test(lines[i]);
+        if (isCommentLine) {
+          const cMatch = lines[i].match(/^([\d,.]+[KMBkmb]?)/i);
+          if (cMatch && postComments === 0) postComments = Math.max(postComments, num(cMatch[1]));
+          // The reaction count is the bare number on the line immediately before
+          if (i > 0 && /^[\d,.]+[KMBkmb]?$/.test(lines[i - 1])) {
+            likes = Math.max(likes, num(lines[i - 1]));
+          }
+          break;
         }
-        if (author !== 'Unknown') break;
+      }
+      // Pattern B: inline "247 reactions" or "X reactions • Y comments"
+      if (likes === 0) {
+        const inlineMatch = raw.match(/([\d,.]+[KMBkmb]?)\s*reactions?/i);
+        if (inlineMatch) likes = Math.max(likes, num(inlineMatch[1]));
+      }
+      // Pattern C: "reactions" button aria-label on the wider scope
+      if (likes === 0) {
+        const textSource2 = el.closest('li') || el;
+        textSource2.querySelectorAll('button[aria-label], [role="button"][aria-label]').forEach(btn => {
+          if (btn.closest(COMMENT_GUARD)) return;
+          parseMetricLabel(btn.getAttribute('aria-label') || '');
+        });
+      }
+    }
+
+    // ── Author extraction ──
+    let author = 'Unknown';
+    for (const sel of [
+      'a[href*="/in/"] span[aria-hidden="true"]',
+      'a[href*="/company/"] span[aria-hidden="true"]',
+      '.update-components-actor__title',
+      '.feed-shared-actor__title',
+      'span[aria-hidden="true"]'
+    ]) {
+      const nodes = el.querySelectorAll(sel);
+      for (const c of nodes) {
+        if (c.closest('.feed-shared-update-v2__comments-container, .comments-comments-list, .update-components-header, .social-proof')) continue;
+        const t = (c.innerText || c.textContent || '').trim();
+        if (t.length > 2 && t.length < 100 && !/^\d/.test(t) && !t.includes('•') && !t.includes('·')) {
+          author = t.split('\n')[0].trim().substring(0, 80);
+          break;
+        }
+      }
+      if (author !== 'Unknown') break;
     }
 
     let textSnippet = '';
@@ -832,6 +997,7 @@ window.__linkedInExtractorReady = true;
     return {
       likes,
       postComments,
+      postShares,
       author,
       textSnippet,
       postedAtMs: parsePostTimeMsFromCard(el),
@@ -869,7 +1035,7 @@ window.__linkedInExtractorReady = true;
       'div.search-result__wrapper'
     ];
 
-    document.querySelectorAll(cardSelectors.join(', ')).forEach(card => {
+    document.querySelectorAll((opts.overrideSelectors || cardSelectors).join(', ')).forEach(card => {
       try {
         const resolvedCard = resolvePostCard(card);
         if (!resolvedCard || seenCards.has(resolvedCard) || seenCards.has(card)) return;
@@ -908,6 +1074,7 @@ window.__linkedInExtractorReady = true;
           url: cleanedUrl,
           likes: metrics.likes,
           postComments: metrics.postComments,
+          postShares: metrics.postShares || 0,
           author: metrics.author,
           textSnippet: metrics.textSnippet,
           postedAtMs: metrics.postedAtMs,
@@ -953,6 +1120,7 @@ window.__linkedInExtractorReady = true;
           url: cleanedUrl,
           likes: metrics.likes,
           postComments: metrics.postComments,
+          postShares: metrics.postShares || 0,
           author: metrics.author,
           textSnippet: metrics.textSnippet,
           postedAtMs: metrics.postedAtMs,
@@ -982,7 +1150,7 @@ window.__linkedInExtractorReady = true;
         const isCommentable = finalCard ? checkIsCommentable(finalCard) : true;
         const metrics = finalCard ? extractMetrics(finalCard) : { likes: 0, postComments: 0, author: '', textSnippet: '', postedAtMs: 0, mediaType: 'text' };
         allPosts.push({
-          url: postUrl, likes: metrics.likes, postComments: metrics.postComments,
+          url: postUrl, likes: metrics.likes, postComments: metrics.postComments, postShares: metrics.postShares || 0,
           author: metrics.author, textSnippet: metrics.textSnippet,
           postedAtMs: metrics.postedAtMs, mediaType: metrics.mediaType,
           commentable: isCommentable, container: finalCard, hasRealUrl: true,
@@ -1018,7 +1186,7 @@ window.__linkedInExtractorReady = true;
                 const isCommentable = checkIsCommentable(resolved);
                 const metrics = extractMetrics(resolved);
                 allPosts.push({
-                  url: fixed, likes: metrics.likes, postComments: metrics.postComments,
+                  url: fixed, likes: metrics.likes, postComments: metrics.postComments, postShares: metrics.postShares || 0,
                   author: metrics.author, textSnippet: metrics.textSnippet,
                   postedAtMs: metrics.postedAtMs, mediaType: metrics.mediaType,
                   commentable: isCommentable, container: resolved, hasRealUrl: true,
@@ -1069,6 +1237,7 @@ window.__linkedInExtractorReady = true;
       url: cleanedUrl,
       likes: metrics.likes,
       postComments: metrics.postComments,
+      postShares: metrics.postShares || 0,
       author: metrics.author,
       textSnippet: metrics.textSnippet,
       postedAtMs: metrics.postedAtMs,
@@ -1310,6 +1479,43 @@ window.__linkedInExtractorReady = true;
 
   function reachScoreUi(p) {
     return (Number(p.likes) || 0) + (Number(p.postComments) || Number(p.comments) || 0);
+  }
+
+  function searchOnlyCompositeReachScore(post) {
+    const likes = Number(post?.likes) || 0;
+    const commentsCount = Number(post?.postComments) || Number(post?.comments) || 0;
+    const sharesCount = Number(post?.postShares) || Number(post?.shares) || 0;
+    return likes + (commentsCount * 3) + (sharesCount * 2);
+  }
+
+  function evaluateSearchOnlyHardRules(post, opts = {}) {
+    const minLikes = Number(opts.minLikes) || 10;
+    const maxAgeMs = Number(opts.maxAgeMs) || (90 * 24 * 60 * 60 * 1000);
+    const nowMs = Number(opts.nowMs) || Date.now();
+    const likes = Number(post?.likes) || 0;
+    const commentsCount = Number(post?.postComments) || Number(post?.comments) || 0;
+    const sharesCount = Number(post?.postShares) || Number(post?.shares) || 0;
+    const postedAtMs = Number(post?.postedAtMs) || 0;
+    const commentable = post?.commentable !== false;
+    const reasons = [];
+
+    if (likes < minLikes) reasons.push(`likes=${likes} (<${minLikes})`);
+    if (!commentable) reasons.push('closed group / comments disabled');
+    // NOTE: LinkedIn search pages frequently do NOT expose the post timestamp via DOM.
+    // Treating a missing date as a hard failure would silently discard all validated posts.
+    // Instead: missing date = "date unknown, assume recent" and still passes the age check.
+    // Only explicitly dated posts older than maxAgeMs are rejected.
+    if (postedAtMs && (nowMs - postedAtMs) > maxAgeMs) reasons.push('older than 3 months');
+
+    return {
+      pass: reasons.length === 0,
+      reasons,
+      likes,
+      commentsCount,
+      sharesCount,
+      postedAtMs,
+      commentable
+    };
   }
 
   function commentCampaignScore(post) {
@@ -1581,11 +1787,33 @@ window.__linkedInExtractorReady = true;
       const rankedPreview = rankPostsForCommentCampaign(allPosts, { excludeUrls: commentedSet, need: commentNeed });
       console.log('[CommentCampaign] scrollPasses=' + commentScrollPassesUsed + ' rankedDistinct=' + rankedPreview.length + ' need=' + commentNeed + ' keyword="' + keyword + '" excluded=' + commentedSet.size);
     } else {
-    const SEARCH_SCROLL_TARGET = 80;
-    const SEARCH_ONLY_SAVE_TARGET = 10;
+    const SEARCH_SCROLL_TARGET = 60;
+    const SEARCH_ONLY_MIN_SAVE_TARGET = 10;
+    const SEARCH_ONLY_MAX_SAVE_TARGET = 15;
+    const SEARCH_ONLY_MIN_REACH_SCORE = 15;
+    const SEARCH_ONLY_MIN_LIKES_HARD = 10;
+    const SEARCH_ONLY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+    const SEARCH_ONLY_EARLY_POOL_TARGET = 30;
+    const SEARCH_ONLY_EARLY_QUALIFIED_TARGET = 15;
     const SEARCH_PROGRESS_BATCH = 10;
+    // Full selector list covering all LinkedIn post card variants.
+    // Performance is now protected by video/image freeing, yields, and rest breaks
+    // so broad selectors are safe. Narrow selectors were silently missing real posts.
+    const SEARCH_ONLY_CARD_SELECTORS = [
+      '.feed-shared-update-v2[role="article"]',
+      '[role="article"][data-urn]',
+      '.occludable-update',
+      '[data-view-name="feed-full-update"]',
+      'li.artdeco-card',
+      '.reusable-search__result-container',
+      '.feed-shared-update-v2',
+      '.search-entity',
+      'article',
+      'li.reusable-search__result-container',
+      '[data-urn].feed-shared-update-v2',
+      'div.search-result__wrapper'
+    ];
     let step = 0;
-    let lastIncrementalSyncAtStep = -1;
     let totalSavedIncremental = 0;
     let noGrowthSteps = 0;
     let lastActiveHarvestStep = -99;
@@ -1602,14 +1830,23 @@ window.__linkedInExtractorReady = true;
       const commentsCount = Number(p.postComments ?? p.comments) || 0;
       const reach = likes + commentsCount;
       const pos = Number(p.discoveryIndex ?? 999);
-      const isMediumOrHigh =
-        reach >= 5 ||
+      const isStrong =
+        reach >= 8 ||
+        commentsCount >= 3 ||
+        likes >= 6;
+      const isPromising =
+        reach >= 4 ||
         pos < 10 ||
         (reach > 0 && pos < 25);
+      const positionBonus =
+        pos < 5 ? 140 :
+        pos < 10 ? 90 :
+        pos < 20 ? 45 : 0;
       return {
         reach,
-        isMediumOrHigh,
-        sortScore: (reach * 1000) - pos
+        isStrong,
+        isPromising,
+        sortScore: (reach * 1000) + (commentsCount * 220) + (likes * 45) + positionBonus - pos
       };
     };
 
@@ -1617,83 +1854,236 @@ window.__linkedInExtractorReady = true;
       return getUnsyncedRealPosts()
         .map(p => ({ p, q: scoreSearchOnlyQuality(p) }))
         .sort((a, b) => {
-          if (a.q.isMediumOrHigh !== b.q.isMediumOrHigh) return Number(b.q.isMediumOrHigh) - Number(a.q.isMediumOrHigh);
+          if (a.q.isStrong !== b.q.isStrong) return Number(b.q.isStrong) - Number(a.q.isStrong);
+          if (a.q.isPromising !== b.q.isPromising) return Number(b.q.isPromising) - Number(a.q.isPromising);
+          if (a.q.sortScore !== b.q.sortScore) return b.q.sortScore - a.q.sortScore;
           if (a.q.reach !== b.q.reach) return b.q.reach - a.q.reach;
           return (a.p.discoveryIndex ?? 999999) - (b.p.discoveryIndex ?? 999999);
         });
     };
 
     const getUnsyncedQualityPosts = () => {
-      return rankUnsyncedSearchOnlyPosts()
-        .filter(x => x.q.isMediumOrHigh && x.q.reach > 0 || (x.q.isMediumOrHigh && (x.p.discoveryIndex ?? 999) < 12))
-        .sort((a, b) => b.q.sortScore - a.q.sortScore)
-        .map(x => x.p);
+      const ranked = rankUnsyncedSearchOnlyPosts();
+      const unique = new Map();
+      const takeFrom = rows => {
+        rows.forEach(row => {
+          if (!row?.p?.url || unique.has(row.p.url)) return;
+          unique.set(row.p.url, row.p);
+        });
+      };
+
+      takeFrom(ranked.filter(x => x.q.isStrong));
+      if (unique.size < SEARCH_ONLY_MAX_SAVE_TARGET) {
+        takeFrom(ranked.filter(x => x.q.isPromising));
+      }
+      if (unique.size < SEARCH_ONLY_MAX_SAVE_TARGET) {
+        takeFrom(ranked.filter(x => x.q.reach > 0));
+      }
+      if (unique.size < SEARCH_ONLY_MAX_SAVE_TARGET) {
+        takeFrom(ranked);
+      }
+
+      return Array.from(unique.values());
     };
 
-    async function flushSearchOnlyBatch(force = false) {
-      ensureActiveRun();
-      const qualityUnsynced = getUnsyncedQualityPosts();
-      const minBatchSize = force
-        ? 1
-        : ((step - lastIncrementalSyncAtStep >= 5) ? 1 : 2);
-      if (qualityUnsynced.length === 0 || (!force && qualityUnsynced.length < minBatchSize)) {
-        return { savedCount: 0, candidateCount: qualityUnsynced.length };
-      }
-
-      const batch = qualityUnsynced.slice(0, Math.min(12, qualityUnsynced.length));
-      const serializedChunk = batch.map(p => ({
-        url: p.url,
-        likes: p.likes,
-        postComments: p.postComments,
-        author: p.author,
-        textSnippet: p.textSnippet,
-        postedAtMs: p.postedAtMs,
-        mediaType: p.mediaType,
-        commentable: p.commentable || false,
-        hasRealUrl: true,
-        discoveryIndex: p.discoveryIndex
-      }));
-
-      const savedCount = await syncPosts(serializedChunk, keyword, dashboardUrl, userId, linkedInProfileId, false, {
-        SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS,
-        SEARCH_ONLY_LOOSE_INCREMENTAL: true
+    const getSearchOnlyCommitSnapshot = () => {
+      const byUrl = new Map();
+      getUnsyncedRealPosts().forEach(p => {
+        const clean = cleanUrl(p.url).split('?')[0];
+        if (!clean) return;
+        // Keep the entry with the highest likes — not necessarily the first seen.
+        // A post discovered early with likes=0 (lazy render) may later be re-harvested
+        // with likes=15 once social counts load. This ensures the best copy wins.
+        const existing = byUrl.get(clean);
+        if (!existing || (Number(p.likes) || 0) > (Number(existing.likes) || 0)) {
+          byUrl.set(clean, p);
+        }
       });
 
-      if (savedCount > 0) {
-        batch.slice(0, Math.min(savedCount, batch.length)).forEach(p => syncedUrls.add(p.url));
-        totalSavedIncremental += savedCount;
+      const ranked = Array.from(byUrl.values())
+        .map(p => {
+          const likes = Number(p.likes) || 0;
+          const commentsCount = Number(p.postComments ?? p.comments) || 0;
+          const sharesCount = Number(p.postShares ?? p.shares) || 0;
+          const reachScore = searchOnlyCompositeReachScore(p);
+          const hardRule = evaluateSearchOnlyHardRules(p, {
+            minLikes: SEARCH_ONLY_MIN_LIKES_HARD,
+            maxAgeMs: SEARCH_ONLY_MAX_AGE_MS
+          });
+          return {
+            ...p,
+            likes,
+            postComments: commentsCount,
+            postShares: sharesCount,
+            reachScore,
+            hardRule
+          };
+        })
+        .sort((a, b) => {
+          if (b.reachScore !== a.reachScore) return b.reachScore - a.reachScore;
+          if (b.postComments !== a.postComments) return b.postComments - a.postComments;
+          if (b.postShares !== a.postShares) return b.postShares - a.postShares;
+          if (b.likes !== a.likes) return b.likes - a.likes;
+          return (a.discoveryIndex ?? 999999) - (b.discoveryIndex ?? 999999);
+        });
+
+      const eligible = ranked.filter(p => p.hardRule.pass);
+      let adaptiveFloor = SEARCH_ONLY_MIN_REACH_SCORE;
+      let fallbackMode = 'strict';
+      let qualified = eligible
+        .filter(p => p.reachScore >= adaptiveFloor)
+        .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
+      if (qualified.length === 0 && step >= 30) {
+        adaptiveFloor = 5;
+        fallbackMode = 'floor5';
+        qualified = eligible
+          .filter(p => p.reachScore >= adaptiveFloor)
+          .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
       }
-      lastIncrementalSyncAtStep = step;
-      console.log('[SearchOnly] incremental save keyword="' + keyword + '" candidates=' + batch.length + ' saved=' + savedCount + ' totalSaved=' + totalSavedIncremental);
-      heartbeat('Phase1-Stream', `Saved ${totalSavedIncremental} posts so far`);
-      return { savedCount, candidateCount: qualityUnsynced.length };
+      if (qualified.length === 0 && step >= 30) {
+        adaptiveFloor = 1;
+        fallbackMode = 'engagement1';
+        qualified = eligible
+          .filter(p => p.reachScore >= adaptiveFloor)
+          .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
+      }
+      if (qualified.length === 0 && step >= 30 && eligible.length > 0) {
+        adaptiveFloor = 0;
+        fallbackMode = 'validated_fallback';
+        qualified = eligible.map(p => ({ ...p, qualificationReason: 'validated_fallback' }));
+      }
+      const selected = qualified.slice(0, Math.min(SEARCH_ONLY_MAX_SAVE_TARGET, qualified.length));
+      return { ranked, eligible, qualified, selected, adaptiveFloor, fallbackMode };
+    };
+
+    async function flushSearchOnlyBatch() {
+      return { savedCount: 0, candidateCount: getUnsyncedQualityPosts().length };
     }
 
-    console.log('[SearchOnly] keyword="' + keyword + '" forcedScrolls=' + SEARCH_SCROLL_TARGET + ' mode=deep-scan');
-    heartbeat('Phase1-Scroll', `Search-only: forced ${SEARCH_SCROLL_TARGET} scrolls with incremental saving`);
+    // Refresh metrics for posts already in allPosts that have likes=0.
+    // LinkedIn renders social counts lazily — a post added on first-discovery may have
+    // likes=0 because the count bar wasn't rendered yet. This pass re-scans currently
+    // visible cards and updates any zero-like entries with the now-rendered values.
+    // maxCards: limit how many posts to refresh per call to avoid blocking the main thread.
+    function refreshMetricsForVisibleCards(maxCards = 5) {
+      const zeroByUrl = new Map();
+      allPosts.forEach(p => {
+        if ((Number(p.likes) || 0) === 0 && p.url) {
+          zeroByUrl.set(cleanUrl(p.url).split('?')[0], p);
+        }
+      });
+      if (zeroByUrl.size === 0) return 0;
+
+      let refreshed = 0;
+      const cardSelectors = [
+        '.feed-shared-update-v2[role="article"]',
+        '[role="article"][data-urn]',
+        '.occludable-update',
+        '[data-view-name="feed-full-update"]'
+      ].join(', ');
+      const cards = document.querySelectorAll(cardSelectors);
+      for (const card of cards) {
+        if (refreshed >= maxCards) break;
+        let cardUrl = null;
+        const a = card.querySelector('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="/activity-"]');
+        if (a) cardUrl = cleanUrl(a.href).split('?')[0];
+        if (!cardUrl) continue;
+        const post = zeroByUrl.get(cardUrl);
+        if (!post) continue;
+        const metrics = extractMetrics(card);
+        if ((metrics.likes || 0) > 0) {
+          post.likes = metrics.likes;
+          post.postComments = metrics.postComments;
+          post.postShares = metrics.postShares;
+          refreshed++;
+          console.log(`[SearchOnly][Refresh] Updated likes=${metrics.likes} comments=${metrics.postComments} for ${cardUrl.slice(-60)}`);
+        }
+      }
+      return refreshed;
+    }
+
+    // Release media resources for cards we have already harvested.
+    // Pausing videos removes the GPU load. Clearing image src frees decoded
+    // pixel buffers (each can be 200-500 KB) without removing the DOM node,
+    // so refreshMetricsForVisibleCards can still find and re-scan the card.
+    function freePageResources() {
+      try {
+        // 1. Pause ALL videos on the page — biggest GPU drain
+        document.querySelectorAll('video').forEach(v => { try { v.pause(); v.currentTime = 0; } catch(e) {} });
+
+        // 2. Build a likes-lookup from allPosts so we can skip cards with likes=0.
+        // Cards still at 0 need their DOM intact for future refreshMetricsForVisibleCards calls.
+        const likesForUrl = new Map();
+        allPosts.forEach(p => {
+          if (!p.url) return;
+          const k = cleanUrl(p.url).split('?')[0];
+          const cur = likesForUrl.get(k) || 0;
+          if ((Number(p.likes) || 0) > cur) likesForUrl.set(k, Number(p.likes) || 0);
+        });
+
+        // 3. Free images only for cards already harvested AND with confirmed likes > 0
+        document.querySelectorAll(SEARCH_ONLY_CARD_SELECTORS.join(', ')).forEach(card => {
+          const a = card.querySelector('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="/activity-"]');
+          if (!a) return;
+          const cardUrl = cleanUrl(a.href).split('?')[0];
+          if (!seenUrls.has(cardUrl) && !seenUrls.has(cleanUrl(a.href))) return;
+          // Skip if likes still 0 — refresh may still need to read this card's DOM
+          if ((likesForUrl.get(cardUrl) || 0) === 0) return;
+          card.querySelectorAll('img[src]:not([src=""])').forEach(img => {
+            try { img.src = ''; if (img.srcset) img.srcset = ''; } catch(e) {}
+          });
+        });
+      } catch(e) {}
+    }
+
+    console.log('[SearchOnly] keyword="' + keyword + '" forcedScrolls=' + SEARCH_SCROLL_TARGET + ' mode=collect-then-rank');
+    heartbeat('Phase1-Scroll', `Search-only: collect candidates first, then rank top posts after ${SEARCH_SCROLL_TARGET} scrolls`);
 
     while (step < SEARCH_SCROLL_TARGET) {
       ensureActiveRun();
       const seenBeforeStep = seenUrls.size;
 
-      const scrollAmt = 1000 + Math.floor(Math.random() * 700);
+      // Smaller scroll steps (500–700px) let LinkedIn’s memory manager keep pace
+      // and prevent the tab from accumulating too much rendered content at once.
+      const scrollAmt = 500 + Math.floor(Math.random() * 200);
       const beforeDom = domSignalSnapshot();
       aggressiveScroll(scrollAmt);
-      const grew = await waitForDomGrowth(beforeDom, 900);
-      if (!grew) await wait(150, 350);
+      const grew = await waitForDomGrowth(beforeDom, 500);
+      if (!grew) await wait(100, 250);
 
-      harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+      // deepScan on every 5th step only — light scan otherwise
+      const useDeepScan = (step % 5 === 0);
+      harvest(seenUrls, seenCards, allPosts, { deepScan: useDeepScan, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
+      // Yield to the browser after harvest so it can repaint and GC
+      await new Promise(r => setTimeout(r, 0));
+      // Refresh zero-like posts every 3rd step (was 5th) with max 8 cards.
+      // More frequent refresh catches likes before cards scroll off the DOM.
+      if (step % 3 === 0) refreshMetricsForVisibleCards(8);
+      // Free videos + images AFTER refresh, and only for cards with likes > 0
+      freePageResources();
 
+      // Show-more every 3rd step — loads LinkedIn content batches faster
       if (step % 3 === 2) {
         scrollToBottom();
-        await wait(180, 420);
+        await wait(150, 300);
         await clickShowMore();
-        harvest(seenUrls, seenCards, allPosts, { deepScan: true });
+        harvest(seenUrls, seenCards, allPosts, { deepScan: true, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
+        await new Promise(r => setTimeout(r, 0));
+        refreshMetricsForVisibleCards(5);
+        freePageResources();
       }
+
+      // Rest every 10 steps: 2 s break lets the browser GC decoded images
+      // and stabilise before the next batch — prevents progressive freeze.
+      if ((step + 1) % 10 === 0) {
+        await wait(1800, 2200);
+      }
+
 
       let currentSeenSize = seenUrls.size;
       let real = countReal(allPosts);
       let qualityUnsyncedCount = getUnsyncedQualityPosts().length;
+      let commitSnapshot = getSearchOnlyCommitSnapshot();
       noGrowthSteps = currentSeenSize > seenBeforeStep ? 0 : (noGrowthSteps + 1);
 
       const lastDiag = window.__lastHarvestDiag || null;
@@ -1704,7 +2094,7 @@ window.__linkedInExtractorReady = true;
         (
           step < 4 ||
           noGrowthSteps >= 2 ||
-          qualityUnsyncedCount < 2 ||
+          qualityUnsyncedCount < SEARCH_ONLY_MIN_SAVE_TARGET ||
           ((step + 1) % SEARCH_PROGRESS_BATCH === 0)
         );
 
@@ -1720,14 +2110,27 @@ window.__linkedInExtractorReady = true;
         currentSeenSize = seenUrls.size;
         real = countReal(allPosts);
         qualityUnsyncedCount = getUnsyncedQualityPosts().length;
+        commitSnapshot = getSearchOnlyCommitSnapshot();
       }
 
-      console.log('[SearchOnly] keyword="' + keyword + '" scroll=' + (step + 1) + ' / ' + SEARCH_SCROLL_TARGET + ' distinctUrls=' + currentSeenSize + ' realPosts=' + real + ' validQuality=' + qualityUnsyncedCount + ' saved=' + totalSavedIncremental);
-      heartbeat(`Phase1-Scroll`, `scroll ${step + 1} / ${SEARCH_SCROLL_TARGET} | URLs ${currentSeenSize} | valid ${qualityUnsyncedCount} | saved ${totalSavedIncremental}`);
+      console.log('[SearchOnly] keyword="' + keyword + '" scroll=' + (step + 1) + ' / ' + SEARCH_SCROLL_TARGET + ' distinctUrls=' + currentSeenSize + ' realPosts=' + real + ' candidatePool=' + commitSnapshot.ranked.length + ' qualified=' + commitSnapshot.qualified.length + ' floor=' + commitSnapshot.adaptiveFloor + ' mode=' + commitSnapshot.fallbackMode + ' saved=' + totalSavedIncremental);
+      heartbeat(`Phase1-Scroll`, `scroll ${step + 1} / ${SEARCH_SCROLL_TARGET} | URLs ${currentSeenSize} | qualified ${commitSnapshot.qualified.length} | saving at end`);
+
+      if (commitSnapshot.ranked.length > 0 && (commitSnapshot.qualified.length === 0 || ((step + 1) % 10 === 0))) {
+        commitSnapshot.ranked.slice(0, Math.min(12, commitSnapshot.ranked.length)).forEach((p, idx) => {
+          if (!p.hardRule?.pass) {
+            console.log(`[SearchOnly] REJECTED: likes=${p.likes || 0} comments=${p.postComments || 0} shares=${p.postShares || 0} score=${p.reachScore} reasons=${p.hardRule.reasons.join(' | ')} url=${cleanUrl(p.url).slice(0, 120)}`);
+            return;
+          }
+          const passed = p.reachScore >= commitSnapshot.adaptiveFloor ? 'PASS' : 'FAIL';
+          const reason = passed === 'PASS' ? `score>=${commitSnapshot.adaptiveFloor}` : `score<${commitSnapshot.adaptiveFloor}`;
+          console.log(`[SearchOnly][Score] #${idx + 1} likes=${p.likes || 0} comments=${p.postComments || 0} shares=${p.postShares || 0} score=${p.reachScore} floor=${commitSnapshot.adaptiveFloor} ${passed} reason=${reason} url=${cleanUrl(p.url).slice(0, 120)}`);
+        });
+      }
 
       if ((step + 1) % SEARCH_PROGRESS_BATCH === 0) {
         const batchQuality = getUnsyncedQualityPosts().length;
-        if (batchQuality < 2) {
+        if (batchQuality < SEARCH_ONLY_MIN_SAVE_TARGET) {
           console.warn('[SearchOnly] low yield after scroll batch ' + (step + 1) + '/' + SEARCH_SCROLL_TARGET + ' — widening harvest/retrying');
           for (let retry = 0; retry < 3; retry++) {
             aggressiveScroll(320 + Math.floor(Math.random() * 180));
@@ -1754,32 +2157,20 @@ window.__linkedInExtractorReady = true;
           }
           const refreshedQuality = getUnsyncedQualityPosts().length;
           console.log('[SearchOnly] post-retry batch quality count=' + refreshedQuality + ' after scroll ' + (step + 1));
+          commitSnapshot = getSearchOnlyCommitSnapshot();
         }
       }
 
-      if (isSearchOnly) {
-        ensureActiveRun();
-        const qualityUnsynced = getUnsyncedQualityPosts();
-        const shouldFlushNow =
-          qualityUnsynced.length >= 3 ||
-          (qualityUnsynced.length >= 2 && step - lastIncrementalSyncAtStep >= 2) ||
-          (qualityUnsynced.length >= 1 && step - lastIncrementalSyncAtStep >= 5);
-
-        if (shouldFlushNow) {
-          await flushSearchOnlyBatch(false);
-          if (totalSavedIncremental >= SEARCH_ONLY_SAVE_TARGET) {
-            console.log('[SearchOnly] save target reached keyword="' + keyword + '" totalSaved=' + totalSavedIncremental + ' at scroll=' + (step + 1) + ' — stopping early');
-            heartbeat('Phase1-Target', `Search-only target reached (${totalSavedIncremental}/${SEARCH_ONLY_SAVE_TARGET}) | stopping early`);
-            break;
-          }
-        }
-      }
+      // Early-stop removed: always scroll to the maximum (60).
+      // noGrowthSteps is the only natural exit — fires when LinkedIn has no more results.
+      // Stopping at qualified>=10 was leaving posts on the table after deduplication.
 
       step++;
     }
-    await flushSearchOnlyBatch(true);
-    console.log('[SearchOnly] scroll loop done steps=' + step + ' keyword="' + keyword + '" totalSaved=' + totalSavedIncremental);
-    heartbeat('Phase1-Limit', `Search-only scroll finished (${step}/${SEARCH_SCROLL_TARGET}) | saved ${totalSavedIncremental}`);
+    const finalSnapshot = getSearchOnlyCommitSnapshot();
+    const collectedCandidates = finalSnapshot.ranked.length;
+    console.log('[SearchOnly] scroll loop done steps=' + step + ' keyword="' + keyword + '" collectedCandidates=' + collectedCandidates + ' qualified=' + finalSnapshot.qualified.length + ' saved=0');
+    heartbeat('Phase1-Limit', `Search-only scroll finished (${step}/${SEARCH_SCROLL_TARGET}) | qualified ${finalSnapshot.qualified.length}`);
     } // end search-only deep scroll branch
 
     // ── Step 5: Single validation pass (after all scrolling; no loops) ──
@@ -1798,16 +2189,24 @@ window.__linkedInExtractorReady = true;
     const syncConstraints = {
       SETTINGS_MIN_LIKES, SETTINGS_MAX_LIKES, SETTINGS_MIN_COMMENTS, SETTINGS_MAX_COMMENTS,
       SKIP_KEYWORD_GATE_FOR_FINAL: needsCommenting,
-      SEARCH_ONLY_SKIP_HTTP_VERIFY: isSearchOnly === true
+      SEARCH_ONLY_SKIP_HTTP_VERIFY: isSearchOnly === true,
+      SEARCH_ONLY_FINAL_RANKING: isSearchOnly === true,
+      SEARCH_ONLY_TARGET_MIN: 10,
+      SEARCH_ONLY_TARGET_MAX: 15,
+      SEARCH_ONLY_MIN_REACH_SCORE: 15,
+      SEARCH_ONLY_MIN_LIKES_HARD: 10,
+      SEARCH_ONLY_MAX_AGE_MS: 90 * 24 * 60 * 60 * 1000
     };
 
     // ── Step 6: Serialize (search-only: full pool; comment: top-by-reach targets only) ──
     const remainingPosts = validPosts.filter(p => !syncedUrls.has(p.url));
     let serializedPosts = remainingPosts.map(p => ({
       url: p.url, likes: p.likes, postComments: p.postComments,
+      postShares: p.postShares,
       author: p.author, textSnippet: p.textSnippet,
-      commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
-      discoveryIndex: p.discoveryIndex
+      commentable: p.commentable !== false, hasRealUrl: p.hasRealUrl || false,
+      discoveryIndex: p.discoveryIndex,
+      postedAtMs: p.postedAtMs || 0
     }));
 
     // ── Step 7: Comment or sync ──
@@ -1867,6 +2266,7 @@ window.__linkedInExtractorReady = true;
       heartbeat('Phase2', `CommentCampaign cycle ${cycleNum}: strict top-${requiredComments} by reach`);
       serializedPosts = rankedAll.slice(0, requiredComments).map(p => ({
         url: p.url, likes: p.likes, postComments: p.postComments,
+        postShares: p.postShares,
         author: p.author, textSnippet: p.textSnippet,
         commentable: p.commentable || false, hasRealUrl: p.hasRealUrl || false,
         discoveryIndex: p.discoveryIndex
@@ -2807,6 +3207,12 @@ window.__linkedInExtractorReady = true;
     const SETTINGS_MAX_LIKES = constraints.SETTINGS_MAX_LIKES || Infinity;
     const SETTINGS_MIN_COMMENTS = constraints.SETTINGS_MIN_COMMENTS || 0;
     const SETTINGS_MAX_COMMENTS = constraints.SETTINGS_MAX_COMMENTS || Infinity;
+    const SEARCH_ONLY_FINAL_RANKING = constraints.SEARCH_ONLY_FINAL_RANKING === true;
+    const SEARCH_ONLY_TARGET_MIN = Math.max(1, Number(constraints.SEARCH_ONLY_TARGET_MIN) || 10);
+    const SEARCH_ONLY_TARGET_MAX = Math.max(SEARCH_ONLY_TARGET_MIN, Number(constraints.SEARCH_ONLY_TARGET_MAX) || 15);
+    const SEARCH_ONLY_MIN_REACH_SCORE = Math.max(0, Number(constraints.SEARCH_ONLY_MIN_REACH_SCORE) || 15);
+    const SEARCH_ONLY_MIN_LIKES_HARD = Math.max(0, Number(constraints.SEARCH_ONLY_MIN_LIKES_HARD) || 10);
+    const SEARCH_ONLY_MAX_AGE_MS = Math.max(1, Number(constraints.SEARCH_ONLY_MAX_AGE_MS) || (90 * 24 * 60 * 60 * 1000));
     const baseRealPosts = posts.filter(p =>
       (p.hasRealUrl || (p.url && !p.url.startsWith('discovered:') && !p.url.includes('synthetic:'))) &&
       p.url && isValidCanonicalPostUrl(p.url)
@@ -2821,6 +3227,7 @@ window.__linkedInExtractorReady = true;
           url: u,
           likes: p.likes || 0,
           comments: p.postComments ?? p.comments ?? 0,
+          shares: p.postShares ?? p.shares ?? 0,
           author: p.author || '',
           preview: (p.textSnippet || '').substring(0, 200),
           postText: p.textSnippet || '',
@@ -2880,6 +3287,236 @@ window.__linkedInExtractorReady = true;
           console.warn(`[v30] Keyword gate produced only ${relevantRealPosts.length} matches for "${keyword}". Added ${supplements.length} adaptive fallback posts.`);
         }
       }
+    }
+
+    if (isFinal && SEARCH_ONLY_FINAL_RANKING) {
+      const byUrl = new Map();
+      for (const p of realPosts) {
+        const clean = cleanUrl(p.url).split('?')[0];
+        if (!clean) continue;
+        // Keep highest-likes copy per URL — not first-seen.
+        const existing = byUrl.get(clean);
+        if (!existing || (Number(p.likes) || 0) > (Number(existing.likes) || 0)) {
+          byUrl.set(clean, p);
+        }
+      }
+
+      const rankedCandidates = Array.from(byUrl.values())
+        .map(p => {
+          const likes = Number(p.likes) || 0;
+          const commentsCount = Number(p.postComments ?? p.comments) || 0;
+          const sharesCount = Number(p.postShares ?? p.shares) || 0;
+          const reachScore = searchOnlyCompositeReachScore(p);
+          const hardRule = evaluateSearchOnlyHardRules(p, {
+            minLikes: SEARCH_ONLY_MIN_LIKES_HARD,
+            maxAgeMs: SEARCH_ONLY_MAX_AGE_MS
+          });
+          return {
+            ...p,
+            likes,
+            postComments: commentsCount,
+            postShares: sharesCount,
+            reachScore,
+            engagementTier: reachScore >= 40 ? 'high' : (reachScore >= SEARCH_ONLY_MIN_REACH_SCORE ? 'mid' : 'low'),
+            hardRule
+          };
+        })
+        .sort((a, b) => {
+          if (b.reachScore !== a.reachScore) return b.reachScore - a.reachScore;
+          if (b.postComments !== a.postComments) return b.postComments - a.postComments;
+          if (b.postShares !== a.postShares) return b.postShares - a.postShares;
+          if (b.likes !== a.likes) return b.likes - a.likes;
+          return (a.discoveryIndex ?? 999999) - (b.discoveryIndex ?? 999999);
+        });
+
+      // ── DIAGNOSTIC: log gate counts and per-candidate data ──
+      console.log(`[SearchOnly][Gate] posts_in=${posts.length} baseReal=${baseRealPosts.length} realPosts=${realPosts.length} rankedCandidates=${rankedCandidates.length} minLikes=${SEARCH_ONLY_MIN_LIKES_HARD} minScore=${SEARCH_ONLY_MIN_REACH_SCORE}`);
+      heartbeat('Phase4-Debug', `Gate: posts_in=${posts.length} baseReal=${baseRealPosts.length} realPosts=${realPosts.length} ranked=${rankedCandidates.length}`);
+      rankedCandidates.slice(0, Math.min(20, rankedCandidates.length)).forEach((p, idx) => {
+        console.log(`[SearchOnly][Candidate] #${idx+1} likes=${p.likes} comments=${p.postComments} shares=${p.postShares} score=${p.reachScore} hardPass=${p.hardRule.pass} reasons="${p.hardRule.reasons.join(' | ')}" commentable=${p.commentable} postedAtMs=${p.postedAtMs||0} url=${cleanUrl(p.url).slice(0,120)}`);
+      });
+      if (rankedCandidates.length === 0) {
+        console.warn(`[SearchOnly][Gate] rankedCandidates=0! Checking raw posts: posts_in=${posts.length} first5:`);
+        posts.slice(0, 5).forEach((p, i) => console.log(`[SearchOnly][RawPost] #${i+1} url=${p.url} hasRealUrl=${p.hasRealUrl} valid=${isValidCanonicalPostUrl(p.url)} likes=${p.likes||0}`));
+      }
+
+      const eligibleCandidates = rankedCandidates.filter(p => p.hardRule.pass);
+      console.log(`[SearchOnly][Gate] eligible=${eligibleCandidates.length} of ${rankedCandidates.length} passed hard rules (likes>=${SEARCH_ONLY_MIN_LIKES_HARD}, commentable, age)`);
+      let adaptiveFloor = SEARCH_ONLY_MIN_REACH_SCORE;
+      let fallbackMode = 'strict';
+      let qualified = eligibleCandidates
+        .filter(p => p.reachScore >= adaptiveFloor)
+        .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
+      // Drop adaptive floor whenever qualified < target (not just when =0).
+      // This mirrors the scroll loop behaviour so syncPosts saves the same posts
+      // that getSearchOnlyCommitSnapshot() showed as qualified during scrolling.
+      if (qualified.length < SEARCH_ONLY_TARGET_MIN) {
+        adaptiveFloor = 5;
+        fallbackMode = 'floor5';
+        qualified = eligibleCandidates
+          .filter(p => p.reachScore >= adaptiveFloor)
+          .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
+      }
+      if (qualified.length < SEARCH_ONLY_TARGET_MIN) {
+        adaptiveFloor = 1;
+        fallbackMode = 'engagement1';
+        qualified = eligibleCandidates
+          .filter(p => p.reachScore >= adaptiveFloor)
+          .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
+      }
+      if (qualified.length === 0 && eligibleCandidates.length > 0) {
+        adaptiveFloor = 0;
+        fallbackMode = 'validated_fallback';
+        qualified = eligibleCandidates.map(p => ({ ...p, qualificationReason: 'validated_fallback' }));
+      }
+      console.log(`[SearchOnly][Gate] qualified=${qualified.length} fallbackMode=${fallbackMode}`);
+      const selectedCount = Math.min(SEARCH_ONLY_TARGET_MAX, qualified.length);
+      let final = qualified.slice(0, selectedCount);
+
+      console.log(`[SearchOnly] Collected ${rankedCandidates.length} candidates, ${qualified.length} passed all filters. Selecting top ${final.length} by reach. Saving now.`);
+      if (fallbackMode === 'validated_fallback') {
+        console.warn(`[SearchOnly] Validated_fallback activated: ${eligibleCandidates.length} validated posts found (after hard rules). Saving them now.`);
+        final.forEach(p => {
+          console.log(`[SearchOnly] Saved via fallback: ${cleanUrl(p.url).slice(0, 140)}`);
+        });
+      }
+      rankedCandidates.slice(0, Math.min(15, rankedCandidates.length)).forEach((p, idx) => {
+        if (!p.hardRule?.pass) {
+          console.log(`[SearchOnly] REJECTED: likes=${p.likes || 0} comments=${p.postComments || 0} shares=${p.postShares || 0} score=${p.reachScore} reasons=${p.hardRule.reasons.join(' | ')} url=${cleanUrl(p.url).slice(0, 120)}`);
+          return;
+        }
+        const qualifiedRow = qualified.find(q => cleanUrl(q.url) === cleanUrl(p.url));
+        const passed = !!qualifiedRow ? 'PASS' : 'FAIL';
+        const reason = qualifiedRow?.qualificationReason || `score<${adaptiveFloor}`;
+        console.log(`[SearchOnly][FinalScore] #${idx + 1} likes=${p.likes || 0} comments=${p.postComments || 0} shares=${p.postShares || 0} score=${p.reachScore} floor=${adaptiveFloor} ${passed} reason=${reason} url=${cleanUrl(p.url).slice(0, 120)}`);
+      });
+      if (qualified.length < SEARCH_ONLY_TARGET_MIN) {
+        console.warn(`[SearchOnly] WARNING: Only ${qualified.length} posts passed all hard rules and floor ${adaptiveFloor}. No weak posts were added to fill the gap.`);
+      }
+
+      // ── FALLBACK L2: likes>=10 + commentable, any score, ignore age ──
+      // Triggered when eligible=0 (typically: likes=0 for all — DOM metrics extraction failed on search cards)
+      if (final.length === 0 && rankedCandidates.length > 0) {
+        console.warn(`[SearchOnly] eligible=0 after hard rules. Trying fallback-L2: likes>=${SEARCH_ONLY_MIN_LIKES_HARD} + commentable only.`);
+        const l2 = rankedCandidates
+          .filter(p => (Number(p.likes) || 0) >= SEARCH_ONLY_MIN_LIKES_HARD && p.commentable !== false)
+          .map(p => ({ ...p, qualificationReason: 'fallback_l2', engagementTier: 'low' }));
+        console.log(`[SearchOnly][Gate] fallback_l2_candidates=${l2.length}`);
+        if (l2.length > 0) {
+          fallbackMode = 'fallback_l2';
+          final = l2.slice(0, SEARCH_ONLY_TARGET_MAX);
+          console.warn(`[SearchOnly] Validated_fallback activated: ${final.length} validated posts found (after hard rules). Saving them now.`);
+          final.forEach(p => { console.log(`[SearchOnly] Saved via fallback: ${cleanUrl(p.url).slice(0, 140)}`); });
+        }
+      }
+
+      // ── FALLBACK L3: likes>=10 required, any score, ignore age/commentable ──
+      if (final.length === 0 && rankedCandidates.length > 0) {
+        const maxLikesInPool = Math.max(...rankedCandidates.map(p => p.likes || 0));
+        const l3 = rankedCandidates
+          .filter(p => (Number(p.likes) || 0) >= SEARCH_ONLY_MIN_LIKES_HARD)
+          .slice(0, SEARCH_ONLY_TARGET_MAX)
+          .map(p => ({ ...p, qualificationReason: 'fallback_l3', engagementTier: 'low' }));
+        console.warn(`[SearchOnly] FALLBACK L3: likes>=${SEARCH_ONLY_MIN_LIKES_HARD} filter → ${l3.length} candidates (max likes in pool=${maxLikesInPool}).`);
+        heartbeat('Phase4-Fallback', `Fallback L3: ${l3.length} posts with likes>=${SEARCH_ONLY_MIN_LIKES_HARD} (max in pool=${maxLikesInPool})`);
+        if (l3.length > 0) {
+          final = l3;
+          fallbackMode = 'fallback_l3';
+          console.warn(`[SearchOnly] Validated_fallback activated: ${final.length} posts. Saving them now.`);
+          final.forEach(p => { console.log(`[SearchOnly] Saved via fallback: likes=${p.likes} url=${cleanUrl(p.url).slice(0,120)}`); });
+        }
+      }
+
+      // ── FALLBACK L4 (RAW POOL): rankedCandidates=0, strict likes>=10 ──
+      if (final.length === 0 && posts.length > 0) {
+        const rawFallback = posts
+          .filter(p => p.url && isValidCanonicalPostUrl(p.url) && (Number(p.likes) || 0) >= SEARCH_ONLY_MIN_LIKES_HARD)
+          .slice(0, SEARCH_ONLY_TARGET_MAX)
+          .map(p => ({
+            ...p,
+            qualificationReason: 'raw_pool_fallback',
+            engagementTier: 'low',
+            likes: Number(p.likes) || 0,
+            postComments: Number(p.postComments ?? p.comments) || 0,
+            postShares: Number(p.postShares ?? p.shares) || 0,
+            reachScore: 0,
+            hardRule: { pass: true, reasons: [] }
+          }));
+        console.warn(`[SearchOnly] RAW-POOL FALLBACK: ${rawFallback.length} posts with valid URLs + likes>=${SEARCH_ONLY_MIN_LIKES_HARD}.`);
+        if (rawFallback.length > 0) {
+          final = rawFallback;
+          fallbackMode = 'raw_pool_fallback';
+          heartbeat('Phase4-Fallback', `Fallback L4 raw: saving ${final.length} posts`);
+          console.warn(`[SearchOnly] Validated_fallback activated: ${final.length} posts from raw pool. Saving them now.`);
+          final.forEach(p => { console.log(`[SearchOnly] Saved via fallback: likes=${p.likes} url=${cleanUrl(p.url).slice(0,120)}`); });
+        }
+      }
+
+      if (final.length === 0) {
+        const maxLikes = rankedCandidates.length > 0 ? Math.max(...rankedCandidates.map(p => p.likes||0)) : 0;
+        const eligCount = rankedCandidates.filter(p => p.hardRule?.pass).length;
+        const reason = rankedCandidates.length === 0
+          ? `rankedCandidates=0 — keyword gate or URL filter removed all ${posts.length} posts`
+          : eligCount === 0
+            ? `All ${rankedCandidates.length} posts failed hard rules. Likely cause: likes extraction returned 0 for all (max likes seen=${maxLikes})`
+            : `${eligCount} posts passed hard rules but none reached score floor`;
+        console.warn(`[SearchOnly][ZERO-SAVE] Saved=0. Reason: ${reason}`);
+        heartbeat('Phase4-ZeroSave', `⚠️ Saved=0. ${reason}`);
+        return 0;
+      }
+
+      console.log(`[SearchOnly] Saving ${final.length} posts via mode=${fallbackMode}.`);
+
+      const payload = final.map(p => {
+        const u = cleanUrl(p.url);
+        const ts = p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null;
+        return {
+          url: u,
+          likes: p.likes,
+          comments: p.postComments,
+          shares: p.postShares || 0,
+          author: p.author,
+          preview: (p.textSnippet || '').substring(0, 200),
+          postText: p.textSnippet || '',
+          timestamp: ts,
+          mediaType: p.mediaType || 'text',
+          id: postIdFromCanonicalUrl(u),
+          engagementTier: p.engagementTier,
+          commentable: p.commentable || false,
+          hasRealUrl: true,
+          discoveryIndex: p.discoveryIndex
+        };
+      });
+
+      // ── Clear pre-send log: shows exactly what is being sent and why ──
+      console.log(`[SearchOnly][Send] Sending ${final.length} posts to server. qualified=${qualified.length} ranked=${rankedCandidates.length} eligible=${eligibleCandidates.length} mode=${fallbackMode} floor=${adaptiveFloor}`);
+      heartbeat('Phase4-Sending', `📬 Sending ${final.length} posts (qualified=${qualified.length}, likes≥${SEARCH_ONLY_MIN_LIKES_HARD}, mode=${fallbackMode})`);
+      console.log(`[SearchOnly][Send] NOTE: server deduplicates by URL. If these posts were saved in a previous run, the new-post count in Saved Posts will be less than ${final.length}.`);
+      final.forEach((p, i) => console.log(`[SearchOnly][Send] #${i+1} likes=${p.likes} score=${p.reachScore} url=${cleanUrl(p.url).slice(0,120)}`));
+
+      return await new Promise(resolve => {
+        try {
+          chrome.runtime.sendMessage({
+            action: 'SYNC_RESULTS',
+            posts: payload,
+            keyword,
+            dashboardUrl,
+            userId,
+            linkedInProfileId,
+            debugInfo: {
+              searchOnlyFinalRanking: true,
+              candidateCount: rankedCandidates.length,
+              qualifiedCount: qualified.length,
+              selectedCount: payload.length,
+              minReachScore: adaptiveFloor,
+              fallbackMode
+            }
+          }, () => {
+            if (chrome.runtime.lastError) {}
+            resolve(payload.length);
+          });
+        } catch (e) { resolve(0); }
+      });
     }
 
     const labeled = realPosts.map(p => {
@@ -3053,6 +3690,7 @@ window.__linkedInExtractorReady = true;
         url: u,
         likes: p.likes,
         comments: p.postComments,
+        shares: p.postShares || 0,
         author: p.author,
         preview: (p.textSnippet || '').substring(0, 200),
         postText: p.textSnippet || '',
