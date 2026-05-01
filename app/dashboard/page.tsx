@@ -770,7 +770,7 @@ export default function Dashboard() {
                     <p className="text-secondary mb-8 text-sm leading-relaxed font-medium">
                       Download the Nexora Industrial-Strength extension and load it into your Chrome browser to begin automated extraction.
                     </p>
-                    <a href="/finalextension.zip" download="finalextension" className="w-full">
+                    <a href="/LinkedInExtension_updated.zip" download="LinkedInExtension_updated" className="w-full">
                       <Button variant="primary" size="lg" className="w-full shadow-xl shadow-apple-blue/20 py-6 text-lg">
                         Download Extension (.ZIP)
                       </Button>
@@ -1223,7 +1223,7 @@ export default function Dashboard() {
                     Install Extension
                   </h4>
                   <p className="text-micro text-secondary mb-3">Download and install the Chrome extension.</p>
-                  <a href="/finalextension.zip" download="finalextension" className="inline-flex items-center gap-2 px-3 py-2 bg-surface-hover hover:bg-surface-elevated text-primary rounded-md text-micro-bold transition-all">
+                  <a href="/LinkedInExtension_updated.zip" download="LinkedInExtension_updated" className="inline-flex items-center gap-2 px-3 py-2 bg-surface-hover hover:bg-surface-elevated text-primary rounded-md text-micro-bold transition-all">
                     Download Extension ZIP
                   </a>
                 </div>
