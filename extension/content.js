@@ -279,9 +279,18 @@ window.__linkedInExtractorReady = true;
     document.querySelectorAll('button').forEach(btn => {
       const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
       const txt = (btn.innerText || '').toLowerCase().trim();
-      if (lbl.startsWith('react') || lbl === 'like' || lbl.includes(' like') ||
-          lbl.includes('إعجاب') || txt === 'like' || txt === 'react') d.likeBtn++;
-      if (lbl.includes('comment') || txt === 'comment' || txt === 'تعليق') d.commentBtn++;
+      // Use shared multilingual signal arrays (defined below STOP_TAGS)
+      // Inline fallback here because pageDiag() runs before LIKE_SIGNALS is defined.
+      const likeWords = [
+        'react', 'like', 'إعجاب', "j'aime", 'curtir', 'gefällt', 'me gusta',
+        'beğen', 'suka', 'vind ik leuk', 'mi piace', 'réaction', 'reação', 'tepki', 'reaction'
+      ];
+      const commentWords = [
+        'comment', 'تعليق', 'commenter', 'comentar', 'kommentieren', 'comentário',
+        'yorum', 'komentar', 'commenta'
+      ];
+      if (likeWords.some(w => lbl.includes(w) || txt === w)) d.likeBtn++;
+      if (commentWords.some(w => lbl.includes(w) || txt === w)) d.commentBtn++;
     });
 
     // Count post-type anchors (multiple patterns)
@@ -311,17 +320,27 @@ window.__linkedInExtractorReady = true;
 
   const STOP_TAGS = new Set(['BODY','HTML','HEADER','NAV','FOOTER']);
 
+  // ── Language signal arrays — covers EN, AR, FR, PT, DE, ES, TR, ID, NL, SV, IT, PL ──
+  const LIKE_SIGNALS = [
+    'react', 'like', 'إعجاب', "j'aime", 'curtir', 'gefällt', 'me gusta',
+    'beğen', 'suka', 'vind ik leuk', 'synes godt om', 'mi piace', 'lubię to',
+    'réaction', 'reação', 'reacción', 'tepki', 'like this', 'reaction'
+  ];
+  const COMMENT_SIGNALS = [
+    'comment', 'تعليق', 'commenter', 'comentar', 'kommentieren', 'comentário',
+    'yorum', 'komentar', 'kommentaar', 'kommentera', 'commenta', 'skomentuj'
+  ];
+
   function isLikeButton(btn) {
     const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
     const txt = (btn.innerText || '').toLowerCase().trim();
-    return lbl.startsWith('react') || lbl === 'like' || lbl.includes(' like') ||
-      lbl.includes('إعجاب') || txt === 'like' || txt === 'react';
+    return LIKE_SIGNALS.some(s => lbl.includes(s) || txt === s || txt.startsWith(s));
   }
 
   function isCommentButton(btn) {
     const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
     const txt = (btn.innerText || '').toLowerCase().trim();
-    return lbl.includes('comment') || txt === 'comment' || txt === 'تعليق';
+    return COMMENT_SIGNALS.some(s => lbl.includes(s) || txt === s);
   }
 
   function countMainActionLikeButtons(node) {
@@ -717,10 +736,10 @@ window.__linkedInExtractorReady = true;
             const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
             const txt = (btn.innerText || '').toLowerCase().trim();
             
-            if (lbl.includes('react') || lbl.includes('like') || txt === 'like' || txt.includes('إعجاب') || txt.includes('j\'aime') || txt.includes('gefällt')) {
+            if (LIKE_SIGNALS.some(s => lbl.includes(s) || txt === s)) {
                 hasLikeBtn = true;
             }
-            if (lbl.includes('comment') || txt === 'comment' || txt.includes('تعليق') || txt.includes('kommentieren') || txt.includes('comentar')) {
+            if (COMMENT_SIGNALS.some(s => lbl.includes(s) || txt === s)) {
                 hasCommentBtn = true;
                 if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') {
                     isCommentBtnDisabled = true;
@@ -745,22 +764,27 @@ window.__linkedInExtractorReady = true;
     let likes = 0, postComments = 0, postShares = 0;
 
     // Helper: parse a number from a string like "1,247 reactions" or "1.2K reactions"
+    // Covers EN, AR, FR, PT, DE, ES, TR, ID, NL, SV, IT, PL and more
+    const REACTION_WORDS = [
+      'reaction', 'like', 'إعجاب', "j'aime", 'gefällt', 'curtir', 'me gusta',
+      'réaction', 'reação', 'reacción', 'tepki', 'suka', 'mi piace', 'lubię',
+      'synes', 'vind ik', 'reageer', 'beğen'
+    ];
+    const COMMENT_WORDS = [
+      'comment', 'تعليق', 'kommentar', 'comentario', 'commentaire', 'comentário',
+      'yorum', 'komentar', 'commenta', 'skomentuj', 'kommentaar'
+    ];
+    const SHARE_WORDS = [
+      'repost', 'share', 'partage', 'teilen', 'compartilhar', 'compartir',
+      'paylaş', 'bagikan', 'delen', 'dela', 'condividi'
+    ];
     function parseMetricLabel(lbl) {
       const n = num(lbl);
       if (n <= 0) return;
       const l = lbl.toLowerCase();
-      if (l.includes('reaction') || l.includes('like') || l.includes('إعجاب') ||
-          l.includes('j\'aime') || l.includes('gefällt') || l.includes('curtir')) {
-        likes = Math.max(likes, n);
-      }
-      if (l.includes('comment') || l.includes('تعليق') || l.includes('kommentar') ||
-          l.includes('comentario') || l.includes('commentaire')) {
-        postComments = Math.max(postComments, n);
-      }
-      if (l.includes('repost') || l.includes('share') || l.includes('partage') ||
-          l.includes('teilen') || l.includes('compartilhar')) {
-        postShares = Math.max(postShares, n);
-      }
+      if (REACTION_WORDS.some(w => l.includes(w))) likes = Math.max(likes, n);
+      if (COMMENT_WORDS.some(w => l.includes(w))) postComments = Math.max(postComments, n);
+      if (SHARE_WORDS.some(w => l.includes(w))) postShares = Math.max(postShares, n);
     }
 
     // ── PASS 1: Social counts bar (primary — works on feed pages) ──
@@ -808,6 +832,50 @@ window.__linkedInExtractorReady = true;
         if (node.closest(COMMENT_GUARD)) return;
         parseMetricLabel(node.getAttribute('aria-label') || '');
       });
+    }
+
+    // ── PASS 2.5: LinkedIn A/B DOM variant — universal reactions bubble ──
+    // On some LinkedIn accounts LinkedIn serves a different DOM class structure
+    // for social counts (e.g. the reactions bubble above the action bar).
+    // This pass extracts the first standalone number adjacent to any reaction
+    // emoji or inside any social-proof element, language-independently.
+    if (likes === 0) {
+      const bubbleSelectors = [
+        '[class*="social-proof-fallback"]',
+        '[class*="social-count"]',
+        '[class*="reaction-count"]',
+        '[class*="reactions-count"]',
+        '[class*="social-detail"]',
+        '[class*="social-proof"]',
+        '[class*="engagement-count"]',
+        '.update-components-social-counts button',
+        '.social-details-social-counts button'
+      ].join(', ');
+      try {
+        el.querySelectorAll(bubbleSelectors).forEach(node => {
+          if (node.closest(COMMENT_GUARD)) return;
+          // Check aria-label first — always most reliable
+          const lbl = node.getAttribute('aria-label') || '';
+          if (lbl) { parseMetricLabel(lbl); return; }
+          // Fallback: bare number in text content
+          const txt = (node.innerText || node.textContent || '').trim();
+          if (/^[\d,.]+[KMBkmb]?$/.test(txt) && likes === 0) {
+            const n = num(txt);
+            if (n > 0) likes = Math.max(likes, n);
+          }
+        });
+      } catch(e) {}
+      // Also scan parent li — LinkedIn often puts social-counts as a SIBLING
+      if (likes === 0) {
+        const parentLi = el.closest('li') || el.parentElement;
+        if (parentLi && parentLi !== el) {
+          parentLi.querySelectorAll('[aria-label]').forEach(node => {
+            if (node.closest(COMMENT_GUARD)) return;
+            const lbl = node.getAttribute('aria-label') || '';
+            if (lbl && likes === 0) parseMetricLabel(lbl);
+          });
+        }
+      }
     }
 
     // ── PASS 3: Action bar buttons — reaction/comment/share buttons carry counts ──
@@ -1933,21 +2001,21 @@ window.__linkedInExtractorReady = true;
       let qualified = eligible
         .filter(p => p.reachScore >= adaptiveFloor)
         .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
-      if (qualified.length === 0 && step >= 30) {
+      if (qualified.length === 0 && step >= 20) {
         adaptiveFloor = 5;
         fallbackMode = 'floor5';
         qualified = eligible
           .filter(p => p.reachScore >= adaptiveFloor)
           .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
       }
-      if (qualified.length === 0 && step >= 30) {
+      if (qualified.length === 0 && step >= 20) {
         adaptiveFloor = 1;
         fallbackMode = 'engagement1';
         qualified = eligible
           .filter(p => p.reachScore >= adaptiveFloor)
           .map(p => ({ ...p, qualificationReason: `score>=${adaptiveFloor}` }));
       }
-      if (qualified.length === 0 && step >= 30 && eligible.length > 0) {
+      if (qualified.length === 0 && step >= 20 && eligible.length > 0) {
         adaptiveFloor = 0;
         fallbackMode = 'validated_fallback';
         qualified = eligible.map(p => ({ ...p, qualificationReason: 'validated_fallback' }));
@@ -2043,40 +2111,45 @@ window.__linkedInExtractorReady = true;
       ensureActiveRun();
       const seenBeforeStep = seenUrls.size;
 
-      // Smaller scroll steps (500–700px) let LinkedIn’s memory manager keep pace
-      // and prevent the tab from accumulating too much rendered content at once.
-      const scrollAmt = 500 + Math.floor(Math.random() * 200);
+      // ── Scroll: 750–1000 px per step (was 500–700) ──
+      // Larger steps cover the page faster. LinkedIn loads content within 300ms.
+      // Anti-bot safety: randomized range avoids a fixed timing fingerprint.
+      const scrollAmt = 750 + Math.floor(Math.random() * 250);
       const beforeDom = domSignalSnapshot();
       aggressiveScroll(scrollAmt);
-      const grew = await waitForDomGrowth(beforeDom, 500);
-      if (!grew) await wait(100, 250);
+      // 350ms DOM-growth wait (was 500ms) — LinkedIn renders within ~300ms on modern hardware
+      const grew = await waitForDomGrowth(beforeDom, 350);
+      if (!grew) await wait(50, 120); // reduced from 100–250ms
 
-      // deepScan on every 5th step only — light scan otherwise
-      const useDeepScan = (step % 5 === 0);
+      // deepScan on every 3rd step (was every 5th) — catches more posts per minute
+      const useDeepScan = (step % 3 === 0);
       harvest(seenUrls, seenCards, allPosts, { deepScan: useDeepScan, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
       // Yield to the browser after harvest so it can repaint and GC
       await new Promise(r => setTimeout(r, 0));
-      // Refresh zero-like posts every 3rd step (was 5th) with max 8 cards.
-      // More frequent refresh catches likes before cards scroll off the DOM.
-      if (step % 3 === 0) refreshMetricsForVisibleCards(8);
+      // ── Continuous metric refresh (every step, 15 cards) ──
+      // KEY FIX for qualification plateau: LinkedIn lazy-loads social counts.
+      // Posts discovered early show likes=0 until the count bar renders.
+      // Refreshing every step with 15 cards (was every 3rd step, 8 cards)
+      // ensures updated metrics are captured before the card scrolls off-DOM.
+      refreshMetricsForVisibleCards(15);
       // Free videos + images AFTER refresh, and only for cards with likes > 0
       freePageResources();
 
       // Show-more every 3rd step — loads LinkedIn content batches faster
       if (step % 3 === 2) {
         scrollToBottom();
-        await wait(150, 300);
+        await wait(80, 180); // reduced from 150–300ms
         await clickShowMore();
         harvest(seenUrls, seenCards, allPosts, { deepScan: true, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
         await new Promise(r => setTimeout(r, 0));
-        refreshMetricsForVisibleCards(5);
+        refreshMetricsForVisibleCards(15);
         freePageResources();
       }
 
-      // Rest every 10 steps: 2 s break lets the browser GC decoded images
-      // and stabilise before the next batch — prevents progressive freeze.
+      // Rest every 10 steps — reduced from 1800–2200ms to 1000–1400ms.
+      // Still enough for browser GC; short enough to not feel stalled.
       if ((step + 1) % 10 === 0) {
-        await wait(1800, 2200);
+        await wait(1000, 1400);
       }
 
 
@@ -3342,6 +3415,62 @@ window.__linkedInExtractorReady = true;
 
       const eligibleCandidates = rankedCandidates.filter(p => p.hardRule.pass);
       console.log(`[SearchOnly][Gate] eligible=${eligibleCandidates.length} of ${rankedCandidates.length} passed hard rules (likes>=${SEARCH_ONLY_MIN_LIKES_HARD}, commentable, age)`);
+
+      // ── ZERO-LIKES EMERGENCY MODE (Quality-Preserving) ──
+      // If ALL candidates have likes=0, the DOM metrics extraction failed
+      // (LinkedIn A/B DOM class variant on this account). In this case, bypass
+      // the likes hard-rule entirely and qualify by position (discovery order),
+      // which reflects LinkedIn's own RELEVANCE sort — a reliable quality proxy.
+      const maxLikesInPool = rankedCandidates.length > 0
+        ? Math.max(...rankedCandidates.map(p => Number(p.likes) || 0))
+        : 0;
+      const allZeroLikes = maxLikesInPool === 0 && rankedCandidates.length > 0;
+      if (allZeroLikes) {
+        const zeroMsg = `ALL ${rankedCandidates.length} posts have likes=0. ` +
+          `Metrics extraction failed (likely LinkedIn DOM A/B variant or language mismatch). ` +
+          `Bypassing likes hard-rule. Qualifying top posts by position (LinkedIn relevance order).`;
+        console.warn(`[SearchOnly][ZeroLikesEmergency] ${zeroMsg}`);
+        heartbeat('Phase4-Emergency', `⚠️ likes=0 for all ${rankedCandidates.length} posts — DOM variant. Saving by position.`);
+        // Qualify: valid URL + commentable + top N by discoveryIndex (LinkedIn's relevance order)
+        const positionQualified = rankedCandidates
+          .filter(p => p.commentable !== false)
+          .sort((a, b) => (a.discoveryIndex ?? 999999) - (b.discoveryIndex ?? 999999))
+          .slice(0, SEARCH_ONLY_TARGET_MAX)
+          .map(p => ({ ...p, qualificationReason: 'zero_likes_position_fallback', engagementTier: 'low' }));
+        if (positionQualified.length > 0) {
+          const selectedCount = Math.min(SEARCH_ONLY_TARGET_MAX, positionQualified.length);
+          const final = positionQualified.slice(0, selectedCount);
+          console.log(`[SearchOnly][ZeroLikesEmergency] Saving ${final.length} posts by position fallback.`);
+          heartbeat('Phase4-Sending', `📬 Sending ${final.length} posts via position fallback (zero-likes mode)`);
+          const payload = final.map(p => {
+            const u = cleanUrl(p.url);
+            const ts = p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null;
+            return {
+              url: u, likes: p.likes, comments: p.postComments, shares: p.postShares || 0,
+              author: p.author, preview: (p.textSnippet || '').substring(0, 200),
+              postText: p.textSnippet || '', timestamp: ts, mediaType: p.mediaType || 'text',
+              id: postIdFromCanonicalUrl(u), engagementTier: p.engagementTier,
+              commentable: p.commentable || false, hasRealUrl: true,
+              discoveryIndex: p.discoveryIndex,
+              qualificationReason: 'zero_likes_position_fallback'
+            };
+          });
+          return await new Promise(resolve => {
+            try {
+              chrome.runtime.sendMessage({
+                action: 'SYNC_RESULTS', posts: payload, keyword, dashboardUrl, userId,
+                linkedInProfileId,
+                debugInfo: {
+                  searchOnlyFinalRanking: true, zeroLikesEmergency: true,
+                  candidateCount: rankedCandidates.length, selectedCount: payload.length,
+                  fallbackMode: 'zero_likes_position_fallback'
+                }
+              }, () => { if (chrome.runtime.lastError) {} resolve(payload.length); });
+            } catch(e) { resolve(0); }
+          });
+        }
+      }
+
       let adaptiveFloor = SEARCH_ONLY_MIN_REACH_SCORE;
       let fallbackMode = 'strict';
       let qualified = eligibleCandidates

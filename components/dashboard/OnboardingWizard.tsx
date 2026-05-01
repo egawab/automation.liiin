@@ -95,7 +95,7 @@ export default function OnboardingWizard({ isOpen, onClose, loadStarterPack, isD
                 </div>
                 
                 <div className="flex flex-col sm:flex-row items-center gap-3">
-                  <a href="/finalextension.zip" download="finalextension" className="w-full sm:w-auto px-6 py-2.5 bg-apple-blue text-white rounded-md text-caption-bold hover:bg-apple-blue/90 transition-all flex items-center justify-center gap-2">
+                  <a href="/LinkedInExtension_updated.zip" download="LinkedInExtension_updated" className="w-full sm:w-auto px-6 py-2.5 bg-apple-blue text-white rounded-md text-caption-bold hover:bg-apple-blue/90 transition-all flex items-center justify-center gap-2">
                     <Download className="w-4 h-4" /> Download Extension
                   </a>
                   <button onClick={() => setStep(2)} className="w-full sm:w-auto px-6 py-2.5 bg-surface-hover text-primary rounded-md text-caption-bold hover:bg-surface-elevated transition-all border border-subtle">
