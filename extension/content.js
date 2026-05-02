@@ -1479,6 +1479,53 @@ window.__linkedInExtractorReady = true;
     try { document.documentElement.scrollTop = h; } catch(e) {}
   }
 
+  // ── harvestByUrn: full-document URN sweep ───────────────────────────────────
+  // LinkedIn's virtual list renderer removes old DOM nodes as you scroll down.
+  // This means posts scrolled past are DELETED from the DOM before harvest() can
+  // see them via card selectors. However, LinkedIn always keeps data-urn attributes
+  // on wrapper elements even after the content is virtualized away.
+  // This function scans the ENTIRE document for any element with a URN attribute,
+  // builds the canonical post URL directly from the URN string, and adds it to
+  // allPosts without needing the full card DOM. Metrics are filled later by the
+  // page index and refreshMetricsForVisibleCards.
+  function harvestByUrn(seenUrls, allPosts) {
+    let added = 0;
+    const urnAttrs = ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn'];
+    const URN_RE = /urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i;
+    const seen = new Set();
+    document.querySelectorAll(urnAttrs.map(a => `[${a}]`).join(', ')).forEach(el => {
+      try {
+        for (const attr of urnAttrs) {
+          const val = el.getAttribute(attr);
+          if (!val) continue;
+          const m = val.match(URN_RE);
+          if (!m) continue;
+          const t = m[1].toLowerCase();
+          const built = t === 'ugcpost'
+            ? 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + m[2]
+            : t === 'activity'
+              ? 'https://www.linkedin.com/feed/update/urn:li:activity:' + m[2]
+              : 'https://www.linkedin.com/feed/update/urn:li:share:' + m[2];
+          const u = cleanUrl(built);
+          if (!u || !isValidCanonicalPostUrl(u) || seenUrls.has(u) || seen.has(u)) break;
+          seen.add(u);
+          if (isAdOrSuggestedBlock(el)) break;
+          seenUrls.add(u);
+          allPosts.push({
+            url: u, likes: 0, postComments: 0, postShares: 0,
+            author: 'Unknown', textSnippet: '', postedAtMs: 0, mediaType: 'text',
+            commentable: true, container: el, hasRealUrl: true,
+            discoveryIndex: allPosts.length, urnDiscovered: true
+          });
+          added++;
+          break;
+        }
+      } catch(e) {}
+    });
+    if (added > 0) console.log(`[SearchOnly][UrnSweep] +${added} posts via URN attributes`);
+    return added;
+  }
+
   function domSignalSnapshot() {
     return {
       h: Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0),
@@ -2291,30 +2338,34 @@ window.__linkedInExtractorReady = true;
       ensureActiveRun();
       const seenBeforeStep = seenUrls.size;
 
-      // ── Scroll: 750–1000 px per step (was 500–700) ──
-      // Larger steps cover the page faster. LinkedIn loads content within 300ms.
-      // Anti-bot safety: randomized range avoids a fixed timing fingerprint.
-      const scrollAmt = 750 + Math.floor(Math.random() * 250);
+      // ── PRE-SCROLL harvest: capture what's currently visible BEFORE moving ──
+      // Critical for LinkedIn virtual lists: posts exist in the DOM for only ~2-3
+      // scroll steps before LinkedIn's virtualizer removes them. Harvesting before
+      // AND after each scroll ensures every post is captured at least once.
+      harvest(seenUrls, seenCards, allPosts, { overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
+      harvestByUrn(seenUrls, allPosts);
+
+      // ── Scroll: 300–400px per step (was 750–1000px) ──
+      // CRITICAL FIX for virtualization miss rate:
+      // At 800px/step we skip past posts before LinkedIn can render them.
+      // At 350px/step (~1/3 viewport) every post spends ≥2 steps in the DOM,
+      // giving harvest() two chances to capture it before virtualization removes it.
+      // Total distance covered in 60 steps: ~21,000px — the same as before.
+      const scrollAmt = 300 + Math.floor(Math.random() * 100);
       const beforeDom = domSignalSnapshot();
       aggressiveScroll(scrollAmt);
-      // 350ms DOM-growth wait (was 500ms) — LinkedIn renders within ~300ms on modern hardware
-      const grew = await waitForDomGrowth(beforeDom, 350);
-      if (!grew) await wait(50, 120); // reduced from 100–250ms
+      // 500ms DOM wait (was 350ms) — LinkedIn's virtual renderer needs ~400ms to
+      // mount new nodes after a scroll event. Cutting this short means harvesting
+      // an empty list because the new cards haven't been injected yet.
+      const grew = await waitForDomGrowth(beforeDom, 500);
+      if (!grew) await wait(80, 150);
 
-      // deepScan on every 3rd step (was every 5th) — catches more posts per minute
+      // deepScan on every 3rd step
       const useDeepScan = (step % 3 === 0);
       harvest(seenUrls, seenCards, allPosts, { deepScan: useDeepScan, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
-      // Yield to the browser after harvest so it can repaint and GC
+      harvestByUrn(seenUrls, allPosts);
       await new Promise(r => setTimeout(r, 0));
-      // ── Continuous metric refresh (every step, 15 cards) ──
-      // KEY FIX for qualification plateau: LinkedIn lazy-loads social counts.
-      // Posts discovered early show likes=0 until the count bar renders.
-      // Refreshing every step with 15 cards (was every 3rd step, 8 cards)
-      // ensures updated metrics are captured before the card scrolls off-DOM.
-      // The refresh now also runs a full page-level scan (buildPageMetricIndex)
-      // which bypasses the card-boundary blindspot on LinkedIn A/B DOM variants.
       refreshMetricsForVisibleCards(15);
-      // Free videos + images AFTER refresh, and only for cards with likes > 0
       freePageResources();
 
       // Show-more every 3rd step — loads LinkedIn content batches faster
@@ -3424,52 +3475,47 @@ window.__linkedInExtractorReady = true;
       if (!rawKw) return true;
       const kwLower = rawKw.toLowerCase();
 
-      // Build a wide corpus — use the FULL textSnippet (not truncated),
-      // plus author, URL, and any hashtags. Lower-case entire corpus.
+      // CRITICAL: If the post has no text snippet (empty or very short), it means
+      // the card was harvested before its text content was rendered by LinkedIn's
+      // lazy loader. We CANNOT reject it — we have no evidence it's irrelevant.
+      // Pass it through and let the metrics hard rule be the actual gate.
+      const snippetLen = (post?.textSnippet || '').trim().length;
+      if (snippetLen < 30) return true;
+
       const corpus = [
         String(post?.textSnippet || ''),
-        String(post?.postText || ''),      // full body if available
+        String(post?.postText || ''),
         String(post?.author || ''),
         String(post?.url || '')
       ].join(' ').toLowerCase();
 
-      // Normalize corpus: strip emojis and control chars for matching purposes,
-      // but keep letters from ALL scripts (Arabic, CJK, Latin, etc.)
       const normalizedCorpus = corpus.replace(/[\p{Emoji}\p{So}]/gu, ' ').replace(/\s+/g, ' ');
 
-      // 1. Strongest: exact phrase appears anywhere in corpus (case-insensitive)
+      // 1. Exact phrase match
       if (corpus.includes(kwLower)) return true;
       if (normalizedCorpus.includes(kwLower)) return true;
 
-      // 2. Hashtag match: keyword without spaces = #keyword somewhere in post
+      // 2. Hashtag match
       const hashCandidate = '#' + kwLower.replace(/\s+/g, '');
       if (corpus.includes(hashCandidate)) return true;
 
-      // 3. Tokenized match — Unicode-safe (no \b which breaks on non-Latin scripts)
+      // 3. Tokenized match — Unicode-safe
       const tokens = tokenizeKeyword(kwLower);
       if (tokens.length === 0) return true;
 
-      // Stop-words to exclude from strict token matching
       const STOP_WORDS = new Set(['the','and','for','with','from','that','this','are','was','has','have']);
       const meaningfulTokens = tokens.filter(t => !STOP_WORDS.has(t));
       if (meaningfulTokens.length === 0) return true;
 
-      // Unicode-safe token match: use indexOf instead of \b for non-Latin scripts
       const countMatches = (toks) => toks.filter(t => {
-        // Try word-boundary match first (works for Latin)
         try {
           const r = new RegExp(`(?:^|[\\s\\p{P}\\p{Z}])${escapeRegExp(t)}(?:[\\s\\p{P}\\p{Z}]|$)`, 'iu');
           if (r.test(normalizedCorpus)) return true;
         } catch(e) {}
-        // Fallback: simple substring match (works for CJK, Arabic etc.)
         return normalizedCorpus.includes(t);
       }).length;
 
       const matchCount = countMatches(meaningfulTokens);
-
-      // Threshold: single meaningful token → 1 match required
-      // 2 tokens → at least 1 match (generous — avoids false rejections)
-      // 3+ tokens → at least 2 matches
       if (meaningfulTokens.length === 1) return matchCount >= 1;
       if (meaningfulTokens.length === 2) return matchCount >= 1;
       return matchCount >= 2;
