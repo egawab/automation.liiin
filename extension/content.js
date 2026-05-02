@@ -429,15 +429,18 @@ window.__linkedInExtractorReady = true;
     if (!node) return false;
     const resolved = resolvePostCard(node) || node;
     if (hasLinkedInPostSignal(resolved)) {
+      // LinkedIn search cards may render at small height before fully expanding.
+      // Only reject truly invisible elements (0x0) — allow partially-rendered cards.
       const rect = resolved.getBoundingClientRect ? resolved.getBoundingClientRect() : { height: 0, width: 0 };
       const h = rect.height || resolved.offsetHeight || 0;
       const w = rect.width || resolved.offsetWidth || 0;
-      if (h >= 40 && w >= 160) return true;
+      if (h >= 20 && w >= 80) return true;
     }
     const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { height: 0, width: 0 };
     const h = rect.height || node.offsetHeight || 0;
     const w = rect.width || node.offsetWidth || 0;
-    if (h < 80 || w < 200) return false;
+    // Relaxed from 80x200 to 40x120 — catches partially-rendered search cards.
+    if (h < 40 || w < 120) return false;
     const likeCount = countMainActionLikeButtons(node);
     // Wrapper/feed containers usually include many action bars.
     if (likeCount > 6) return false;
@@ -1865,21 +1868,36 @@ window.__linkedInExtractorReady = true;
     const SEARCH_ONLY_EARLY_QUALIFIED_TARGET = 25;
     const SEARCH_PROGRESS_BATCH = 10;
     // Full selector list covering all LinkedIn post card variants.
-    // Performance is now protected by video/image freeing, yields, and rest breaks
-    // so broad selectors are safe. Narrow selectors were silently missing real posts.
+    // Broad selector list covering ALL known LinkedIn search result card variants (2024-2025).
+    // LinkedIn continuously A/B tests DOM class names. The list below covers:
+    //   - Standard feed cards (.feed-shared-update-v2)
+    //   - Search results page cards (multiple variants)
+    //   - Artdeco card wrappers
+    //   - Generic article/li fallbacks for unknown future structures
     const SEARCH_ONLY_CARD_SELECTORS = [
+      // Feed page cards
       '.feed-shared-update-v2[role="article"]',
       '[role="article"][data-urn]',
       '.occludable-update',
       '[data-view-name="feed-full-update"]',
-      'li.artdeco-card',
-      '.reusable-search__result-container',
       '.feed-shared-update-v2',
+      // Search result page cards (2024-2025 variants)
+      'li.reusable-search__result-container',
+      '.reusable-search__result-container',
+      '[data-view-name="search-entity-result-universal-template"]',
+      '[data-view-name*="search-entity"]',
+      '[class*="search-result"][class*="artdeco"]',
+      'li[class*="result-container"]',
+      'li[class*="search-result"]',
+      // Artdeco & generic containers
+      'li.artdeco-card',
       '.search-entity',
       'article',
-      'li.reusable-search__result-container',
       '[data-urn].feed-shared-update-v2',
-      'div.search-result__wrapper'
+      'div.search-result__wrapper',
+      // 2025 Lite-card variant (voyager feed)
+      '[class*="update-components"][data-urn]',
+      '[class*="scaffold-finite-scroll"] li'
     ];
     let step = 0;
     let totalSavedIncremental = 0;
@@ -3407,41 +3425,59 @@ window.__linkedInExtractorReady = true;
     }
 
     function isKeywordRelevant(post, kw) {
-      const rawKw = String(kw || '').trim().toLowerCase();
+      const rawKw = String(kw || '').trim();
       if (!rawKw) return true;
+      const kwLower = rawKw.toLowerCase();
 
+      // Build a wide corpus — use the FULL textSnippet (not truncated),
+      // plus author, URL, and any hashtags. Lower-case entire corpus.
       const corpus = [
         String(post?.textSnippet || ''),
+        String(post?.postText || ''),      // full body if available
         String(post?.author || ''),
         String(post?.url || '')
       ].join(' ').toLowerCase();
 
-      // Strongest signal: exact keyword phrase appears.
-      if (rawKw.length >= 3 && corpus.includes(rawKw)) return true;
+      // Normalize corpus: strip emojis and control chars for matching purposes,
+      // but keep letters from ALL scripts (Arabic, CJK, Latin, etc.)
+      const normalizedCorpus = corpus.replace(/[\p{Emoji}\p{So}]/gu, ' ').replace(/\s+/g, ' ');
 
-      // Otherwise require meaningful token coverage.
-      const tokens = tokenizeKeyword(rawKw);
+      // 1. Strongest: exact phrase appears anywhere in corpus (case-insensitive)
+      if (corpus.includes(kwLower)) return true;
+      if (normalizedCorpus.includes(kwLower)) return true;
+
+      // 2. Hashtag match: keyword without spaces = #keyword somewhere in post
+      const hashCandidate = '#' + kwLower.replace(/\s+/g, '');
+      if (corpus.includes(hashCandidate)) return true;
+
+      // 3. Tokenized match — Unicode-safe (no \b which breaks on non-Latin scripts)
+      const tokens = tokenizeKeyword(kwLower);
       if (tokens.length === 0) return true;
 
-      const matches = tokens.filter(t => {
-        const r = new RegExp(`\\b${escapeRegExp(t)}\\b`, 'i');
-        return r.test(corpus);
+      // Stop-words to exclude from strict token matching
+      const STOP_WORDS = new Set(['the','and','for','with','from','that','this','are','was','has','have']);
+      const meaningfulTokens = tokens.filter(t => !STOP_WORDS.has(t));
+      if (meaningfulTokens.length === 0) return true;
+
+      // Unicode-safe token match: use indexOf instead of \b for non-Latin scripts
+      const countMatches = (toks) => toks.filter(t => {
+        // Try word-boundary match first (works for Latin)
+        try {
+          const r = new RegExp(`(?:^|[\\s\\p{P}\\p{Z}])${escapeRegExp(t)}(?:[\\s\\p{P}\\p{Z}]|$)`, 'iu');
+          if (r.test(normalizedCorpus)) return true;
+        } catch(e) {}
+        // Fallback: simple substring match (works for CJK, Arabic etc.)
+        return normalizedCorpus.includes(t);
       }).length;
 
-      // Soft stem support for single-word keywords (plan -> planning/planned/plans)
-      // to avoid false zero-matches from strict boundary checks.
-      if (tokens.length === 1) {
-        const t = tokens[0];
-        const stem = t.length >= 4 ? t.slice(0, Math.max(3, t.length - 1)) : t;
-        const stemRx = new RegExp(`\\b${escapeRegExp(stem)}\\w*\\b`, 'i');
-        const hasStem = stemRx.test(corpus);
-        return matches >= 1 || hasStem;
-      }
+      const matchCount = countMatches(meaningfulTokens);
 
-      // 2-word keyword -> both should appear
-      if (tokens.length === 2) return matches >= 2;
-      // 3+ words -> require at least 2 (balances strictness vs natural phrasing)
-      return matches >= 2;
+      // Threshold: single meaningful token → 1 match required
+      // 2 tokens → at least 1 match (generous — avoids false rejections)
+      // 3+ tokens → at least 2 matches
+      if (meaningfulTokens.length === 1) return matchCount >= 1;
+      if (meaningfulTokens.length === 2) return matchCount >= 1;
+      return matchCount >= 2;
     }
 
     const MAX_POSTS_PER_KEYWORD = 120;
