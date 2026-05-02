@@ -2643,41 +2643,48 @@ window.__linkedInExtractorReady = true;
       ensureActiveRun();
       const seenBeforeStep = seenUrls.size;
 
-      // ── PRE-SCROLL harvest (before moving) ──
-      harvestNetworkBuffer(seenUrls, allPosts, keyword); // network-first: drain API buffer
-      harvest(seenUrls, seenCards, allPosts, { overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
-      harvestByAnchors(seenUrls, seenCards, allPosts); // anchor-first, no class names needed
-      harvestByUrn(seenUrls, allPosts);                // URN sweep for standard variants
+      // ── PRE-SCROLL: drain network buffer first (pure memory, zero DOM cost) ──
+      harvestNetworkBuffer(seenUrls, allPosts, keyword);
+      // DOM fallback — throttled to every 2nd step. The WeakSet cache in
+      // harvestByAnchors means only newly-rendered anchors are processed;
+      // scanning the whole document every step is wasteful once the feed is large.
+      if (step % 2 === 0) {
+        harvest(seenUrls, seenCards, allPosts, { overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
+        harvestByAnchors(seenUrls, seenCards, allPosts);
+        harvestByUrn(seenUrls, allPosts);
+      }
 
       // ── Scroll the REAL container (<main>) at 500–600px per step ──
-      // Diagnostic confirmed <main> is the scroll container (scrollHeight=41,983px).
-      // Now that we're scrolling the right element, 500px is safe and fast.
       const scrollAmt = 500 + Math.floor(Math.random() * 100);
       const beforeDom = domSignalSnapshot();
       aggressiveScroll(scrollAmt);
-      // 500ms wait: <main>'s React renderer needs ~400ms to inject new cards
       const grew = await waitForDomGrowth(beforeDom, 500);
       if (!grew) await wait(100, 200);
 
       // ── POST-SCROLL harvest ──
+      harvestNetworkBuffer(seenUrls, allPosts, keyword); // drain API buffer immediately
       const useDeepScan = (step % 3 === 0);
-      harvestNetworkBuffer(seenUrls, allPosts, keyword); // drain API buffer first
       harvest(seenUrls, seenCards, allPosts, { deepScan: useDeepScan, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
-      harvestByAnchors(seenUrls, seenCards, allPosts);
-      harvestByUrn(seenUrls, allPosts);
+      if (step % 2 === 0) {
+        harvestByAnchors(seenUrls, seenCards, allPosts);
+        harvestByUrn(seenUrls, allPosts);
+      }
       await new Promise(r => setTimeout(r, 0));
-      refreshMetricsForVisibleCards(15);
-      freePageResources();
+      // refreshMetricsForVisibleCards calls buildPageMetricIndex which runs multiple
+      // querySelectorAll passes including Phase 3b anchor scan — throttle to every 3rd step
+      if (step % 3 === 0) {
+        refreshMetricsForVisibleCards(15);
+        freePageResources();
+      }
 
       // Show-more every 3rd step — loads LinkedIn content batches faster
       if (step % 3 === 2) {
         scrollToBottom();
-        await wait(80, 180); // reduced from 150–300ms
+        await wait(80, 180);
         await clickShowMore();
+        harvestNetworkBuffer(seenUrls, allPosts, keyword);
         harvest(seenUrls, seenCards, allPosts, { deepScan: true, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
         await new Promise(r => setTimeout(r, 0));
-        refreshMetricsForVisibleCards(15);
-        freePageResources();
       }
 
       // Rest every 10 steps — reduced from 1800–2200ms to 1000–1400ms.
