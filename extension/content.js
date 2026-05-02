@@ -1857,12 +1857,12 @@ window.__linkedInExtractorReady = true;
     } else {
     const SEARCH_SCROLL_TARGET = 60;
     const SEARCH_ONLY_MIN_SAVE_TARGET = 10;
-    const SEARCH_ONLY_MAX_SAVE_TARGET = 15;
+    const SEARCH_ONLY_MAX_SAVE_TARGET = 25;
     const SEARCH_ONLY_MIN_REACH_SCORE = 15;
     const SEARCH_ONLY_MIN_LIKES_HARD = 10;
     const SEARCH_ONLY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
     const SEARCH_ONLY_EARLY_POOL_TARGET = 30;
-    const SEARCH_ONLY_EARLY_QUALIFIED_TARGET = 15;
+    const SEARCH_ONLY_EARLY_QUALIFIED_TARGET = 25;
     const SEARCH_PROGRESS_BATCH = 10;
     // Full selector list covering all LinkedIn post card variants.
     // Performance is now protected by video/image freeing, yields, and rest breaks
@@ -2434,7 +2434,7 @@ window.__linkedInExtractorReady = true;
       SEARCH_ONLY_SKIP_HTTP_VERIFY: isSearchOnly === true,
       SEARCH_ONLY_FINAL_RANKING: isSearchOnly === true,
       SEARCH_ONLY_TARGET_MIN: 10,
-      SEARCH_ONLY_TARGET_MAX: 15,
+      SEARCH_ONLY_TARGET_MAX: 25,
       SEARCH_ONLY_MIN_REACH_SCORE: 15,
       SEARCH_ONLY_MIN_LIKES_HARD: 10,
       SEARCH_ONLY_MAX_AGE_MS: 90 * 24 * 60 * 60 * 1000
