@@ -149,6 +149,10 @@ window.__linkedInExtractorReady = true;
     try {
       await extractPipeline(keyword, { ...settings, engineMode: 'COMMENT_CAMPAIGN', searchOnlyMode: false }, comments, dashboardUrl, userId, runId);
     } catch (e) {
+      if (e instanceof ReferenceError || e instanceof TypeError || e instanceof SyntaxError) {
+        console.error('[CommentCampaign] Fatal Runtime Error (bypassing cooldown):', e);
+        throw e; // Halt execution immediately; do not trigger JOB_FAILED fallback
+      }
       if (String(e?.message || e).includes('EXTRACTION_CANCELLED')) {
         console.log('[CommentCampaign] Cancelled (reinject).');
         return;
@@ -170,6 +174,10 @@ window.__linkedInExtractorReady = true;
     try {
       await extractPipeline(keyword, { ...settings, engineMode: 'SEARCH_ONLY', searchOnlyMode: true }, [], dashboardUrl, userId, runId);
     } catch (e) {
+      if (e instanceof ReferenceError || e instanceof TypeError || e instanceof SyntaxError) {
+        console.error('[SearchOnly] Fatal Runtime Error (bypassing cooldown):', e);
+        throw e; // Halt execution immediately; do not trigger JOB_FAILED fallback
+      }
       if (String(e?.message || e).includes('EXTRACTION_CANCELLED')) {
         console.log('[SearchOnly] Cancelled (reinject).');
         return;
@@ -2717,7 +2725,7 @@ window.__linkedInExtractorReady = true;
         // exactly why each candidate is being rejected at the qualification gate.
         commitSnapshot.ranked.slice(0, Math.min(15, commitSnapshot.ranked.length)).forEach((p, idx) => {
           const u = cleanUrl(p.url).slice(0, 100);
-          const kwOk = isKeywordRelevant ? isKeywordRelevant(p, keyword) : true;
+          const kwOk = typeof isKeywordRelevant === 'function' ? isKeywordRelevant(p, keyword) : true;
           if (!p.hardRule?.pass) {
             const reasons = p.hardRule?.reasons?.join(' | ') || 'unknown';
             const textLen = (p.textSnippet || '').trim().length;
@@ -3752,71 +3760,74 @@ window.__linkedInExtractorReady = true;
 
   // ═══════════════════════════════════════════════════════════
   // SYNC TO DASHBOARD
+  // ── Keyword relevance helpers — outer scope so ALL functions can call them ───
+  // Previously these were nested inside syncPosts, making them invisible to the
+  // scroll loop's qualification logging. Moving them here fixes the ReferenceError.
+  function escapeRegExpGlobal(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function tokenizeKeywordGlobal(kw) {
+    return String(kw || '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+      .split(/\s+/)
+      .map(t => t.trim())
+      .filter(t => t.length >= 3);
+  }
+
+  function isKeywordRelevant(post, kw) {
+    const rawKw = String(kw || '').trim();
+    if (!rawKw) return true;
+    const kwLower = rawKw.toLowerCase();
+
+    // If the post has no text snippet (empty or very short), it was harvested
+    // before its text content rendered. Pass through — no evidence of irrelevance.
+    const snippetLen = (post?.textSnippet || '').trim().length;
+    if (snippetLen < 30) return true;
+
+    const corpus = [
+      String(post?.textSnippet || ''),
+      String(post?.postText || ''),
+      String(post?.author || ''),
+      String(post?.url || '')
+    ].join(' ').toLowerCase();
+
+    const normalizedCorpus = corpus.replace(/[\p{Emoji}\p{So}]/gu, ' ').replace(/\s+/g, ' ');
+
+    if (corpus.includes(kwLower)) return true;
+    if (normalizedCorpus.includes(kwLower)) return true;
+
+    const hashCandidate = '#' + kwLower.replace(/\s+/g, '');
+    if (corpus.includes(hashCandidate)) return true;
+
+    const tokens = tokenizeKeywordGlobal(kwLower);
+    if (tokens.length === 0) return true;
+
+    const STOP_WORDS = new Set(['the','and','for','with','from','that','this','are','was','has','have']);
+    const meaningfulTokens = tokens.filter(t => !STOP_WORDS.has(t));
+    if (meaningfulTokens.length === 0) return true;
+
+    const countMatches = (toks) => toks.filter(t => {
+      try {
+        const r = new RegExp(`(?:^|[\\s\\p{P}\\p{Z}])${escapeRegExpGlobal(t)}(?:[\\s\\p{P}\\p{Z}]|$)`, 'iu');
+        if (r.test(normalizedCorpus)) return true;
+      } catch(e) {}
+      return normalizedCorpus.includes(t);
+    }).length;
+
+    const matchCount = countMatches(meaningfulTokens);
+    if (meaningfulTokens.length === 1) return matchCount >= 1;
+    if (meaningfulTokens.length === 2) return matchCount >= 1;
+    return matchCount >= 2;
+  }
+
   // ═══════════════════════════════════════════════════════════
   async function syncPosts(posts, keyword, dashboardUrl, userId, linkedInProfileId, isFinal = false, constraints = {}) {
-    function escapeRegExp(s) {
-      return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-
-    function tokenizeKeyword(kw) {
-      return String(kw || '')
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-        .split(/\s+/)
-        .map(t => t.trim())
-        .filter(t => t.length >= 3);
-    }
-
-    function isKeywordRelevant(post, kw) {
-      const rawKw = String(kw || '').trim();
-      if (!rawKw) return true;
-      const kwLower = rawKw.toLowerCase();
-
-      // CRITICAL: If the post has no text snippet (empty or very short), it means
-      // the card was harvested before its text content was rendered by LinkedIn's
-      // lazy loader. We CANNOT reject it — we have no evidence it's irrelevant.
-      // Pass it through and let the metrics hard rule be the actual gate.
-      const snippetLen = (post?.textSnippet || '').trim().length;
-      if (snippetLen < 30) return true;
-
-      const corpus = [
-        String(post?.textSnippet || ''),
-        String(post?.postText || ''),
-        String(post?.author || ''),
-        String(post?.url || '')
-      ].join(' ').toLowerCase();
-
-      const normalizedCorpus = corpus.replace(/[\p{Emoji}\p{So}]/gu, ' ').replace(/\s+/g, ' ');
-
-      // 1. Exact phrase match
-      if (corpus.includes(kwLower)) return true;
-      if (normalizedCorpus.includes(kwLower)) return true;
-
-      // 2. Hashtag match
-      const hashCandidate = '#' + kwLower.replace(/\s+/g, '');
-      if (corpus.includes(hashCandidate)) return true;
-
-      // 3. Tokenized match — Unicode-safe
-      const tokens = tokenizeKeyword(kwLower);
-      if (tokens.length === 0) return true;
-
-      const STOP_WORDS = new Set(['the','and','for','with','from','that','this','are','was','has','have']);
-      const meaningfulTokens = tokens.filter(t => !STOP_WORDS.has(t));
-      if (meaningfulTokens.length === 0) return true;
-
-      const countMatches = (toks) => toks.filter(t => {
-        try {
-          const r = new RegExp(`(?:^|[\\s\\p{P}\\p{Z}])${escapeRegExp(t)}(?:[\\s\\p{P}\\p{Z}]|$)`, 'iu');
-          if (r.test(normalizedCorpus)) return true;
-        } catch(e) {}
-        return normalizedCorpus.includes(t);
-      }).length;
-
-      const matchCount = countMatches(meaningfulTokens);
-      if (meaningfulTokens.length === 1) return matchCount >= 1;
-      if (meaningfulTokens.length === 2) return matchCount >= 1;
-      return matchCount >= 2;
-    }
+    // Local aliases so the rest of syncPosts internals are unchanged
+    function escapeRegExp(s) { return escapeRegExpGlobal(s); }
+    function tokenizeKeyword(kw) { return tokenizeKeywordGlobal(kw); }
+    // isKeywordRelevant is now in outer scope — directly callable here too
 
     const MAX_POSTS_PER_KEYWORD = 120;
     const SETTINGS_MIN_LIKES = constraints.SETTINGS_MIN_LIKES || 0;
