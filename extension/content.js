@@ -429,20 +429,16 @@ window.__linkedInExtractorReady = true;
     if (!node) return false;
     const resolved = resolvePostCard(node) || node;
     if (hasLinkedInPostSignal(resolved)) {
-      // LinkedIn search cards may render at small height before fully expanding.
-      // Only reject truly invisible elements (0x0) — allow partially-rendered cards.
       const rect = resolved.getBoundingClientRect ? resolved.getBoundingClientRect() : { height: 0, width: 0 };
       const h = rect.height || resolved.offsetHeight || 0;
       const w = rect.width || resolved.offsetWidth || 0;
-      if (h >= 20 && w >= 80) return true;
+      if (h >= 40 && w >= 160) return true;
     }
     const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { height: 0, width: 0 };
     const h = rect.height || node.offsetHeight || 0;
     const w = rect.width || node.offsetWidth || 0;
-    // Relaxed from 80x200 to 40x120 — catches partially-rendered search cards.
-    if (h < 40 || w < 120) return false;
+    if (h < 80 || w < 200) return false;
     const likeCount = countMainActionLikeButtons(node);
-    // Wrapper/feed containers usually include many action bars.
     if (likeCount > 6) return false;
     return true;
   }
@@ -1867,37 +1863,36 @@ window.__linkedInExtractorReady = true;
     const SEARCH_ONLY_EARLY_POOL_TARGET = 30;
     const SEARCH_ONLY_EARLY_QUALIFIED_TARGET = 25;
     const SEARCH_PROGRESS_BATCH = 10;
-    // Full selector list covering all LinkedIn post card variants.
-    // Broad selector list covering ALL known LinkedIn search result card variants (2024-2025).
-    // LinkedIn continuously A/B tests DOM class names. The list below covers:
-    //   - Standard feed cards (.feed-shared-update-v2)
-    //   - Search results page cards (multiple variants)
-    //   - Artdeco card wrappers
-    //   - Generic article/li fallbacks for unknown future structures
+    // Selector list for LinkedIn post card discovery.
+    // RULE: Every selector must be specific enough to match ONLY post cards.
+    // Never use broad combinators like "div li" or class wildcards without a
+    // second qualifying attribute — they match hundreds of nav/UI elements,
+    // corrupt seenCards, and cause catastrophic discovery regressions.
     const SEARCH_ONLY_CARD_SELECTORS = [
-      // Feed page cards
+      // Standard feed cards
       '.feed-shared-update-v2[role="article"]',
       '[role="article"][data-urn]',
       '.occludable-update',
       '[data-view-name="feed-full-update"]',
       '.feed-shared-update-v2',
-      // Search result page cards (2024-2025 variants)
+      // Search result page cards — confirmed safe selectors
       'li.reusable-search__result-container',
       '.reusable-search__result-container',
+      // 2025 LinkedIn search DOM variants (data-view-name is always post-specific)
       '[data-view-name="search-entity-result-universal-template"]',
-      '[data-view-name*="search-entity"]',
-      '[class*="search-result"][class*="artdeco"]',
-      'li[class*="result-container"]',
-      'li[class*="search-result"]',
+      '[data-view-name*="search-entity-result"]',
+      // URN-bearing li elements — data-urn only exists on real post cards
+      'li[data-urn]',
+      'li[data-chameleon-result-urn]',
+      'li[data-entity-urn]',
       // Artdeco & generic containers
       'li.artdeco-card',
       '.search-entity',
       'article',
       '[data-urn].feed-shared-update-v2',
       'div.search-result__wrapper',
-      // 2025 Lite-card variant (voyager feed)
-      '[class*="update-components"][data-urn]',
-      '[class*="scaffold-finite-scroll"] li'
+      // 2025 voyager lite-card: only when gated by data-urn
+      '[class*="update-components"][data-urn]'
     ];
     let step = 0;
     let totalSavedIncremental = 0;
