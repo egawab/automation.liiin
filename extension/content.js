@@ -2406,6 +2406,78 @@ window.__linkedInExtractorReady = true;
         } catch(e) {}
       });
 
+      // Phase 3b: Anchor-based container scan — CRITICAL for CSS-Modules hashed DOM
+      // This LinkedIn variant has NO li elements for post cards and NO stable class names.
+      // The only reliable structure is: post anchor → walk up → first div with button[aria-label].
+      // We scan that container's raw innerText for all engagement patterns.
+      const PHASE3B_ANCHOR_SEL = [
+        'a[href*="/feed/update/urn:li:activity:"]',
+        'a[href*="/feed/update/urn:li:ugcPost:"]',
+        'a[href*="/feed/update/urn:li:share:"]',
+        'a[href*="/posts/"]'
+      ].join(', ');
+      const p3bSeen = new Set();
+      document.querySelectorAll(PHASE3B_ANCHOR_SEL).forEach(a => {
+        try {
+          const url = extractCanonicalFromHref ? extractCanonicalFromHref(a.href || '') : findNearestPostUrl(a);
+          if (!url || !isValidCanonicalPostUrl(url)) return;
+          const normU = cleanUrl(url).split('?')[0];
+          if (p3bSeen.has(normU)) return;
+          p3bSeen.add(normU);
+          const existing = map.get(normU);
+          if (existing && existing.likes > 0) return; // Already indexed
+
+          // Walk up to post card container (same logic as harvestByAnchors)
+          let container = null;
+          let el = a.parentElement;
+          for (let d = 0; d < 12 && el && el !== document.body; d++) {
+            if (el.querySelector('button[aria-label]')) { container = el; break; }
+            el = el.parentElement;
+          }
+          if (!container) return;
+
+          const raw = container.innerText || container.textContent || '';
+
+          // Pattern A: "247 reactions" inline
+          const reactM = raw.match(/([\d,.]+[KMBkmb]?)\s*(?:reactions?|likes?|\u0625\u0639\u062c\u0627\u0628)/i);
+          if (reactM) mergeInto(normU, num(reactM[1]), 0, 0);
+
+          // Pattern B: "15 comments"
+          const commM = raw.match(/([\d,.]+[KMBkmb]?)\s*(?:comments?|\u062a\u0639\u0644\u064a\u0642)/i);
+          if (commM) mergeInto(normU, 0, num(commM[1]), 0);
+
+          // Pattern C: "8 reposts"
+          const shareM = raw.match(/([\d,.]+[KMBkmb]?)\s*(?:reposts?|shares?)/i);
+          if (shareM) mergeInto(normU, 0, 0, num(shareM[1]));
+
+          // Pattern D: bare number line immediately before "N comments" line
+          if (!map.get(normU) || (map.get(normU).likes === 0)) {
+            const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            for (let i = 0; i < lines.length; i++) {
+              if (/^[\d,.]+[KMBkmb]?\s*comments?/i.test(lines[i])) {
+                const cM2 = lines[i].match(/^([\d,.]+[KMBkmb]?)/);
+                const nc = cM2 ? num(cM2[1]) : 0;
+                let nl = 0;
+                if (i > 0 && /^[\d,.]+[KMBkmb]?$/.test(lines[i - 1])) nl = num(lines[i - 1]);
+                mergeInto(normU, nl, nc, 0);
+                break;
+              }
+            }
+          }
+
+          // Pattern E: aria-hidden spans with bare numbers (reaction count bubble)
+          if (!map.get(normU) || (map.get(normU).likes === 0)) {
+            const spans = container.querySelectorAll('span[aria-hidden="true"]');
+            const nums = [];
+            spans.forEach(s => {
+              const t = (s.innerText || s.textContent || '').trim();
+              if (/^[\d,.]+[KMBkmb]?$/.test(t)) nums.push(num(t));
+            });
+            if (nums.length > 0) mergeInto(normU, nums[0], nums[1] || 0, nums[2] || 0);
+          }
+        } catch(e) {}
+      });
+
       if (map.size > 0) {
         let withLikes = 0;
         map.forEach(v => { if (v.likes > 0) withLikes++; });
@@ -2533,15 +2605,22 @@ window.__linkedInExtractorReady = true;
       console.log('[SearchOnly] keyword="' + keyword + '" scroll=' + (step + 1) + ' / ' + SEARCH_SCROLL_TARGET + ' distinctUrls=' + currentSeenSize + ' realPosts=' + real + ' candidatePool=' + commitSnapshot.ranked.length + ' qualified=' + commitSnapshot.qualified.length + ' floor=' + commitSnapshot.adaptiveFloor + ' mode=' + commitSnapshot.fallbackMode + ' saved=' + totalSavedIncremental);
       heartbeat(`Phase1-Scroll`, `scroll ${step + 1} / ${SEARCH_SCROLL_TARGET} | URLs ${currentSeenSize} | qualified ${commitSnapshot.qualified.length} | saving at end`);
 
-      if (commitSnapshot.ranked.length > 0 && (commitSnapshot.qualified.length === 0 || ((step + 1) % 10 === 0))) {
-        commitSnapshot.ranked.slice(0, Math.min(12, commitSnapshot.ranked.length)).forEach((p, idx) => {
+      if (commitSnapshot.ranked.length > 0 && (step + 1) % 5 === 0) {
+        // Verbose per-post rejection log — runs every 5 steps so the user can see
+        // exactly why each candidate is being rejected at the qualification gate.
+        commitSnapshot.ranked.slice(0, Math.min(15, commitSnapshot.ranked.length)).forEach((p, idx) => {
+          const u = cleanUrl(p.url).slice(0, 100);
+          const kwOk = isKeywordRelevant ? isKeywordRelevant(p, keyword) : true;
           if (!p.hardRule?.pass) {
-            console.log(`[SearchOnly] REJECTED: likes=${p.likes || 0} comments=${p.postComments || 0} shares=${p.postShares || 0} score=${p.reachScore} reasons=${p.hardRule.reasons.join(' | ')} url=${cleanUrl(p.url).slice(0, 120)}`);
-            return;
+            const reasons = p.hardRule?.reasons?.join(' | ') || 'unknown';
+            const textLen = (p.textSnippet || '').trim().length;
+            console.log(`[QualGate][FAIL] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} hardRule=FAIL reasons=(${reasons}) keyword=${kwOk?'OK':'MISSING'} snippetLen=${textLen} url=${u}`);
+          } else if (!kwOk) {
+            const textLen = (p.textSnippet || '').trim().length;
+            console.log(`[QualGate][FAIL] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} hardRule=PASS keyword=MISSING snippetLen=${textLen} url=${u}`);
+          } else {
+            console.log(`[QualGate][PASS] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} score=${p.reachScore} url=${u}`);
           }
-          const passed = p.reachScore >= commitSnapshot.adaptiveFloor ? 'PASS' : 'FAIL';
-          const reason = passed === 'PASS' ? `score>=${commitSnapshot.adaptiveFloor}` : `score<${commitSnapshot.adaptiveFloor}`;
-          console.log(`[SearchOnly][Score] #${idx + 1} likes=${p.likes || 0} comments=${p.postComments || 0} shares=${p.postShares || 0} score=${p.reachScore} floor=${commitSnapshot.adaptiveFloor} ${passed} reason=${reason} url=${cleanUrl(p.url).slice(0, 120)}`);
         });
       }
 
