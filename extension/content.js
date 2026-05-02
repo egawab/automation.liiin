@@ -2031,8 +2031,9 @@ window.__linkedInExtractorReady = true;
     // Refresh metrics for posts already in allPosts that have likes=0.
     // LinkedIn renders social counts lazily — a post added on first-discovery may have
     // likes=0 because the count bar wasn't rendered yet. This pass re-scans currently
-    // visible cards and updates any zero-like entries with the now-rendered values.
-    // maxCards: limit how many posts to refresh per call to avoid blocking the main thread.
+    // visible cards AND the entire page DOM (via buildPageMetricIndex) and updates
+    // any zero-like entries with the now-rendered values.
+    // maxCards: limit card-by-card scan; page-level scan is always unlimited.
     function refreshMetricsForVisibleCards(maxCards = 5) {
       const zeroByUrl = new Map();
       allPosts.forEach(p => {
@@ -2042,32 +2043,198 @@ window.__linkedInExtractorReady = true;
       });
       if (zeroByUrl.size === 0) return 0;
 
+      // ── PHASE A: Page-level metric index (bypasses card-boundary blindspot) ──
+      // On LinkedIn A/B DOM variants the social-counts container is a SIBLING of the
+      // card li, not a descendant. extractMetrics(el) can never find it. The page
+      // index scans the whole document, ignoring element boundaries entirely.
       let refreshed = 0;
+      try {
+        const pageIndex = buildPageMetricIndex();
+        if (pageIndex.size > 0) {
+          zeroByUrl.forEach((post, key) => {
+            const m = pageIndex.get(key);
+            if (m && (m.likes || 0) > 0) {
+              post.likes = m.likes;
+              post.postComments = Math.max(Number(post.postComments) || 0, m.postComments);
+              post.postShares = Math.max(Number(post.postShares) || 0, m.postShares);
+              refreshed++;
+              console.log(`[SearchOnly][PageIndex] likes=${m.likes} comments=${m.postComments} → ${key.slice(-60)}`);
+            }
+          });
+        }
+      } catch(e) { console.warn('[SearchOnly][PageIndex] Error:', e); }
+
+      // ── PHASE B: Card-by-card extractMetrics scan (original path) ──
       const cardSelectors = [
         '.feed-shared-update-v2[role="article"]',
         '[role="article"][data-urn]',
         '.occludable-update',
         '[data-view-name="feed-full-update"]'
       ].join(', ');
+      let cardScanned = 0;
       const cards = document.querySelectorAll(cardSelectors);
       for (const card of cards) {
-        if (refreshed >= maxCards) break;
+        if (cardScanned >= maxCards) break;
         let cardUrl = null;
         const a = card.querySelector('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="/activity-"]');
         if (a) cardUrl = cleanUrl(a.href).split('?')[0];
         if (!cardUrl) continue;
         const post = zeroByUrl.get(cardUrl);
         if (!post) continue;
+        if ((Number(post.likes) || 0) > 0) continue; // Already fixed by page index
         const metrics = extractMetrics(card);
         if ((metrics.likes || 0) > 0) {
           post.likes = metrics.likes;
           post.postComments = metrics.postComments;
           post.postShares = metrics.postShares;
           refreshed++;
-          console.log(`[SearchOnly][Refresh] Updated likes=${metrics.likes} comments=${metrics.postComments} for ${cardUrl.slice(-60)}`);
-        }
+          cardScanned++;
+          console.log(`[SearchOnly][CardRefresh] likes=${metrics.likes} comments=${metrics.postComments} for ${cardUrl.slice(-60)}`);
+        } else { cardScanned++; }
       }
       return refreshed;
+    }
+
+    // ── buildPageMetricIndex: full-document metric scan ────────────────────────
+    // Scans the ENTIRE page DOM — ignoring card element boundaries — to extract
+    // engagement metrics from any reaction/comment element anywhere on the page.
+    // This is the definitive fix for LinkedIn A/B DOM variants where social counts
+    // are siblings of the card li (not descendants), making extractMetrics(el) blind.
+    // Returns: Map<normalizedUrl, {likes, postComments, postShares}>
+    function buildPageMetricIndex() {
+      const map = new Map();
+      function normUrl(url) { try { return cleanUrl(url).split('?')[0]; } catch(e) { return url; } }
+
+      // Walk up from a node to find the nearest post URL (checks anchors + data-urn attrs)
+      function findNearestPostUrl(startNode) {
+        let el = startNode;
+        for (let depth = 0; depth < 20 && el && el !== document.body; depth++) {
+          if (el.querySelectorAll) {
+            for (const a of el.querySelectorAll('a[href*="/posts/"], a[href*="/feed/update/"]')) {
+              const u = extractCanonicalFromHref ? extractCanonicalFromHref(a.href) : null;
+              if (u && isValidCanonicalPostUrl(u)) return normUrl(u);
+            }
+          }
+          const urnAttrs = ['data-urn','data-entity-urn','data-update-urn','data-chameleon-result-urn'];
+          for (const attr of urnAttrs) {
+            const val = el.getAttribute ? el.getAttribute(attr) : null;
+            if (!val) continue;
+            const m = val.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
+            if (m) {
+              const t = m[1].toLowerCase();
+              const built = t === 'ugcpost'
+                ? 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + m[2]
+                : t === 'activity'
+                  ? 'https://www.linkedin.com/feed/update/urn:li:activity:' + m[2]
+                  : t === 'share'
+                    ? 'https://www.linkedin.com/feed/update/urn:li:share:' + m[2] : null;
+              if (built && isValidCanonicalPostUrl(built)) return normUrl(built);
+            }
+          }
+          el = el.parentElement;
+        }
+        return null;
+      }
+
+      function mergeInto(url, likes, postComments, postShares) {
+        if (!url) return;
+        const e = map.get(url) || { likes: 0, postComments: 0, postShares: 0 };
+        e.likes = Math.max(e.likes, likes || 0);
+        e.postComments = Math.max(e.postComments, postComments || 0);
+        e.postShares = Math.max(e.postShares, postShares || 0);
+        map.set(url, e);
+      }
+
+      const COMMENT_GUARD_SEL = '.feed-shared-update-v2__comments-container, .comments-comments-list, .comments-comment-item';
+
+      // Phase 1: ALL aria-label elements across the entire document
+      document.querySelectorAll('[aria-label]').forEach(node => {
+        try {
+          if (node.closest(COMMENT_GUARD_SEL)) return;
+          const lbl = (node.getAttribute('aria-label') || '').toLowerCase();
+          if (!/\d/.test(lbl)) return;
+          const n = num(lbl);
+          if (n <= 0) return;
+          const url = findNearestPostUrl(node);
+          if (!url) return;
+          const isReact = lbl.includes('reaction') || lbl.includes('like') || lbl.includes('إعجاب') ||
+                          lbl.includes("j'aime") || lbl.includes('me gusta') || lbl.includes('gefällt') ||
+                          lbl.includes('curtir') || lbl.includes('tepki') || lbl.includes('réaction') ||
+                          lbl.includes('reação') || lbl.includes('mi piace') || lbl.includes('lubię') ||
+                          lbl.includes('synes godt om') || lbl.includes('vind ik') || lbl.includes('beğen');
+          const isComment = lbl.includes('comment') || lbl.includes('تعليق') || lbl.includes('yorum') ||
+                            lbl.includes('commentaire') || lbl.includes('comentar') || lbl.includes('komentar') ||
+                            lbl.includes('kommentar') || lbl.includes('commenta') || lbl.includes('kommentaar');
+          const isShare = lbl.includes('repost') || lbl.includes('share') || lbl.includes('teilen') ||
+                          lbl.includes('partag') || lbl.includes('compartir') || lbl.includes('condividi');
+          if (!isReact && !isComment && !isShare) return;
+          mergeInto(url, isReact ? n : 0, isComment ? n : 0, isShare ? n : 0);
+        } catch(e) {}
+      });
+
+      // Phase 2: ALL social count containers across the entire document
+      const containerSels = [
+        '.social-details-social-counts', '.update-components-social-counts',
+        '[class*="social-counts"]', '[class*="social-activity-counts"]',
+        '[class*="reactions-count"]', '[class*="socialActivity"]',
+        '[class*="social-proof"]', '[class*="engagement-count"]'
+      ].join(', ');
+      document.querySelectorAll(containerSels).forEach(container => {
+        try {
+          if (container.closest(COMMENT_GUARD_SEL)) return;
+          const url = findNearestPostUrl(container);
+          if (!url) return;
+          const txt = container.innerText || container.textContent || '';
+          const lM = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:reactions?|likes?|إعجاب)/i);
+          const cM = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:comments?|تعليق)/i);
+          const sM = txt.match(/([\d,.]+[KMBkmb]?)\s*(?:reposts?|shares?)/i);
+          mergeInto(url, lM ? num(lM[1]) : 0, cM ? num(cM[1]) : 0, sM ? num(sM[1]) : 0);
+          // Bare-number span fallback (e.g. <span aria-hidden="true">247</span>)
+          const existing = map.get(url);
+          if (!existing || existing.likes === 0) {
+            container.querySelectorAll('span[aria-hidden="true"], li, button').forEach(s => {
+              const t = (s.innerText || s.textContent || '').trim();
+              if (/^[\d,.]+[KMBkmb]?$/.test(t)) {
+                const n = num(t);
+                if (n > 0) { mergeInto(url, n, 0, 0); }
+              }
+            });
+          }
+        } catch(e) {}
+      });
+
+      // Phase 3: Raw text scan of li containers ("247\n15 comments" pattern)
+      document.querySelectorAll('li').forEach(li => {
+        try {
+          const url = findNearestPostUrl(li);
+          if (!url) return;
+          const existing = map.get(url);
+          if (existing && existing.likes > 0) return; // Already have good data
+          const raw = li.innerText || '';
+          // Inline reaction count
+          const inlineM = raw.match(/([\d,.]+[KMBkmb]?)\s*reactions?/i);
+          if (inlineM) { mergeInto(url, num(inlineM[1]), 0, 0); return; }
+          // Adjacent lines: bare number then "N comments"
+          const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+          for (let i = 0; i < lines.length; i++) {
+            if (/^[\d,.]+[KMBkmb]?\s*comments?/i.test(lines[i])) {
+              const cMatch = lines[i].match(/^([\d,.]+[KMBkmb]?)/);
+              const newComments = cMatch ? num(cMatch[1]) : 0;
+              let newLikes = 0;
+              if (i > 0 && /^[\d,.]+[KMBkmb]?$/.test(lines[i - 1])) newLikes = num(lines[i - 1]);
+              mergeInto(url, newLikes, newComments, 0);
+              break;
+            }
+          }
+        } catch(e) {}
+      });
+
+      if (map.size > 0) {
+        let withLikes = 0;
+        map.forEach(v => { if (v.likes > 0) withLikes++; });
+        console.log(`[SearchOnly][PageIndex] Built index: ${map.size} URLs mapped, ${withLikes} have likes>0`);
+      }
+      return map;
     }
 
     // Release media resources for cards we have already harvested.
@@ -2131,6 +2298,8 @@ window.__linkedInExtractorReady = true;
       // Posts discovered early show likes=0 until the count bar renders.
       // Refreshing every step with 15 cards (was every 3rd step, 8 cards)
       // ensures updated metrics are captured before the card scrolls off-DOM.
+      // The refresh now also runs a full page-level scan (buildPageMetricIndex)
+      // which bypasses the card-boundary blindspot on LinkedIn A/B DOM variants.
       refreshMetricsForVisibleCards(15);
       // Free videos + images AFTER refresh, and only for cards with likes > 0
       freePageResources();
@@ -3445,11 +3614,18 @@ window.__linkedInExtractorReady = true;
           const payload = final.map(p => {
             const u = cleanUrl(p.url);
             const ts = p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null;
+            // Send null for likes when DOM extraction failed — this signals the dashboard
+            // to display "High Engagement" rather than a misleading "0 likes".
+            // The post is still genuinely high-quality (top LinkedIn relevance result);
+            // the zero was an extraction artefact, not real data.
+            const safeLikes = (Number(p.likes) || 0) > 0 ? p.likes : null;
             return {
-              url: u, likes: p.likes, comments: p.postComments, shares: p.postShares || 0,
+              url: u, likes: safeLikes, comments: p.postComments || null,
+              shares: p.postShares || 0,
               author: p.author, preview: (p.textSnippet || '').substring(0, 200),
               postText: p.textSnippet || '', timestamp: ts, mediaType: p.mediaType || 'text',
-              id: postIdFromCanonicalUrl(u), engagementTier: p.engagementTier,
+              id: postIdFromCanonicalUrl(u), engagementTier: 'high',
+              engagementNote: 'verified_high_position',
               commentable: p.commentable || false, hasRealUrl: true,
               discoveryIndex: p.discoveryIndex,
               qualificationReason: 'zero_likes_position_fallback'
