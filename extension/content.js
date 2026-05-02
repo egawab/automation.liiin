@@ -1452,14 +1452,48 @@ window.__linkedInExtractorReady = true;
   // ═══════════════════════════════════════════════════════════
   // SCROLLING — aggressive multi-target + slow waits
   // ═══════════════════════════════════════════════════════════
+  // ── findScrollContainer: detect the real scrollable element ─────────────────────
+  // Diagnostic confirmed: on this LinkedIn variant the <main> element has
+  // overflowY:scroll and scrollHeight=41,983px while window.scrollY stays 0.
+  // ALL scrolling must target this element, never the window.
+  function findScrollContainer() {
+    const main = document.querySelector('main');
+    if (main) {
+      try {
+        const st = getComputedStyle(main).overflowY;
+        if (main.scrollHeight > main.clientHeight && (st === 'scroll' || st === 'auto')) return main;
+      } catch(e) {}
+      // Even if getComputedStyle fails, use <main> if it has real scroll depth
+      if (main.scrollHeight > 2000) return main;
+    }
+    // Fallbacks for other LinkedIn page variants
+    for (const sel of ['[role="main"]', '.scaffold-layout__main', '.scaffold-layout__content', '.search-results-container']) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      try {
+        const st = getComputedStyle(el).overflowY;
+        if (el.scrollHeight > el.clientHeight * 1.5 && (st === 'scroll' || st === 'auto')) return el;
+      } catch(e) {}
+    }
+    return null;
+  }
+
   function aggressiveScroll(pixels) {
+    // PRIMARY: scroll the confirmed <main> scroll container.
+    // Diagnostic proved window.scrollY stays 0 on this LinkedIn variant —
+    // ALL content lives inside <main overflowY:scroll>.
+    const sc = findScrollContainer();
+    if (sc) {
+      sc.scrollTop += pixels;
+      try { sc.dispatchEvent(new Event('scroll', { bubbles: true })); } catch(e) {}
+      try { sc.dispatchEvent(new Event('scrollend', { bubbles: true })); } catch(e) {}
+      return; // Do NOT also scroll window — that would move the wrong thing
+    }
+    // FALLBACK: window + known containers (for page variants where <main> isn't the scroller)
     try { window.scrollBy({ top: pixels, behavior: 'auto' }); } catch(e) {}
     try { document.documentElement.scrollTop += pixels; } catch(e) {}
     try { document.body.scrollTop += pixels; } catch(e) {}
-
-    for (const sel of ['.scaffold-layout__main', 'main', '[role="main"]',
-      '.search-results-container', '.scaffold-layout__content',
-      '[class*="search-results"]', '[data-virtual-list]']) {
+    for (const sel of ['.scaffold-layout__main', '[role="main"]', '.search-results-container', '.scaffold-layout__content']) {
       try {
         const el = document.querySelector(sel);
         if (el && el.scrollHeight > el.clientHeight) {
@@ -1468,12 +1502,17 @@ window.__linkedInExtractorReady = true;
         }
       } catch(e) {}
     }
-
     try { window.dispatchEvent(new Event('scroll')); } catch(e) {}
     try { document.dispatchEvent(new Event('scroll', { bubbles: true })); } catch(e) {}
   }
 
   function scrollToBottom() {
+    const sc = findScrollContainer();
+    if (sc) {
+      sc.scrollTop = sc.scrollHeight;
+      try { sc.dispatchEvent(new Event('scroll', { bubbles: true })); } catch(e) {}
+      return;
+    }
     const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     try { window.scrollTo({ top: h, behavior: 'auto' }); } catch(e) {}
     try { document.documentElement.scrollTop = h; } catch(e) {}
@@ -1526,10 +1565,97 @@ window.__linkedInExtractorReady = true;
     return added;
   }
 
+  // ── harvestByAnchors: anchor-first discovery (works on hashed CSS-Modules DOM) ──
+  // Diagnostic confirmed LinkedIn is using hashed class names (d99855ad _1b8a3c95...)
+  // with no data-urn, no li.reusable-search__result-container, no stable selectors.
+  // The ONLY reliable signals are:
+  //   1. <a href*="/feed/update/urn:li:"> and <a href*="/posts/"> — always real post links
+  //   2. button[aria-label] — always present for Like/Comment/Repost (WCAG required)
+  // Strategy: find all post anchors, walk UP the DOM to find the containing card
+  // (identified by size + presence of action button), extract URL + metrics.
+  // No class names, no data-urn attributes needed.
+  function harvestByAnchors(seenUrls, seenCards, allPosts) {
+    let added = 0;
+    const ANCHOR_SEL = [
+      'a[href*="/feed/update/urn:li:activity:"]',
+      'a[href*="/feed/update/urn:li:ugcPost:"]',
+      'a[href*="/feed/update/urn:li:share:"]',
+      'a[href*="/posts/"]'
+    ].join(', ');
+    const COMMENT_GUARD = '.feed-shared-update-v2__comments-container, .comments-comments-list, .comments-comment-item';
+    const processedUrls = new Set();
+
+    document.querySelectorAll(ANCHOR_SEL).forEach(a => {
+      try {
+        // Skip anchors inside comment sections
+        if (a.closest(COMMENT_GUARD)) return;
+
+        const url = extractCanonicalFromHref(a.href || a.getAttribute('href') || '');
+        if (!url || !isValidCanonicalPostUrl(url)) return;
+        if (seenUrls.has(url) || processedUrls.has(url)) return;
+        processedUrls.add(url);
+
+        // Walk up from anchor to find the post card container:
+        // smallest ancestor that (a) is large enough to be a post card AND
+        // (b) contains at least one action button (Like/Comment/Repost).
+        // This avoids matching tiny link wrappers or giant page containers.
+        let container = null;
+        let el = a.parentElement;
+        for (let depth = 0; depth < 25 && el && el !== document.body; depth++) {
+          const h = el.scrollHeight || el.offsetHeight || 0;
+          const w = el.scrollWidth || el.offsetWidth || 0;
+          if (h > 180 && w > 400) {
+            const hasActionBtn = !!el.querySelector('button[aria-label]');
+            if (hasActionBtn) { container = el; break; }
+          }
+          el = el.parentElement;
+        }
+
+        // Skip if this container is already tracked (dedup by element reference)
+        if (container && seenCards.has(container)) {
+          seenUrls.add(url); // Register URL so it's not re-processed
+          return;
+        }
+
+        // Skip ads
+        if (container && isAdOrSuggestedBlock(container)) return;
+
+        seenUrls.add(url);
+        if (container) seenCards.add(container);
+
+        const metrics = container
+          ? extractMetrics(container)
+          : { likes: 0, postComments: 0, postShares: 0, author: '', textSnippet: '', postedAtMs: 0, mediaType: 'text' };
+        const isCommentable = container ? checkIsCommentable(container) : true;
+
+        allPosts.push({
+          url, likes: metrics.likes, postComments: metrics.postComments,
+          postShares: metrics.postShares || 0, author: metrics.author,
+          textSnippet: metrics.textSnippet, postedAtMs: metrics.postedAtMs,
+          mediaType: metrics.mediaType, commentable: isCommentable,
+          container: container || null, hasRealUrl: true,
+          discoveryIndex: allPosts.length, anchorDiscovered: true
+        });
+        added++;
+      } catch(e) {}
+    });
+
+    if (added > 0) console.log(`[SearchOnly][AnchorHarvest] +${added} posts via anchor-first discovery`);
+    return added;
+  }
+
   function domSignalSnapshot() {
+    // Track <main>.scrollTop (not window height) since <main> is the real scroll container.
+    // Also count post anchors — the most reliable DOM signal on hashed-class variants.
+    const sc = findScrollContainer();
+    const anchorCount = document.querySelectorAll(
+      'a[href*="/feed/update/urn:li:activity:"], a[href*="/feed/update/urn:li:share:"], a[href*="/feed/update/urn:li:ugcPost:"], a[href*="/posts/"]'
+    ).length;
     return {
-      h: Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0),
-      cards: document.querySelectorAll('.reusable-search__result-container,.feed-shared-update-v2,article,.occludable-update,[data-view-name="feed-full-update"],li.artdeco-card').length
+      h: sc ? sc.scrollTop : Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0),
+      cards: anchorCount + document.querySelectorAll(
+        '.reusable-search__result-container,.feed-shared-update-v2,article,.occludable-update,[data-view-name="feed-full-update"],li.artdeco-card'
+      ).length
     };
   }
 
@@ -2338,31 +2464,25 @@ window.__linkedInExtractorReady = true;
       ensureActiveRun();
       const seenBeforeStep = seenUrls.size;
 
-      // ── PRE-SCROLL harvest: capture what's currently visible BEFORE moving ──
-      // Critical for LinkedIn virtual lists: posts exist in the DOM for only ~2-3
-      // scroll steps before LinkedIn's virtualizer removes them. Harvesting before
-      // AND after each scroll ensures every post is captured at least once.
+      // ── PRE-SCROLL harvest (before moving) ──
       harvest(seenUrls, seenCards, allPosts, { overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
-      harvestByUrn(seenUrls, allPosts);
+      harvestByAnchors(seenUrls, seenCards, allPosts); // anchor-first, no class names needed
+      harvestByUrn(seenUrls, allPosts);                // URN sweep for standard variants
 
-      // ── Scroll: 300–400px per step (was 750–1000px) ──
-      // CRITICAL FIX for virtualization miss rate:
-      // At 800px/step we skip past posts before LinkedIn can render them.
-      // At 350px/step (~1/3 viewport) every post spends ≥2 steps in the DOM,
-      // giving harvest() two chances to capture it before virtualization removes it.
-      // Total distance covered in 60 steps: ~21,000px — the same as before.
-      const scrollAmt = 300 + Math.floor(Math.random() * 100);
+      // ── Scroll the REAL container (<main>) at 500–600px per step ──
+      // Diagnostic confirmed <main> is the scroll container (scrollHeight=41,983px).
+      // Now that we're scrolling the right element, 500px is safe and fast.
+      const scrollAmt = 500 + Math.floor(Math.random() * 100);
       const beforeDom = domSignalSnapshot();
       aggressiveScroll(scrollAmt);
-      // 500ms DOM wait (was 350ms) — LinkedIn's virtual renderer needs ~400ms to
-      // mount new nodes after a scroll event. Cutting this short means harvesting
-      // an empty list because the new cards haven't been injected yet.
+      // 500ms wait: <main>'s React renderer needs ~400ms to inject new cards
       const grew = await waitForDomGrowth(beforeDom, 500);
-      if (!grew) await wait(80, 150);
+      if (!grew) await wait(100, 200);
 
-      // deepScan on every 3rd step
+      // ── POST-SCROLL harvest ──
       const useDeepScan = (step % 3 === 0);
       harvest(seenUrls, seenCards, allPosts, { deepScan: useDeepScan, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
+      harvestByAnchors(seenUrls, seenCards, allPosts);
       harvestByUrn(seenUrls, allPosts);
       await new Promise(r => setTimeout(r, 0));
       refreshMetricsForVisibleCards(15);
