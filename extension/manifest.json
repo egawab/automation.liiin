@@ -21,6 +21,12 @@
     "https://*/*",
     "http://*/*"
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["interceptor.js"],
+      "matches": ["https://www.linkedin.com/*"]
+    }
+  ],
   "content_scripts": [
     {
       "matches": [

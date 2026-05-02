@@ -22,10 +22,45 @@ if (window.__linkedInExtractorCleanup) {
 }
 window.__linkedInExtractorReady = true;
 
+// ── Inject network interceptor into MAIN world ───────────────────────────────
+// The interceptor monkey-patches window.fetch and XHR to capture LinkedIn's
+// Voyager API responses before the DOM is even rendered. This gives us exact
+// post URNs, like counts, and full text from the raw JSON — no DOM parsing.
+// Must be injected as a <script src> tag (not eval) so Chrome allows it under
+// the Manifest V3 CSP. The file is listed in web_accessible_resources.
+(function injectNetworkInterceptor() {
+  if (window.__LI_INTERCEPTOR_ACTIVE__) return; // already injected
+  try {
+    const s = document.createElement('script');
+    s.src = chrome.runtime.getURL('interceptor.js');
+    s.onload = () => s.remove();
+    (document.head || document.documentElement).appendChild(s);
+  } catch (e) {
+    console.warn('[Nexora] Could not inject network interceptor:', e);
+  }
+})();
+
 {
   let isExtracting = false;
   if (typeof window.__linkedInExtractorRunCounter !== 'number') window.__linkedInExtractorRunCounter = 0;
   if (typeof window.__linkedInExtractorActiveRunId !== 'number') window.__linkedInExtractorActiveRunId = 0;
+
+  // ── postMessage bridge: receive intercepted posts from MAIN world ──────────
+  // The interceptor.js script (running in MAIN world) sends parsed post objects
+  // via window.postMessage. This listener picks them up and merges them into
+  // whatever allPosts pool the currently active job is using.
+  // __networkPostsBuffer accumulates posts until the active job claims them.
+  if (!window.__networkPostsBuffer) window.__networkPostsBuffer = [];
+  if (!window.__networkPostsListenerAdded) {
+    window.__networkPostsListenerAdded = true;
+    window.addEventListener('message', function (evt) {
+      if (!evt.data || evt.data.type !== '__LI_INTERCEPTED_POSTS__') return;
+      const posts = evt.data.posts;
+      if (!Array.isArray(posts)) return;
+      // Buffer the posts — the active job's harvestNetworkBuffer() will drain them
+      window.__networkPostsBuffer.push(...posts);
+    });
+  }
 
   function messageHandler(request, sender, sendResponse) {
     if (request.action === 'EXECUTE_SEARCH') {
@@ -1635,6 +1670,76 @@ window.__linkedInExtractorReady = true;
     return added;
   }
 
+  // ── harvestNetworkBuffer: drain posts captured by network interceptor ────────
+  // The MAIN-world interceptor.js buffers posts from LinkedIn's Voyager API
+  // responses in window.__networkPostsBuffer. This function:
+  //   1. Drains the buffer (clears it after reading)
+  //   2. Adds new posts directly to allPosts with exact likes/comments/text
+  //   3. Upgrades existing DOM-harvested posts that had likes=0 with the real
+  //      metrics from the API response (avoids duplicates, keeps best data)
+  // This is the primary data path on this LinkedIn variant. DOM parsing is now
+  // the fallback rather than the primary approach.
+  function harvestNetworkBuffer(seenUrls, allPosts, keyword) {
+    const buf = window.__networkPostsBuffer;
+    if (!buf || buf.length === 0) return 0;
+    // Drain atomically
+    const batch = buf.splice(0, buf.length);
+    let added = 0, upgraded = 0;
+
+    // Build a fast lookup for existing posts by URL
+    const existingByUrl = new Map();
+    allPosts.forEach(p => { if (p.url) existingByUrl.set(cleanUrl(p.url).split('?')[0], p); });
+
+    for (const np of batch) {
+      try {
+        if (!np.url || !isValidCanonicalPostUrl(np.url)) continue;
+        const key = cleanUrl(np.url).split('?')[0];
+
+        if (existingByUrl.has(key)) {
+          // Upgrade existing post with better metrics from network response
+          const existing = existingByUrl.get(key);
+          const newLikes = Math.max(Number(existing.likes) || 0, Number(np.likes) || 0);
+          const newComments = Math.max(Number(existing.postComments) || 0, Number(np.comments) || 0);
+          const improved = newLikes > (Number(existing.likes) || 0) || newComments > (Number(existing.postComments) || 0);
+          if (improved) {
+            existing.likes = newLikes;
+            existing.postComments = newComments;
+            existing.postShares = Math.max(Number(existing.postShares) || 0, Number(np.reposts) || 0);
+            if (np.text && np.text.length > (existing.textSnippet || '').length) existing.textSnippet = np.text;
+            if (np.author && np.author !== 'Unknown') existing.author = np.author;
+            upgraded++;
+          }
+          continue;
+        }
+
+        // New post from network — add directly with exact API data
+        seenUrls.add(np.url);
+        existingByUrl.set(key, np); // prevent double-add from same batch
+        allPosts.push({
+          url: np.url,
+          likes: Number(np.likes) || 0,
+          postComments: Number(np.comments) || 0,
+          postShares: Number(np.reposts) || 0,
+          author: np.author || 'Unknown',
+          textSnippet: (np.text || '').substring(0, 300),
+          postedAtMs: Number(np.postedAtMs) || 0,
+          mediaType: 'text',
+          commentable: true,
+          container: null,
+          hasRealUrl: true,
+          discoveryIndex: allPosts.length,
+          networkDiscovered: true
+        });
+        added++;
+      } catch(e) {}
+    }
+
+    if (added > 0 || upgraded > 0) {
+      console.log(`[SearchOnly][NetworkBuf] +${added} new | ${upgraded} upgraded from API response`);
+    }
+    return added;
+  }
+
   function domSignalSnapshot() {
     // Track <main>.scrollTop (not window height) since <main> is the real scroll container.
     // Also count post anchors — the most reliable DOM signal on hashed-class variants.
@@ -2528,6 +2633,7 @@ window.__linkedInExtractorReady = true;
       const seenBeforeStep = seenUrls.size;
 
       // ── PRE-SCROLL harvest (before moving) ──
+      harvestNetworkBuffer(seenUrls, allPosts, keyword); // network-first: drain API buffer
       harvest(seenUrls, seenCards, allPosts, { overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
       harvestByAnchors(seenUrls, seenCards, allPosts); // anchor-first, no class names needed
       harvestByUrn(seenUrls, allPosts);                // URN sweep for standard variants
@@ -2544,6 +2650,7 @@ window.__linkedInExtractorReady = true;
 
       // ── POST-SCROLL harvest ──
       const useDeepScan = (step % 3 === 0);
+      harvestNetworkBuffer(seenUrls, allPosts, keyword); // drain API buffer first
       harvest(seenUrls, seenCards, allPosts, { deepScan: useDeepScan, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
       harvestByAnchors(seenUrls, seenCards, allPosts);
       harvestByUrn(seenUrls, allPosts);
