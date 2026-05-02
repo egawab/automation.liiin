@@ -1565,16 +1565,21 @@ window.__linkedInExtractorReady = true;
     return added;
   }
 
-  // ── harvestByAnchors: anchor-first discovery (works on hashed CSS-Modules DOM) ──
-  // Diagnostic confirmed LinkedIn is using hashed class names (d99855ad _1b8a3c95...)
-  // with no data-urn, no li.reusable-search__result-container, no stable selectors.
-  // The ONLY reliable signals are:
-  //   1. <a href*="/feed/update/urn:li:"> and <a href*="/posts/"> — always real post links
-  //   2. button[aria-label] — always present for Like/Comment/Repost (WCAG required)
-  // Strategy: find all post anchors, walk UP the DOM to find the containing card
-  // (identified by size + presence of action button), extract URL + metrics.
-  // No class names, no data-urn attributes needed.
+  // ── harvestByAnchors: anchor-first, zero-layout-thrashing discovery ────────────
+  // Performance-optimized rewrite. Key changes vs previous version:
+  // 1. Persistent WeakSet cache (window.__anchorHarvestCache) — each anchor element
+  //    is processed EXACTLY ONCE across all scroll steps. No re-evaluation ever.
+  // 2. ZERO layout measurements — removed all offsetHeight/scrollHeight/scrollWidth
+  //    calls from the traversal loop. Each of those forces a synchronous browser
+  //    reflow, causing the "tab freezing" symptom.
+  // 3. Structural card detection — card boundary = first ancestor that contains a
+  //    button[aria-label]. No size gate. Works even on partially-rendered cards.
+  // 4. Depth capped at 12 (was 25) — enough to reach the card from any anchor depth.
   function harvestByAnchors(seenUrls, seenCards, allPosts) {
+    // Persistent anchor element cache — WeakSet won't prevent GC of removed nodes
+    if (!window.__anchorHarvestCache) window.__anchorHarvestCache = new WeakSet();
+    const cache = window.__anchorHarvestCache;
+
     let added = 0;
     const ANCHOR_SEL = [
       'a[href*="/feed/update/urn:li:activity:"]',
@@ -1582,42 +1587,28 @@ window.__linkedInExtractorReady = true;
       'a[href*="/feed/update/urn:li:share:"]',
       'a[href*="/posts/"]'
     ].join(', ');
-    const COMMENT_GUARD = '.feed-shared-update-v2__comments-container, .comments-comments-list, .comments-comment-item';
-    const processedUrls = new Set();
 
     document.querySelectorAll(ANCHOR_SEL).forEach(a => {
+      // SKIP: already processed in a previous scroll step — zero cost
+      if (cache.has(a)) return;
+      cache.add(a);
+
       try {
-        // Skip anchors inside comment sections
-        if (a.closest(COMMENT_GUARD)) return;
+        const url = extractCanonicalFromHref(a.href || '');
+        if (!url || !isValidCanonicalPostUrl(url) || seenUrls.has(url)) return;
 
-        const url = extractCanonicalFromHref(a.href || a.getAttribute('href') || '');
-        if (!url || !isValidCanonicalPostUrl(url)) return;
-        if (seenUrls.has(url) || processedUrls.has(url)) return;
-        processedUrls.add(url);
-
-        // Walk up from anchor to find the post card container:
-        // smallest ancestor that (a) is large enough to be a post card AND
-        // (b) contains at least one action button (Like/Comment/Repost).
-        // This avoids matching tiny link wrappers or giant page containers.
+        // Walk UP to find the post card container.
+        // NO layout measurements — pure DOM structure traversal only.
+        // Stop at the first ancestor that has any button[aria-label] descendant.
+        // That button is the Like/Comment/Repost bar, which only exists on post cards.
         let container = null;
         let el = a.parentElement;
-        for (let depth = 0; depth < 25 && el && el !== document.body; depth++) {
-          const h = el.scrollHeight || el.offsetHeight || 0;
-          const w = el.scrollWidth || el.offsetWidth || 0;
-          if (h > 180 && w > 400) {
-            const hasActionBtn = !!el.querySelector('button[aria-label]');
-            if (hasActionBtn) { container = el; break; }
-          }
+        for (let d = 0; d < 12 && el && el !== document.body; d++) {
+          if (el.querySelector('button[aria-label]')) { container = el; break; }
           el = el.parentElement;
         }
 
-        // Skip if this container is already tracked (dedup by element reference)
-        if (container && seenCards.has(container)) {
-          seenUrls.add(url); // Register URL so it's not re-processed
-          return;
-        }
-
-        // Skip ads
+        if (container && seenCards.has(container)) { seenUrls.add(url); return; }
         if (container && isAdOrSuggestedBlock(container)) return;
 
         seenUrls.add(url);
@@ -1626,13 +1617,13 @@ window.__linkedInExtractorReady = true;
         const metrics = container
           ? extractMetrics(container)
           : { likes: 0, postComments: 0, postShares: 0, author: '', textSnippet: '', postedAtMs: 0, mediaType: 'text' };
-        const isCommentable = container ? checkIsCommentable(container) : true;
 
         allPosts.push({
           url, likes: metrics.likes, postComments: metrics.postComments,
           postShares: metrics.postShares || 0, author: metrics.author,
           textSnippet: metrics.textSnippet, postedAtMs: metrics.postedAtMs,
-          mediaType: metrics.mediaType, commentable: isCommentable,
+          mediaType: metrics.mediaType,
+          commentable: container ? checkIsCommentable(container) : true,
           container: container || null, hasRealUrl: true,
           discoveryIndex: allPosts.length, anchorDiscovered: true
         });
@@ -1640,7 +1631,7 @@ window.__linkedInExtractorReady = true;
       } catch(e) {}
     });
 
-    if (added > 0) console.log(`[SearchOnly][AnchorHarvest] +${added} posts via anchor-first discovery`);
+    if (added > 0) console.log(`[SearchOnly][AnchorHarvest] +${added} new posts`);
     return added;
   }
 
