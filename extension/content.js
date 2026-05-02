@@ -2175,6 +2175,9 @@ window.__linkedInExtractorReady = true;
     let totalSavedIncremental = 0;
     let noGrowthSteps = 0;
     let lastActiveHarvestStep = -99;
+    // Processed cache for QualGate logging — each URL is evaluated and logged
+    // exactly ONCE. Prevents re-logging the same post on every scroll tick.
+    const qualGateSeenUrls = new Set();
 
     const getUnsyncedRealPosts = () => allPosts.filter(p =>
       p.url &&
@@ -2721,22 +2724,32 @@ window.__linkedInExtractorReady = true;
       heartbeat(`Phase1-Scroll`, `scroll ${step + 1} / ${SEARCH_SCROLL_TARGET} | URLs ${currentSeenSize} | qualified ${commitSnapshot.qualified.length} | saving at end`);
 
       if (commitSnapshot.ranked.length > 0 && (step + 1) % 5 === 0) {
-        // Verbose per-post rejection log — runs every 5 steps so the user can see
-        // exactly why each candidate is being rejected at the qualification gate.
-        commitSnapshot.ranked.slice(0, Math.min(15, commitSnapshot.ranked.length)).forEach((p, idx) => {
-          const u = cleanUrl(p.url).slice(0, 100);
+        // QualGate diagnostic log — only NEW posts (never evaluated before).
+        // qualGateSeenUrls persists across all scroll steps so each post is
+        // evaluated and logged exactly once, no matter how many steps run.
+        let newThisStep = 0;
+        commitSnapshot.ranked.forEach((p, idx) => {
+          const key = cleanUrl(p.url || '').split('?')[0];
+          if (!key || qualGateSeenUrls.has(key)) return; // already processed
+          qualGateSeenUrls.add(key);
+          newThisStep++;
+          const u = key.slice(-80);
           const kwOk = typeof isKeywordRelevant === 'function' ? isKeywordRelevant(p, keyword) : true;
           if (!p.hardRule?.pass) {
             const reasons = p.hardRule?.reasons?.join(' | ') || 'unknown';
             const textLen = (p.textSnippet || '').trim().length;
-            console.log(`[QualGate][FAIL] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} hardRule=FAIL reasons=(${reasons}) keyword=${kwOk?'OK':'MISSING'} snippetLen=${textLen} url=${u}`);
+            console.log(`[QualGate][FAIL] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} hardRule=FAIL reasons=(${reasons}) keyword=${kwOk?'OK':'MISSING'} snippetLen=${textLen} src=${p.networkDiscovered?'net':'dom'} url=...${u}`);
           } else if (!kwOk) {
             const textLen = (p.textSnippet || '').trim().length;
-            console.log(`[QualGate][FAIL] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} hardRule=PASS keyword=MISSING snippetLen=${textLen} url=${u}`);
+            console.log(`[QualGate][FAIL] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} hardRule=PASS keyword=MISSING snippetLen=${textLen} src=${p.networkDiscovered?'net':'dom'} url=...${u}`);
           } else {
-            console.log(`[QualGate][PASS] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} score=${p.reachScore} url=${u}`);
+            console.log(`[QualGate][PASS] #${idx+1} likes=${p.likes||0} comments=${p.postComments||0} score=${p.reachScore} src=${p.networkDiscovered?'net':'dom'} url=...${u}`);
           }
         });
+        if (newThisStep === 0) {
+          // All ranked posts already processed — only log if it's the first time we see zero new
+          // (suppress repeated 'no new posts this step' lines)
+        }
       }
 
       if ((step + 1) % SEARCH_PROGRESS_BATCH === 0) {
