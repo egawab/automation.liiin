@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Nexora – LinkedIn AI Assistant",
+  "version": "2.0",
+  "version_name": "final",
+  "description": "AI-powered LinkedIn engagement assistant. Auto-search, auto-comment with human-mimicry safety.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs",
+    "scripting",
+    "activeTab",
+    "notifications",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://*.vercel.app/*",
+    "http://localhost:3000/*",
+    "http://localhost:*/*",
+    "https://*/*",
+    "http://*/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["interceptor.js"],
+      "matches": ["https://www.linkedin.com/*"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.vercel.app/*",
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*"
+      ],
+      "js": ["dashboard-bridge.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon-48.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

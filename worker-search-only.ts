@@ -366,7 +366,7 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
         console.log(`✅ ${exactMatches.length} posts EXACTLY match constraints.`);
 
         // Supplement with closest-match if sparse
-        if (exactMatches.length < 10) {
+        if (exactMatches.length < 40) {
           const exactUrls = new Set(exactMatches.map(p => p.url));
           const remaining = allAggregatedPosts.filter(p => !exactUrls.has(p.url));
           const scored = remaining.map(p => {
@@ -379,7 +379,7 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
           }).sort((a, b) => a._dev - b._dev);
 
           const maxDev = Math.max(SETTINGS_MIN_LIKES, SETTINGS_MIN_COMMENTS, 5) * 0.5;
-          const fallbacks = scored.filter(p => p._dev <= maxDev).slice(0, 10 - exactMatches.length);
+          const fallbacks = scored.filter(p => p._dev <= maxDev).slice(0, 40 - exactMatches.length);
           if (fallbacks.length > 0) {
             postsToSave.push(...fallbacks);
             console.log(`🔄 Added ${fallbacks.length} closest-match fallback posts.`);
@@ -400,7 +400,7 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
         const maxDev = Math.max(SETTINGS_MIN_LIKES, SETTINGS_MIN_COMMENTS, 10);
         postsToSave = scored.filter(p => p._dev <= maxDev);
         if (postsToSave.length === 0) {
-          postsToSave = scored.slice(0, 10);
+          postsToSave = scored.slice(0, 40);
           console.log(`⚠️ No posts within fallback tolerance. Taking top ${postsToSave.length} closest.`);
         } else {
           console.log(`🔄 Selected ${postsToSave.length} via closest-match fallback.`);
@@ -434,7 +434,7 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 
 // ============================================================================
 // LINKEDIN SEA// Maximum number of posts to collect per keyword search
-const MAX_POSTS_PER_SEARCH = 100;
+const MAX_POSTS_PER_SEARCH = 150;
 
 async function searchLinkedInPosts(keyword: string, filterParam: string | null = null): Promise<PostCandidate[]> {
   if (!page) throw new Error('Browser not initialized');
@@ -466,7 +466,7 @@ async function searchLinkedInPosts(keyword: string, filterParam: string | null =
     // After each scroll we wait for NEW content rather than a fixed delay,
     // so fast-loading pages don't waste time.
     console.log('📜 Scrolling deep to load maximum posts...');
-    for (let round = 0; round < 25; round++) {
+    for (let round = 0; round < 40; round++) {
       // Scroll to bottom of the last visible result card (triggers infinite scroll)
       await page.evaluate(() => {
         const cards = document.querySelectorAll(
