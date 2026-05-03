@@ -22,6 +22,167 @@ if (window.__linkedInExtractorCleanup) {
 }
 window.__linkedInExtractorReady = true;
 
+// ════════════════════════════════════════════════════════════════════════════
+// CRASH-SAFETY: Persistent checkpoint system
+// ════════════════════════════════════════════════════════════════════════════
+// LinkedIn can force a page navigation at any moment (auth refresh, rate-limit
+// redirect, SPA route change). When that happens the content script is torn
+// down instantly — our in-memory allPosts array is destroyed along with it.
+// The earlyExitWithPartialSave() helper only covers clean breaks inside the
+// async scroll loop; it cannot fire during a synchronous page unload.
+//
+// Solution — three complementary layers:
+//   1. PERSISTENT CHECKPOINT: chrome.storage.local is written every 5 scrolls
+//      AND on beforeunload. Storage survives page reloads and tab crashes.
+//   2. BEFORE-UNLOAD HOOK: fires synchronously, writes last-known posts to
+//      storage (synchronous chrome.storage.local.set queues an IDB write that
+//      the browser completes even after the page is gone).
+//   3. STARTUP RECOVERY: every time content.js starts it checks for an orphan
+//      checkpoint, pushes it to the dashboard via SYNC_RESULTS, then clears it.
+// ════════════════════════════════════════════════════════════════════════════
+const CRASH_CHECKPOINT_KEY = 'nexora_crash_checkpoint';
+
+// Shared references — set by the active extraction job so the beforeunload
+// handler can access them even from outside the job closure.
+window.__nexoraCheckpointState = window.__nexoraCheckpointState || {
+  posts: [],
+  keyword: '',
+  dashboardUrl: '',
+  userId: '',
+  linkedInProfileId: 'Unknown',
+  lastStep: 0,
+  totalSteps: 60
+};
+
+// Write current posts to chrome.storage.local (fire-and-forget; IDB write is
+// queued by the browser and survives page teardown).
+function writeCheckpoint(posts, meta) {
+  try {
+    const serializeable = (posts || []).filter(p => p && p.url && p.hasRealUrl);
+    if (serializeable.length === 0) return;
+    const data = {
+      posts: serializeable.map(p => ({
+        url: p.url,
+        likes: p.likes || 0,
+        postComments: p.postComments || 0,
+        postShares: p.postShares || 0,
+        author: p.author || '',
+        textSnippet: (p.textSnippet || '').substring(0, 300),
+        commentable: p.commentable !== false,
+        hasRealUrl: true,
+        discoveryIndex: p.discoveryIndex || 0,
+        postedAtMs: p.postedAtMs || 0
+      })),
+      keyword: meta.keyword || '',
+      dashboardUrl: meta.dashboardUrl || '',
+      userId: meta.userId || '',
+      linkedInProfileId: meta.linkedInProfileId || 'Unknown',
+      savedAt: Date.now(),
+      stepAt: meta.lastStep || 0,
+      totalSteps: meta.totalSteps || 60
+    };
+    chrome.storage.local.set({ [CRASH_CHECKPOINT_KEY]: data });
+    console.log(`[Nexora][Checkpoint] ✅ Wrote ${data.posts.length} posts to crash-storage at step ${data.stepAt}/${data.totalSteps}.`);
+  } catch(e) {
+    console.warn('[Nexora][Checkpoint] Write failed (non-fatal):', e);
+  }
+}
+
+// Clear the checkpoint after a successful save (prevents re-delivery)
+function clearCheckpoint() {
+  try { chrome.storage.local.remove(CRASH_CHECKPOINT_KEY); } catch(e) {}
+}
+
+// ── Layer 2: beforeunload — fires synchronously on every page navigation ──
+// Remove any existing listener first (content.js may be re-injected)
+if (window.__nexoraBeforeUnloadHandler) {
+  window.removeEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
+}
+window.__nexoraBeforeUnloadHandler = function() {
+  const st = window.__nexoraCheckpointState;
+  if (!st || !st.posts || st.posts.length === 0) return;
+  // Synchronous write — browser IDB queues this even after page teardown
+  writeCheckpoint(st.posts, st);
+  console.warn(`[Nexora][BeforeUnload] ⚠️ Page unloading at step ${st.lastStep}/${st.totalSteps}. Checkpoint written with ${st.posts.length} posts.`);
+};
+window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
+
+// ── Layer 3: Startup recovery — runs every time content.js is injected ──
+(async function recoverOrphanedCheckpoint() {
+  try {
+    const stored = await chrome.storage.local.get(CRASH_CHECKPOINT_KEY);
+    const checkpoint = stored[CRASH_CHECKPOINT_KEY];
+    if (!checkpoint || !Array.isArray(checkpoint.posts) || checkpoint.posts.length === 0) return;
+
+    const ageMs = Date.now() - (checkpoint.savedAt || 0);
+    const MAX_CHECKPOINT_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
+    if (ageMs > MAX_CHECKPOINT_AGE_MS) {
+      console.log('[Nexora][Recovery] Orphaned checkpoint too old (' + Math.round(ageMs / 60000) + ' min). Discarding.');
+      clearCheckpoint();
+      return;
+    }
+
+    console.warn(`[Nexora][Recovery] 🔄 Found orphaned checkpoint: ${checkpoint.posts.length} posts from keyword="${checkpoint.keyword}" at step ${checkpoint.stepAt}/${checkpoint.totalSteps} (${Math.round(ageMs / 1000)}s ago). Recovering...`);
+
+    // Push orphaned posts to the dashboard now
+    await new Promise(resolve => {
+      try {
+        chrome.runtime.sendMessage({
+          action: 'SYNC_RESULTS',
+          posts: checkpoint.posts.map(p => ({
+            url: p.url,
+            likes: p.likes,
+            comments: p.postComments,
+            shares: p.postShares || 0,
+            author: p.author,
+            preview: (p.textSnippet || '').substring(0, 200),
+            postText: p.textSnippet || '',
+            timestamp: p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null,
+            mediaType: 'text',
+            id: (p.url || '').split('/').filter(Boolean).pop() || '',
+            engagementTier: (p.likes || 0) >= 10 ? 'mid' : 'low',
+            commentable: p.commentable !== false,
+            hasRealUrl: true,
+            discoveryIndex: p.discoveryIndex || 0,
+            qualificationReason: 'crash_recovery_checkpoint'
+          })),
+          keyword: checkpoint.keyword,
+          dashboardUrl: checkpoint.dashboardUrl,
+          userId: checkpoint.userId,
+          linkedInProfileId: checkpoint.linkedInProfileId || 'Unknown',
+          debugInfo: {
+            crashRecovery: true,
+            checkpointStep: checkpoint.stepAt,
+            totalSteps: checkpoint.totalSteps,
+            savedAt: checkpoint.savedAt
+          }
+        }, () => {
+          if (chrome.runtime.lastError) {
+            console.warn('[Nexora][Recovery] sendMessage error:', chrome.runtime.lastError.message);
+          } else {
+            console.log(`[Nexora][Recovery] ✅ Recovered ${checkpoint.posts.length} posts from crashed run successfully.`);
+          }
+          resolve();
+        });
+      } catch(e) {
+        console.warn('[Nexora][Recovery] Failed to send recovered posts:', e);
+        resolve();
+      }
+    });
+
+    clearCheckpoint();
+    // Notify the dashboard of the recovery event
+    try {
+      chrome.runtime.sendMessage({
+        action: 'LIVE_STATUS',
+        text: `🔄 Recovered ${checkpoint.posts.length} posts from a previous crashed run (keyword: "${checkpoint.keyword}", step ${checkpoint.stepAt}/${checkpoint.totalSteps}).`
+      });
+    } catch(e) {}
+  } catch(e) {
+    console.warn('[Nexora][Recovery] Recovery check failed (non-fatal):', e);
+  }
+})();
+
 // ── Inject network interceptor into MAIN world ───────────────────────────────
 // The interceptor monkey-patches window.fetch and XHR to capture LinkedIn's
 // Voyager API responses before the DOM is even rendered. This gives us exact
@@ -2639,6 +2800,23 @@ window.__linkedInExtractorReady = true;
     console.log('[SearchOnly] keyword="' + keyword + '" forcedScrolls=' + SEARCH_SCROLL_TARGET + ' mode=collect-then-rank');
     heartbeat('Phase1-Scroll', `Search-only: collect candidates first, then rank top posts after ${SEARCH_SCROLL_TARGET} scrolls`);
 
+    // ── Wire checkpoint state so beforeunload always sees the latest post pool ──
+    // This must be set before the first scroll so even an immediate LinkedIn
+    // redirect at step 1 will save whatever was collected.
+    window.__nexoraCheckpointState = {
+      posts: allPosts,   // live reference — always reflects latest array contents
+      keyword,
+      dashboardUrl,
+      userId,
+      linkedInProfileId: linkedInProfileId || 'Unknown',
+      lastStep: 0,
+      totalSteps: SEARCH_SCROLL_TARGET
+    };
+    // Expose emergency sync hook for background.js watchdog
+    window.__emergencySync = () => {
+      console.warn('[SearchOnly][EmergencySync] Watchdog triggered — writing checkpoint immediately.');
+      writeCheckpoint(allPosts, window.__nexoraCheckpointState);
+    };
     // ── Global hard timeout: 12 minutes max for the entire scroll loop ──────────
     // Prevents the job from running forever if the tab is backgrounded or if
     // LinkedIn's lazy-loading stalls indefinitely.
@@ -2834,6 +3012,15 @@ window.__linkedInExtractorReady = true;
 
         console.log('[SearchOnly] keyword="' + keyword + '" scroll=' + (step + 1) + ' / ' + SEARCH_SCROLL_TARGET + ' distinctUrls=' + currentSeenSize + ' realPosts=' + real + ' candidatePool=' + commitSnapshot.ranked.length + ' qualified=' + commitSnapshot.qualified.length + ' floor=' + commitSnapshot.adaptiveFloor + ' mode=' + commitSnapshot.fallbackMode + ' saved=' + totalSavedIncremental);
         heartbeat(`Phase1-Scroll`, `scroll ${step + 1} / ${SEARCH_SCROLL_TARGET} | URLs ${currentSeenSize} | qualified ${commitSnapshot.qualified.length} | saving at end`);
+
+        // ── Update shared checkpoint state with current step progress ──
+        window.__nexoraCheckpointState.lastStep = step + 1;
+        // Periodic checkpoint write every 5 scrolls (or when qualified count increases)
+        const prevQualified = window.__nexoraCheckpointState._lastQualified || 0;
+        if ((step + 1) % 5 === 0 || commitSnapshot.qualified.length > prevQualified) {
+          window.__nexoraCheckpointState._lastQualified = commitSnapshot.qualified.length;
+          writeCheckpoint(allPosts, window.__nexoraCheckpointState);
+        }
 
         if (commitSnapshot.ranked.length > 0 && (step + 1) % 5 === 0) {
           // QualGate diagnostic log — only NEW posts (never evaluated before).
@@ -3099,6 +3286,7 @@ window.__linkedInExtractorReady = true;
         return;
       }
 
+      clearCheckpoint(); // Clean exit — no recovery needed
       safeSend({
         action: 'JOB_COMPLETED',
         commentsPostedCount: posted,
@@ -3143,6 +3331,7 @@ window.__linkedInExtractorReady = true;
         });
         return;
       }
+      clearCheckpoint(); // Clean exit — no recovery needed
       safeSend({
         action: 'JOB_COMPLETED',
         commentsPostedCount: 0,
