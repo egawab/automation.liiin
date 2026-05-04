@@ -2338,7 +2338,7 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     ];
     let step = 0;
     let totalSavedIncremental = 0;
-    let noGrowthSteps = 0;
+
     let lastActiveHarvestStep = -99;
     // Processed cache for QualGate logging — each URL is evaluated and logged
     // exactly ONCE. Prevents re-logging the same post on every scroll tick.
@@ -2827,122 +2827,21 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     const LOOP_HARD_TIMEOUT_MS = 12 * 60 * 1000;
     const loopStartTime = Date.now();
 
-    // ── Per-step timeout: 30 seconds per scroll step ─────────────────────────
-    // If a single step hangs (e.g. a DOM querySelectorAll on a huge page or a
-    // slow menu-click resolveUrlViaControlMenu), we skip it and move on.
-    const STEP_TIMEOUT_MS = 30_000;
-
-    // ── yieldToMain: give the browser a single frame to paint/handle input ────
-    // Inserting this before every heavy DOM scan prevents the 'tab feels frozen'
-    // symptom. Zero-timeout is enough to flush the microtask queue and let the
-    // compositor thread draw, without adding meaningful delay to the loop.
+    // ── yieldToMain: compositor frame yield ───────────────────────────────────
+    // Gives the browser a single frame to paint/handle input between heavy DOM
+    // scans. Prevents the 'tab feels frozen' symptom at zero extra latency cost.
     const yieldToMain = () => new Promise(r => setTimeout(r, 0));
-
-    // ── earlyExitWithPartialSave: shared helper for all early-exit paths ──────
-    // Called whenever the loop breaks early (hard timeout, stall guard, step
-    // timeout). Saves whatever posts exist, notifies the UI, and logs clearly.
-    let earlyExitSaveTriggered = false;
-    const earlyExitWithPartialSave = async (reason, stepsRun) => {
-      if (earlyExitSaveTriggered) return; // prevent double-save
-      earlyExitSaveTriggered = true;
-      const partialReal = countReal(allPosts);
-      const warningMsg = `⚠️ Extraction stopped early at scroll ${stepsRun}/${SEARCH_SCROLL_TARGET} — Reason: ${reason}. Partial data (${partialReal} posts) saved to dashboard.`;
-      console.warn('[SearchOnly][EarlyExit] ' + warningMsg);
-      // Surface the warning on the dashboard status bar so the user sees it
-      safeSend({ action: 'LIVE_STATUS', text: warningMsg });
-      heartbeat('Phase1-EarlyExit', warningMsg);
-      // Immediately flush whatever we have collected so far to the dashboard
-      if (partialReal > 0) {
-        try {
-          const partialSnapshot = getSearchOnlyCommitSnapshot();
-          console.log(`[SearchOnly][EarlyExit] Partial save: ${partialSnapshot.qualified.length} qualified posts from ${partialSnapshot.ranked.length} candidates.`);
-          const partialSerializable = allPosts
-            .filter(p => p.url && p.hasRealUrl && isValidCanonicalPostUrl(cleanUrl(p.url)))
-            .map(p => ({
-              url: p.url, likes: p.likes, postComments: p.postComments,
-              postShares: p.postShares || 0, author: p.author,
-              textSnippet: p.textSnippet, commentable: p.commentable !== false,
-              hasRealUrl: true, discoveryIndex: p.discoveryIndex,
-              postedAtMs: p.postedAtMs || 0
-            }));
-          // Re-use syncConstraints if already built; otherwise use defaults
-          const partialConstraints = {
-            SETTINGS_MIN_LIKES: SETTINGS_MIN_LIKES || 0,
-            SETTINGS_MAX_LIKES: SETTINGS_MAX_LIKES || Infinity,
-            SETTINGS_MIN_COMMENTS: SETTINGS_MIN_COMMENTS || 0,
-            SETTINGS_MAX_COMMENTS: SETTINGS_MAX_COMMENTS || Infinity,
-            SKIP_KEYWORD_GATE_FOR_FINAL: true,
-            SEARCH_ONLY_SKIP_HTTP_VERIFY: true,
-            SEARCH_ONLY_FINAL_RANKING: true,
-            SEARCH_ONLY_TARGET_MIN: 10,
-            SEARCH_ONLY_TARGET_MAX: 25,
-            SEARCH_ONLY_MIN_REACH_SCORE: 15,
-            SEARCH_ONLY_MIN_LIKES_HARD: 3,
-            SEARCH_ONLY_MAX_AGE_MS: 90 * 24 * 60 * 60 * 1000
-          };
-          await syncPosts(partialSerializable, keyword, dashboardUrl, userId, linkedInProfileId, true, partialConstraints);
-          console.log('[SearchOnly][EarlyExit] Partial save complete.');
-        } catch(e) {
-          console.error('[SearchOnly][EarlyExit] Partial save failed:', e);
-        }
-      } else {
-        console.warn('[SearchOnly][EarlyExit] No real posts collected yet — nothing to save.');
-        safeSend({ action: 'LIVE_STATUS', text: `⚠️ Extraction stopped early (${reason}) — no posts collected yet.` });
-      }
-    };
-
-    const runStepWithTimeout = (stepFn) =>
-      Promise.race([
-        stepFn(),
-        new Promise(resolve => setTimeout(async () => {
-          console.warn('[SearchOnly][StepTimeout] Step ' + (step + 1) + ' exceeded ' + STEP_TIMEOUT_MS + 'ms — triggering partial save and skipping to next step.');
-          await earlyExitWithPartialSave('30-second per-step DOM timeout at step ' + (step + 1), step + 1);
-          resolve();
-        }, STEP_TIMEOUT_MS))
-      ]);
 
     while (step < SEARCH_SCROLL_TARGET) {
       ensureActiveRun();
 
-      // ── Global hard timeout: bail out cleanly if wall-clock exceeds 12 minutes ──
+      // ── Global hard timeout — last resort only, proceeds to normal save ─────
       if (Date.now() - loopStartTime > LOOP_HARD_TIMEOUT_MS) {
-        console.warn('[SearchOnly][HardTimeout] 12-minute wall-clock limit reached at step ' + (step + 1) + '.');
-        await earlyExitWithPartialSave('12-minute global timeout', step + 1);
-        heartbeat('Phase1-Scroll', `⚠️ Hard timeout at step ${step + 1} — partial data saved, proceeding to finalize`);
+        console.warn('[SearchOnly][HardTimeout] 12-min limit at step ' + (step + 1) + '. Proceeding to normal save.');
+        heartbeat('Phase1-Scroll', `⏱ 12-min limit at step ${step + 1} — proceeding to save`);
         break;
       }
 
-      // ── Stall-guard: 15 consecutive no-new-URL steps → LinkedIn feed exhausted ──
-      // ── Stall recovery: on 3 consecutive empty steps, pause and re-harvest ──
-      // LinkedIn's IntersectionObserver lazy-loader needs ~1-2 seconds after a
-      // scroll event to virtualise new cards into the DOM. If we hit 3 empty
-      // steps in a row, we pause for 2 seconds, scroll slightly, and re-harvest
-      // before incrementing the stall counter further.
-      if (noGrowthSteps > 0 && noGrowthSteps % 3 === 0 && noGrowthSteps < 20) {
-        console.warn(`[SearchOnly][StallRecovery] ${noGrowthSteps} empty steps — pausing 2s for LinkedIn lazy-loader then re-harvesting.`);
-        await wait(1800, 2400);
-        harvestNetworkBuffer(seenUrls, allPosts, keyword);
-        harvestByUrn(seenUrls, allPosts);
-        harvest(seenUrls, seenCards, allPosts, { deepScan: true, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
-        // Run a metric refresh so any newly visible posts get their likes populated
-        // before the stall guard evaluates them.
-        const zeroNow = allPosts.filter(p => (Number(p.likes) || 0) === 0).length;
-        if (zeroNow > 0) refreshMetricsForVisibleCards(20);
-      }
-
-      if (noGrowthSteps >= 20) {
-        console.warn('[SearchOnly][StallGuard] ' + noGrowthSteps + ' consecutive steps with no new URLs. Feed exhausted at step ' + (step + 1) + '.');
-        // Run one final metric refresh before saving — posts discovered via URN sweep
-        // may have had their likes=0 because social-counts rendered after harvest.
-        refreshMetricsForVisibleCards(30);
-        await wait(500, 800);
-        await earlyExitWithPartialSave('LinkedIn feed exhausted (' + noGrowthSteps + ' consecutive empty steps)', step + 1);
-        heartbeat('Phase1-Scroll', `Feed exhausted after ${step + 1} scrolls | qualified ${getSearchOnlyCommitSnapshot().qualified.length}`);
-        break;
-      }
-
-      await runStepWithTimeout(async () => {
-        const seenBeforeStep = seenUrls.size;
 
         // ── PRE-SCROLL: drain network buffer first (pure memory, zero DOM cost) ──
         harvestNetworkBuffer(seenUrls, allPosts, keyword);
@@ -2955,19 +2854,12 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
           harvestByUrn(seenUrls, allPosts);
         }
 
-        // ── Scroll the REAL container (<main>) at 500–600px per step ──
-        // Pre-scroll: give LinkedIn's IntersectionObserver a frame to settle
-        // after the previous step's DOM mutations before we scroll again.
-        await wait(80, 150);
+        // ── Scroll ────────────────────────────────────────────────────────
         const scrollAmt = 500 + Math.floor(Math.random() * 100);
-        const beforeDom = domSignalSnapshot();
         aggressiveScroll(scrollAmt);
-        // Raised from 500ms → 1500ms: LinkedIn's lazy-loader needs at least
-        // 800-1500ms after a scroll event to render new cards into the DOM.
-        // At 500ms, newly loaded posts were invisible to every harvest call,
-        // causing seenUrls not to grow and the stall guard to fire prematurely.
-        const grew = await waitForDomGrowth(beforeDom, 1500);
-        if (!grew) await wait(300, 500);
+        // Plain fixed wait — no DOM polling, no stall detection.
+        // 700-1000ms gives LinkedIn's lazy-loader time to render new cards.
+        await wait(700, 1000);
 
         // ── POST-SCROLL harvest ──
         harvestNetworkBuffer(seenUrls, allPosts, keyword); // drain API buffer immediately
@@ -3009,11 +2901,9 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
           await wait(1000, 1400);
         }
 
-        let currentSeenSize = seenUrls.size;
-        let real = countReal(allPosts);
-        let qualityUnsyncedCount = getUnsyncedQualityPosts().length;
-        let commitSnapshot = getSearchOnlyCommitSnapshot();
-        noGrowthSteps = currentSeenSize > seenBeforeStep ? 0 : (noGrowthSteps + 1);
+        const currentSeenSize = seenUrls.size;
+        const commitSnapshot = getSearchOnlyCommitSnapshot();
+        const qualityUnsyncedCount = getUnsyncedQualityPosts().length;
 
         const lastDiag = window.__lastHarvestDiag || null;
         const shouldActiveHarvest =
@@ -3022,28 +2912,22 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
           (step - lastActiveHarvestStep >= 3) &&
           (
             step < 4 ||
-            noGrowthSteps >= 2 ||
             qualityUnsyncedCount < SEARCH_ONLY_MIN_SAVE_TARGET ||
             ((step + 1) % SEARCH_PROGRESS_BATCH === 0)
           );
 
         if (shouldActiveHarvest) {
-          const activeAdded = await activeHarvestVisibleCards(
+          await activeHarvestVisibleCards(
             seenUrls,
             seenCards,
             allPosts,
             currentSeenSize < 4 ? 4 : 2
           );
-          if (activeAdded > 0) noGrowthSteps = 0;
           lastActiveHarvestStep = step;
-          currentSeenSize = seenUrls.size;
-          real = countReal(allPosts);
-          qualityUnsyncedCount = getUnsyncedQualityPosts().length;
-          commitSnapshot = getSearchOnlyCommitSnapshot();
         }
 
-        console.log('[SearchOnly] keyword="' + keyword + '" scroll=' + (step + 1) + ' / ' + SEARCH_SCROLL_TARGET + ' distinctUrls=' + currentSeenSize + ' realPosts=' + real + ' candidatePool=' + commitSnapshot.ranked.length + ' qualified=' + commitSnapshot.qualified.length + ' floor=' + commitSnapshot.adaptiveFloor + ' mode=' + commitSnapshot.fallbackMode + ' saved=' + totalSavedIncremental);
-        heartbeat(`Phase1-Scroll`, `scroll ${step + 1} / ${SEARCH_SCROLL_TARGET} | URLs ${currentSeenSize} | qualified ${commitSnapshot.qualified.length} | saving at end`);
+        console.log('[SearchOnly] keyword="' + keyword + '" scroll=' + (step + 1) + ' / ' + SEARCH_SCROLL_TARGET + ' distinctUrls=' + seenUrls.size + ' realPosts=' + countReal(allPosts) + ' candidatePool=' + commitSnapshot.ranked.length + ' qualified=' + commitSnapshot.qualified.length + ' floor=' + commitSnapshot.adaptiveFloor + ' mode=' + commitSnapshot.fallbackMode + ' saved=' + totalSavedIncremental);
+        heartbeat(`Phase1-Scroll`, `scroll ${step + 1} / ${SEARCH_SCROLL_TARGET} | URLs ${seenUrls.size} | qualified ${commitSnapshot.qualified.length} | saving at end`);
 
         // ── Update shared checkpoint state with current step progress ──
         window.__nexoraCheckpointState.lastStep = step + 1;
@@ -3092,24 +2976,19 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
                 await wait(250, 420);
                 harvest(seenUrls, seenCards, allPosts, { deepScan: true });
               }
-              if (
-                ((window.__lastHarvestDiag?.btnCards || 0) > 0) &&
-                (retry === 2 || noGrowthSteps >= 2)
-              ) {
-                const retryAdded = await activeHarvestVisibleCards(
+              if ((window.__lastHarvestDiag?.btnCards || 0) > 0 && retry === 2) {
+                await activeHarvestVisibleCards(
                   seenUrls,
                   seenCards,
                   allPosts,
                   seenUrls.size < 4 ? 3 : 2
                 );
-                if (retryAdded > 0) noGrowthSteps = 0;
                 lastActiveHarvestStep = step;
               }
             }
             console.log('[SearchOnly] post-retry batch quality count=' + getUnsyncedQualityPosts().length + ' after scroll ' + (step + 1));
           }
         }
-      }); // end runStepWithTimeout
 
       step++;
     }
