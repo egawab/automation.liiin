@@ -2296,7 +2296,11 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     const SEARCH_ONLY_MIN_SAVE_TARGET = 10;
     const SEARCH_ONLY_MAX_SAVE_TARGET = 25;
     const SEARCH_ONLY_MIN_REACH_SCORE = 15;
-    const SEARCH_ONLY_MIN_LIKES_HARD = 10;
+    // Lowered from 10 → 3: the hard-likes gate was rejecting all posts when LinkedIn's
+    // virtual scroll had already de-rendered the social-counts bar before metrics could
+    // be read. Posts with 3+ likes pass the gate and are then ranked by reach score,
+    // so low-quality posts still don't make the final cut.
+    const SEARCH_ONLY_MIN_LIKES_HARD = 3;
     const SEARCH_ONLY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
     const SEARCH_ONLY_EARLY_POOL_TARGET = 30;
     const SEARCH_ONLY_EARLY_QUALIFIED_TARGET = 25;
@@ -2873,7 +2877,7 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
             SEARCH_ONLY_TARGET_MIN: 10,
             SEARCH_ONLY_TARGET_MAX: 25,
             SEARCH_ONLY_MIN_REACH_SCORE: 15,
-            SEARCH_ONLY_MIN_LIKES_HARD: 10,
+            SEARCH_ONLY_MIN_LIKES_HARD: 3,
             SEARCH_ONLY_MAX_AGE_MS: 90 * 24 * 60 * 60 * 1000
           };
           await syncPosts(partialSerializable, keyword, dashboardUrl, userId, linkedInProfileId, true, partialConstraints);
@@ -2909,8 +2913,29 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
       }
 
       // ── Stall-guard: 15 consecutive no-new-URL steps → LinkedIn feed exhausted ──
-      if (noGrowthSteps >= 15) {
+      // ── Stall recovery: on 3 consecutive empty steps, pause and re-harvest ──
+      // LinkedIn's IntersectionObserver lazy-loader needs ~1-2 seconds after a
+      // scroll event to virtualise new cards into the DOM. If we hit 3 empty
+      // steps in a row, we pause for 2 seconds, scroll slightly, and re-harvest
+      // before incrementing the stall counter further.
+      if (noGrowthSteps > 0 && noGrowthSteps % 3 === 0 && noGrowthSteps < 20) {
+        console.warn(`[SearchOnly][StallRecovery] ${noGrowthSteps} empty steps — pausing 2s for LinkedIn lazy-loader then re-harvesting.`);
+        await wait(1800, 2400);
+        harvestNetworkBuffer(seenUrls, allPosts, keyword);
+        harvestByUrn(seenUrls, allPosts);
+        harvest(seenUrls, seenCards, allPosts, { deepScan: true, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
+        // Run a metric refresh so any newly visible posts get their likes populated
+        // before the stall guard evaluates them.
+        const zeroNow = allPosts.filter(p => (Number(p.likes) || 0) === 0).length;
+        if (zeroNow > 0) refreshMetricsForVisibleCards(20);
+      }
+
+      if (noGrowthSteps >= 20) {
         console.warn('[SearchOnly][StallGuard] ' + noGrowthSteps + ' consecutive steps with no new URLs. Feed exhausted at step ' + (step + 1) + '.');
+        // Run one final metric refresh before saving — posts discovered via URN sweep
+        // may have had their likes=0 because social-counts rendered after harvest.
+        refreshMetricsForVisibleCards(30);
+        await wait(500, 800);
         await earlyExitWithPartialSave('LinkedIn feed exhausted (' + noGrowthSteps + ' consecutive empty steps)', step + 1);
         heartbeat('Phase1-Scroll', `Feed exhausted after ${step + 1} scrolls | qualified ${getSearchOnlyCommitSnapshot().qualified.length}`);
         break;
@@ -2931,11 +2956,18 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
         }
 
         // ── Scroll the REAL container (<main>) at 500–600px per step ──
+        // Pre-scroll: give LinkedIn's IntersectionObserver a frame to settle
+        // after the previous step's DOM mutations before we scroll again.
+        await wait(80, 150);
         const scrollAmt = 500 + Math.floor(Math.random() * 100);
         const beforeDom = domSignalSnapshot();
         aggressiveScroll(scrollAmt);
-        const grew = await waitForDomGrowth(beforeDom, 500);
-        if (!grew) await wait(100, 200);
+        // Raised from 500ms → 1500ms: LinkedIn's lazy-loader needs at least
+        // 800-1500ms after a scroll event to render new cards into the DOM.
+        // At 500ms, newly loaded posts were invisible to every harvest call,
+        // causing seenUrls not to grow and the stall guard to fire prematurely.
+        const grew = await waitForDomGrowth(beforeDom, 1500);
+        if (!grew) await wait(300, 500);
 
         // ── POST-SCROLL harvest ──
         harvestNetworkBuffer(seenUrls, allPosts, keyword); // drain API buffer immediately
@@ -3111,7 +3143,7 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
       SEARCH_ONLY_TARGET_MIN: 10,
       SEARCH_ONLY_TARGET_MAX: 25,
       SEARCH_ONLY_MIN_REACH_SCORE: 15,
-      SEARCH_ONLY_MIN_LIKES_HARD: 10,
+      SEARCH_ONLY_MIN_LIKES_HARD: 3,
       SEARCH_ONLY_MAX_AGE_MS: 90 * 24 * 60 * 60 * 1000
     };
 

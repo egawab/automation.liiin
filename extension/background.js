@@ -792,19 +792,21 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
       if (changeInfo.status === 'complete' && !isControlledNavigation(tabId) && injectionCount < MAX_INJECTIONS) {
         const newTab = await chrome.tabs.get(tabId).catch(() => null);
         if (!newTab) return;
-        // Treat ANY LinkedIn content-search URL as same-run navigation.
-        // Pagination/sort/query changes can remove/alter origin params and should NOT restart extraction.
+        // Treat ANY navigation within linkedin.com as in-run (SPA route changes,
+        // auth refreshes, feed redirects, pagination). Only re-inject if the tab
+        // genuinely left the LinkedIn domain entirely — that is an unrecoverable
+        // navigation that warrants a fresh injection attempt.
         const url = String(newTab.url || '');
         const isLinkedInHost = /https?:\/\/(?:www\.)?linkedin\.com\//i.test(url);
-        const isContentSearchUrl = /linkedin\.com\/search\/results\/content\//i.test(url);
-        const isAllowedInRun = isLinkedInHost && isContentSearchUrl;
 
-        if (!isAllowedInRun) {
-          console.log("🔄 [Worker] Unexpected navigation detected. Re-injecting...");
-          await sleep(3000);
-          await injectAndStart();
+        if (isLinkedInHost) {
+          // LinkedIn SPA navigation, auth redirect, or search param change — keep going.
+          console.log("🔄 [Worker] In-run LinkedIn navigation detected — skipping re-inject to preserve running extraction.");
         } else {
-          console.log("🔄 [Worker] In-run content-search navigation detected — skipping auto re-inject.");
+          // Left LinkedIn entirely — this is genuinely unexpected. Re-inject after a pause.
+          console.log("🔄 [Worker] Tab navigated away from LinkedIn. Re-injecting after delay...");
+          await sleep(5000);
+          await injectAndStart();
         }
       }
     };
