@@ -373,7 +373,11 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     let n = parseFloat(m[1]);
     if (s.includes('k')) n *= 1000;
     if (s.includes('m')) n *= 1000000;
-    return Math.round(n);
+    // Hard cap: no LinkedIn post has 10M+ reactions.
+    // Values above this are post IDs / user IDs accidentally captured
+    // by the bare-number fallback in extractMetrics — they must not be
+    // stored as engagement counts (they would also overflow INT4 in the DB).
+    return Math.min(Math.round(n), 9_999_999);
   }
 
   function safeSend(msg) {
@@ -1683,24 +1687,26 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
   }
 
   function aggressiveScroll(pixels) {
-    // PRIMARY: scroll the confirmed <main> scroll container.
-    // Diagnostic proved window.scrollY stays 0 on this LinkedIn variant —
-    // ALL content lives inside <main overflowY:scroll>.
+    // Always fire EVERY scroll target — do NOT return early after the first hit.
+    // LinkedIn search pages can use a different scroll container than the feed
+    // page. If findScrollContainer() returns the wrong element, the visible page
+    // won't move even though sc.scrollTop increments in the DOM. By firing all
+    // targets we guarantee the visible page moves regardless of page variant.
     const sc = findScrollContainer();
     if (sc) {
       sc.scrollTop += pixels;
       try { sc.dispatchEvent(new Event('scroll', { bubbles: true })); } catch(e) {}
       try { sc.dispatchEvent(new Event('scrollend', { bubbles: true })); } catch(e) {}
-      return; // Do NOT also scroll window — that would move the wrong thing
     }
-    // FALLBACK: window + known containers (for page variants where <main> isn't the scroller)
+    // Always ALSO scroll window + documentElement + body in parallel —
+    // on LinkedIn search pages these are sometimes the actual scroll parents.
     try { window.scrollBy({ top: pixels, behavior: 'auto' }); } catch(e) {}
     try { document.documentElement.scrollTop += pixels; } catch(e) {}
     try { document.body.scrollTop += pixels; } catch(e) {}
     for (const sel of ['.scaffold-layout__main', '[role="main"]', '.search-results-container', '.scaffold-layout__content']) {
       try {
         const el = document.querySelector(sel);
-        if (el && el.scrollHeight > el.clientHeight) {
+        if (el && el !== sc && el.scrollHeight > el.clientHeight) {
           el.scrollTop += pixels;
           el.dispatchEvent(new Event('scroll', { bubbles: true }));
         }
@@ -2296,11 +2302,7 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     const SEARCH_ONLY_MIN_SAVE_TARGET = 10;
     const SEARCH_ONLY_MAX_SAVE_TARGET = 25;
     const SEARCH_ONLY_MIN_REACH_SCORE = 15;
-    // Lowered from 10 → 3: the hard-likes gate was rejecting all posts when LinkedIn's
-    // virtual scroll had already de-rendered the social-counts bar before metrics could
-    // be read. Posts with 3+ likes pass the gate and are then ranked by reach score,
-    // so low-quality posts still don't make the final cut.
-    const SEARCH_ONLY_MIN_LIKES_HARD = 3;
+    const SEARCH_ONLY_MIN_LIKES_HARD = 10;
     const SEARCH_ONLY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
     const SEARCH_ONLY_EARLY_POOL_TARGET = 30;
     const SEARCH_ONLY_EARLY_QUALIFIED_TARGET = 25;
@@ -3022,7 +3024,7 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
       SEARCH_ONLY_TARGET_MIN: 10,
       SEARCH_ONLY_TARGET_MAX: 25,
       SEARCH_ONLY_MIN_REACH_SCORE: 15,
-      SEARCH_ONLY_MIN_LIKES_HARD: 3,
+      SEARCH_ONLY_MIN_LIKES_HARD: 10,
       SEARCH_ONLY_MAX_AGE_MS: 90 * 24 * 60 * 60 * 1000
     };
 
@@ -4066,14 +4068,16 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
 
     if (!isFinal && constraints.SEARCH_ONLY_LOOSE_INCREMENTAL === true) {
       if (baseRealPosts.length === 0) return 0;
+      const INT4_MAX = 2_147_483_647;
+      const safeInt = (v) => Math.min(Math.max(Math.round(Number(v) || 0), 0), INT4_MAX);
       const payloadQuick = baseRealPosts.map(p => {
         const u = cleanUrl(p.url);
         const ts = p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null;
         return {
           url: u,
-          likes: p.likes || 0,
-          comments: p.postComments ?? p.comments ?? 0,
-          shares: p.postShares ?? p.shares ?? 0,
+          likes: safeInt(p.likes),
+          comments: safeInt(p.postComments ?? p.comments),
+          shares: safeInt(p.postShares ?? p.shares),
           author: p.author || '',
           preview: (p.textSnippet || '').substring(0, 200),
           postText: p.textSnippet || '',
@@ -4083,7 +4087,7 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
           engagementTier: 'search_only',
           commentable: p.commentable || false,
           hasRealUrl: true,
-          discoveryIndex: p.discoveryIndex
+          discoveryIndex: safeInt(p.discoveryIndex)
         };
       });
       return await new Promise(resolve => {
@@ -4218,20 +4222,17 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
           const payload = final.map(p => {
             const u = cleanUrl(p.url);
             const ts = p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null;
-            // Send null for likes when DOM extraction failed — this signals the dashboard
-            // to display "High Engagement" rather than a misleading "0 likes".
-            // The post is still genuinely high-quality (top LinkedIn relevance result);
-            // the zero was an extraction artefact, not real data.
-            const safeLikes = (Number(p.likes) || 0) > 0 ? p.likes : null;
+            const INT4_MAX = 2_147_483_647;
+            const safeInt = (v) => Math.min(Math.max(Math.round(Number(v) || 0), 0), INT4_MAX);
             return {
-              url: u, likes: safeLikes, comments: p.postComments || null,
-              shares: p.postShares || 0,
+              url: u, likes: safeInt(p.likes), comments: safeInt(p.postComments) || null,
+              shares: safeInt(p.postShares),
               author: p.author, preview: (p.textSnippet || '').substring(0, 200),
               postText: p.textSnippet || '', timestamp: ts, mediaType: p.mediaType || 'text',
               id: postIdFromCanonicalUrl(u), engagementTier: 'high',
               engagementNote: 'verified_high_position',
               commentable: p.commentable || false, hasRealUrl: true,
-              discoveryIndex: p.discoveryIndex,
+              discoveryIndex: safeInt(p.discoveryIndex),
               qualificationReason: 'zero_likes_position_fallback'
             };
           });
@@ -4377,14 +4378,16 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
 
       console.log(`[SearchOnly] Saving ${final.length} posts via mode=${fallbackMode}.`);
 
+      const INT4_MAX = 2_147_483_647;
+      const safeInt = (v) => Math.min(Math.max(Math.round(Number(v) || 0), 0), INT4_MAX);
       const payload = final.map(p => {
         const u = cleanUrl(p.url);
         const ts = p.postedAtMs ? new Date(p.postedAtMs).toISOString() : null;
         return {
           url: u,
-          likes: p.likes,
-          comments: p.postComments,
-          shares: p.postShares || 0,
+          likes: safeInt(p.likes),
+          comments: safeInt(p.postComments),
+          shares: safeInt(p.postShares),
           author: p.author,
           preview: (p.textSnippet || '').substring(0, 200),
           postText: p.textSnippet || '',
@@ -4394,7 +4397,7 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
           engagementTier: p.engagementTier,
           commentable: p.commentable || false,
           hasRealUrl: true,
-          discoveryIndex: p.discoveryIndex
+          discoveryIndex: safeInt(p.discoveryIndex)
         };
       });
 
