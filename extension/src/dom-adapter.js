@@ -135,24 +135,17 @@
       if (node.scrollHeight < 60 && node.offsetHeight < 60) continue;
       
       const score = calculateScore(node);
-      if (score >= 5) candidates.push({ node, score });
+      // Lightweight validation: must have some post-like structural features
+      if (score >= 3) candidates.push({ node, score });
     }
     
-    // Sort by score descending
+    // Sort by score descending for ranking and deduplication
     candidates.sort((a, b) => b.score - a.score);
     
     const found = [];
     const seen = new Set();
     
-    // Adaptive threshold: start at 7, drop to 5 if too few found
-    let threshold = 7;
-    if (candidates.filter(c => c.score >= 7).length < 2) {
-      threshold = 5;
-    }
-    
     for (const c of candidates) {
-      if (c.score < threshold) continue;
-      
       let isOverlap = false;
       for (const existing of found) {
         if (existing.contains(c.node) || c.node.contains(existing)) {
@@ -167,7 +160,7 @@
       }
     }
     
-    L && L.debug(M, `S0 scoreBased (threshold ${threshold}): ${found.length}`);
+    L && L.debug(M, `S0 scoreBased: found ${found.length} valid post candidates`);
     return found;
   }
 

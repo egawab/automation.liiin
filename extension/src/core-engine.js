@@ -185,15 +185,6 @@
       const netData = drainNetworkDataForUrl(post.post_url);
       if (netData) post = EX().mergeWithNetworkData(post, netData);
 
-      // 🔴 GLOBAL PIPELINE GUARANTEE: DROP IF MISSING AFTER NETWORK MERGE
-      const hasValidText = post.post_text && post.post_text.length > 20;
-      const hasValidAuthor = post.author && post.author !== 'Unknown';
-      if (!hasValidText || !hasValidAuthor) {
-          L().warn(MODULE, `Dropping post (missing text or author after network fallback): ${urlKey}`);
-          // Do not send, do not increment _totalFound
-          continue; 
-      }
-
       _totalFound++;
       newThisRound++;
 
@@ -268,12 +259,6 @@
           _isUpgrade:        alreadySentByDom,
           _traceId:          np._traceId || urlKey.split(':').pop() || '?',
         };
-
-        const hasText   = !!(syntheticPost.post_text && syntheticPost.post_text.length > 20);
-        const hasAuthor = syntheticPost.author !== 'Unknown';
-
-        // 🔴 GLOBAL PIPELINE GUARANTEE: DROP IF MISSING
-        if (!hasText || !hasAuthor) continue;
 
         if (!alreadySentByDom) {
           _totalFound++;
