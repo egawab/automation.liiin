@@ -244,16 +244,48 @@
       const networkOnly = _networkBuffer.splice(0, _networkBuffer.length);
       for (const np of networkOnly) {
         const urlKey = (np.url || '').split('?')[0].replace(/\/$/, '');
-        if (!urlKey || _seenUrls.has(urlKey)) continue;
+        if (!urlKey) continue;
+
+        if (_seenUrls.has(urlKey)) {
+          // ── Re-qualification path ─────────────────────────────────────────
+          // This URL was previously seen as a DOM card with likes=0 (race
+          // condition: harvest ran before the network interceptor fired).
+          // Now we have real engagement data — re-evaluate against the threshold.
+          // transport.js _sentUrls deduplicates, so buffering twice is safe.
+          if ((np.likes || 0) > 0) {
+            const requalPost = {
+              post_url:          np.url,
+              post_text:         np.text        || '',
+              likes_count:       np.likes       || 0,
+              comments_count:    np.comments    || 0,
+              shares_count:      np.reposts     || 0,
+              author:            np.author      || 'Unknown',
+              timestamp:         np.postedAtMs ? new Date(np.postedAtMs).toISOString() : null,
+              media_type:        'text',
+              extraction_source: 'network_requalify',
+              layout_id:         layout,
+              keyword:           _keyword,
+              session_id:        L().sessionId,
+            };
+            const { pass } = FT().qualifies(requalPost, CFG());
+            if (pass) {
+              TR().buffer(requalPost);
+              L().info(MODULE, `✅ RE-QUALIFIED: likes=${np.likes} url=${(np.url || '').slice(-40)}`);
+            }
+          }
+          continue; // always continue — URL already counted in _totalFound
+        }
+
+        // ── New URL path ──────────────────────────────────────────────────
         _seenUrls.add(urlKey);
 
         const syntheticPost = {
           post_url:          np.url,
-          post_text:         np.text   || '',
-          likes_count:       np.likes  || 0,
-          comments_count:    np.comments || 0,
-          shares_count:      np.reposts || 0,
-          author:            np.author || 'Unknown',
+          post_text:         np.text        || '',
+          likes_count:       np.likes       || 0,
+          comments_count:    np.comments    || 0,
+          shares_count:      np.reposts     || 0,
+          author:            np.author      || 'Unknown',
           timestamp:         np.postedAtMs ? new Date(np.postedAtMs).toISOString() : null,
           media_type:        'text',
           extraction_source: 'network',
