@@ -96,71 +96,64 @@
     return n;
   }
 
-  // ── Strategy 0: Dynamic Score-Based Discovery ────────────────────────────
-  function calculateScore(node) {
-    if (!node || node.nodeType !== 1) return 0;
-    let score = 0;
-    
-    if (node.querySelector('time')) score += 3;
-    if (node.querySelector('a[href*="/in/"], a[href*="/company/"]')) score += 3;
-    
-    const textLen = (node.textContent || '').replace(/\s+/g, ' ').trim().length;
-    if (textLen > 40) score += 2;
-    
-    const likeSignals = cfg().LIKE_SIGNALS || ['reaction', 'like'];
-    const commentSignals = cfg().COMMENT_SIGNALS || ['comment'];
-    let hasEngagement = false;
-    node.querySelectorAll('button[aria-label], span[aria-label]').forEach(el => {
-      const lbl = (el.getAttribute('aria-label') || '').toLowerCase();
-      if (likeSignals.some(s => lbl.includes(s)) || commentSignals.some(s => lbl.includes(s))) {
-        hasEngagement = true;
-      }
-    });
-    if (hasEngagement) score += 2;
-    
-    const pCount = node.querySelectorAll('p, span[dir="ltr"], span[dir="rtl"]').length;
-    if (pCount > 2) score += 1;
-    
-    return score;
-  }
-
-  function strategyScoreBased() {
+  // ── Strategy 0: Strict Root Selection ────────────────────────────
+  function strategyStrictRoot() {
     const candidates = [];
     const container = getFeedContainer();
     
-    const nodes = container.querySelectorAll('li, div');
+    // Evaluate main block-level containers
+    const nodes = container.querySelectorAll('li, div, article');
+    
     for (const node of nodes) {
       if (STOP_TAGS.has(node.tagName)) continue;
-      // Skip obviously tiny non-card elements
-      if (node.scrollHeight < 60 && node.offsetHeight < 60) continue;
+      // Skip tiny UI fragments
+      if (node.scrollHeight < 100 && node.offsetHeight < 100) continue;
       
-      const score = calculateScore(node);
-      // Lightweight validation: must have some post-like structural features
-      if (score >= 3) candidates.push({ node, score });
+      // STRICT POST ROOT DEFINITION:
+      // 1. Must contain Author link
+      const hasAuthor = !!node.querySelector('a[href*="/in/"], a[href*="/company/"]');
+      if (!hasAuthor) continue;
+      
+      // 2. Must contain Timestamp
+      const timeCount = node.querySelectorAll('time').length;
+      if (timeCount === 0) continue;
+      
+      // Protect against selecting the entire feed wrapper (which contains many posts)
+      // A single post might have 1 or 2 time elements (if reposted). 3 is a safe upper bound.
+      if (timeCount > 3) continue;
+      
+      // 3. Must contain main text content block
+      const textLen = (node.textContent || '').replace(/\s+/g, ' ').trim().length;
+      if (textLen < 40) continue;
+      
+      // Passed all strict checks
+      candidates.push(node);
     }
     
-    // Sort by score descending for ranking and deduplication
-    candidates.sort((a, b) => b.score - a.score);
+    // Deduplicate: Keep the outermost valid wrapper
+    // Sort descending by DOM area (scrollHeight * scrollWidth) to process largest first
+    candidates.sort((a, b) => {
+      const areaA = (a.scrollHeight || 0) * (a.scrollWidth || 0);
+      const areaB = (b.scrollHeight || 0) * (b.scrollWidth || 0);
+      return areaB - areaA;
+    });
     
     const found = [];
-    const seen = new Set();
     
     for (const c of candidates) {
       let isOverlap = false;
       for (const existing of found) {
-        if (existing.contains(c.node) || c.node.contains(existing)) {
+        if (existing.contains(c) || c.contains(existing)) {
           isOverlap = true;
           break;
         }
       }
-      
-      if (!isOverlap && !seen.has(c.node)) {
-        seen.add(c.node);
-        found.push(c.node);
+      if (!isOverlap) {
+        found.push(c);
       }
     }
     
-    L && L.debug(M, `S0 scoreBased: found ${found.length} valid post candidates`);
+    L && L.debug(M, `S0 strictRoot: found ${found.length} true post containers`);
     return found;
   }
 
@@ -317,8 +310,8 @@
     const LAYOUTS = (window.__NexoraLayoutDetector || {}).LAYOUTS || {};
     const dedupMap = new Map(); // card element → true
 
-    // S0: Dynamic Scoring Engine (Primary Strategy)
-    strategyScoreBased().forEach(c => dedupMap.set(c, true));
+    // S0: Strict Root Selection (Primary Strategy)
+    strategyStrictRoot().forEach(c => dedupMap.set(c, true));
 
     // S1 + S2 (Fallback semantic strategies)
     if (dedupMap.size < 2) {
