@@ -183,28 +183,40 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
   }
 })();
 
-// ── Inject network interceptor into MAIN world ───────────────────────────────
-// The interceptor monkey-patches window.fetch and XHR to capture LinkedIn's
-// Voyager API responses before the DOM is even rendered. This gives us exact
-// post URNs, like counts, and full text from the raw JSON — no DOM parsing.
-// Must be injected as a <script src> tag (not eval) so Chrome allows it under
-// the Manifest V3 CSP. The file is listed in web_accessible_resources.
-(function injectNetworkInterceptor() {
-  if (window.__LI_INTERCEPTOR_ACTIVE__) return; // already injected
-  try {
-    const s = document.createElement('script');
-    s.src = chrome.runtime.getURL('interceptor.js');
-    s.onload = () => s.remove();
-    (document.head || document.documentElement).appendChild(s);
-  } catch (e) {
-    console.warn('[Nexora] Could not inject network interceptor:', e);
-  }
-})();
+// ── Network interceptor DISABLED for Account B ──────────────────────────────
+// Diagnostic confirmed: Account B's LinkedIn variant uses a Service Worker or
+// alternative protocol that bypasses page-context fetch/XHR monkey-patching.
+// buffer_length=0 after a full session proves the interceptor catches nothing
+// while being active. Keeping the injection off prevents any side-effects.
+// Account A still works without it because React Fiber + DOM fallbacks cover it.
+// (injectNetworkInterceptor function removed — interceptor.js is still in the
+//  package for reference but is not injected on any account until further notice.)
 
 {
   let isExtracting = false;
   if (typeof window.__linkedInExtractorRunCounter !== 'number') window.__linkedInExtractorRunCounter = 0;
   if (typeof window.__linkedInExtractorActiveRunId !== 'number') window.__linkedInExtractorActiveRunId = 0;
+
+  // ── fiberSpy: Inject MAIN world React extraction script ──────────────────────
+  // Account B's virtual list recycling and isolated world context prevent content
+  // scripts from reading the fiber tree or capturing URNs fast enough.
+  // fiberSpy.js runs in the MAIN world, reads the fiber tree every 800ms, and
+  // posts the results back here via window.postMessage.
+  function injectFiberSpy() {
+    if (document.getElementById('nexora-fiber-spy')) return;
+    try {
+      const script = document.createElement('script');
+      script.id = 'nexora-fiber-spy';
+      script.src = chrome.runtime.getURL('fiberSpy.js');
+      script.onload = () => console.log('[Nexora] fiberSpy.js injected successfully.');
+      script.onerror = (e) => console.warn('[Nexora] Failed to inject fiberSpy.js:', e);
+      (document.head || document.documentElement).appendChild(script);
+    } catch (e) {
+      console.warn('[Nexora] fiberSpy injection error:', e);
+    }
+  }
+  // Inject immediately
+  injectFiberSpy();
 
   // ── postMessage bridge: receive intercepted posts from MAIN world ──────────
   // The interceptor.js script (running in MAIN world) sends parsed post objects
@@ -223,6 +235,21 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     });
   }
 
+  // ── postMessage bridge: receive FiberSpy URLs from MAIN world ─────────────
+  // fiberSpy.js now sends { type: '__LI_FIBER_SPY_POSTS__', urls: [...] }
+  // (a flat URL string array, not post objects)
+  if (!window.__fiberSpyUrlBuffer) window.__fiberSpyUrlBuffer = [];
+  if (!window.__fiberSpyListenerAdded) {
+    window.__fiberSpyListenerAdded = true;
+    window.addEventListener('message', function (evt) {
+      if (!evt.data || evt.data.type !== '__LI_FIBER_SPY_POSTS__') return;
+      // Support both old format (posts array) and new format (urls array)
+      const urls = evt.data.urls || (Array.isArray(evt.data.posts) ? evt.data.posts.map(p => p.url).filter(Boolean) : []);
+      if (urls.length > 0) window.__fiberSpyUrlBuffer.push(...urls);
+    });
+  }
+
+
   function messageHandler(request, sender, sendResponse) {
     if (request.action === 'EXECUTE_SEARCH') {
       sendResponse({ received: true });
@@ -233,8 +260,10 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
       runCommentCampaignEntry(request.keyword, request.settings, request.comments, request.dashboardUrl, request.userId);
     }
     if (request.action === 'START_SEARCH_ONLY') {
+      // Search-Only mode is now handled by the new modular engine (src/core-engine.js).
+      // This message handler is retained for backwards compatibility but is no longer
+      // invoked by background.js for search-only jobs.
       sendResponse({ received: true });
-      runSearchOnlyEntry(request.keyword, request.settings, request.dashboardUrl, request.userId);
     }
   }
   chrome.runtime.onMessage.addListener(messageHandler);
@@ -244,10 +273,8 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     runCommentCampaignEntry(keyword, settings, comments, dashboardUrl, userId);
   };
 
-  window.__startSearchOnly = function (keyword, settings, dashboardUrl, userId) {
-    console.log('[SearchOnly] start: "' + keyword + '" on ' + window.location.href);
-    runSearchOnlyEntry(keyword, settings, dashboardUrl, userId);
-  };
+  // NOTE: __startSearchOnly removed — search-only now uses window.__NexoraEngine.start()
+  //       injected via src/core-engine.js by background.js.
 
   window.__resumeSingleCommentTarget = async function (plan) {
     const targetUrl = cleanUrl(plan?.targetUrl || window.location.href);
@@ -288,11 +315,9 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
 
   window.__startExtraction = function (keyword, settings, comments, dashboardUrl, userId) {
     console.log('[v18] start: "' + keyword + '" on ' + window.location.href);
-    if (settings && (settings.searchOnlyMode === true || settings.engineMode === 'SEARCH_ONLY')) {
-      runSearchOnlyEntry(keyword, settings, dashboardUrl, userId);
-    } else {
-      runCommentCampaignEntry(keyword, settings, comments, dashboardUrl, userId);
-    }
+    // Search-only is handled by __NexoraEngine (src/core-engine.js). This function
+    // now only handles comment campaigns via content.js.
+    runCommentCampaignEntry(keyword, settings, comments, dashboardUrl, userId);
   };
 
   window.__linkedInExtractorCleanup = function () {
@@ -327,35 +352,12 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     }
   }
 
-  async function runSearchOnlyEntry(keyword, settings, dashboardUrl, userId) {
-    if (isExtracting) { console.log('[SearchOnly] Already running.'); return; }
-    isExtracting = true;
-    const runId = ++window.__linkedInExtractorRunCounter;
-    window.__linkedInExtractorActiveRunId = runId;
-    try {
-      await extractPipeline(keyword, { ...settings, engineMode: 'SEARCH_ONLY', searchOnlyMode: true }, [], dashboardUrl, userId, runId);
-    } catch (e) {
-      if (e instanceof ReferenceError || e instanceof TypeError || e instanceof SyntaxError) {
-        console.error('[SearchOnly] Fatal Runtime Error (bypassing cooldown):', e);
-        throw e; // Halt execution immediately; do not trigger JOB_FAILED fallback
-      }
-      if (String(e?.message || e).includes('EXTRACTION_CANCELLED')) {
-        console.log('[SearchOnly] Cancelled (reinject).');
-        return;
-      }
-      console.error('[SearchOnly] Fatal:', e);
-      safeSend({ action: 'JOB_FAILED', error: String(e), engineMode: 'SEARCH_ONLY' });
-    } finally {
-      if (window.__linkedInExtractorActiveRunId === runId) {
-        isExtracting = false;
-      }
-    }
-  }
+  // runSearchOnlyEntry removed — search-only extraction is now handled entirely by
+  // the new modular engine (src/core-engine.js), injected by background.js.
+  // content.js handles ONLY comment campaigns.
 
   async function runExtraction(keyword, settings, comments, dashboardUrl, userId) {
-    if (settings && (settings.searchOnlyMode === true || settings.engineMode === 'SEARCH_ONLY')) {
-      return runSearchOnlyEntry(keyword, settings, dashboardUrl, userId);
-    }
+    // Always route to comment campaign — search-only no longer goes through this file.
     return runCommentCampaignEntry(keyword, settings, comments, dashboardUrl, userId);
   }
 
@@ -509,11 +511,11 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
           h.includes('urn:li:share') || h.includes('/detail/')) d.postLinks++;
     });
 
-    // Count elements with URN data attributes
+    // Count elements with URN data attributes — all known URN types
     document.querySelectorAll('[data-urn],[data-chameleon-result-urn],[data-entity-urn],[data-update-urn]').forEach(el => {
       const v = (el.getAttribute('data-urn') || el.getAttribute('data-chameleon-result-urn') ||
                  el.getAttribute('data-entity-urn') || el.getAttribute('data-update-urn') || '');
-      if (v.includes('activity') || v.includes('ugcPost') || v.includes('share')) d.urnAttrs++;
+      if (/urn:li:(activity|ugcPost|share|aggregate|reshare|threadEntry|article|video|document)/i.test(v)) d.urnAttrs++;
     });
 
     return d;
@@ -571,13 +573,18 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     if (
       cls.includes('feed-shared-update-v2') ||
       cls.includes('occludable-update') ||
-      cls.includes('reusable-search__result-container')
+      cls.includes('reusable-search__result-container') ||
+      cls.includes('artdeco-card')
     ) {
       return true;
     }
-    const urn = node.getAttribute?.('data-urn') || '';
-    if (/urn:li:(activity|ugcPost|share):/i.test(urn)) return true;
-    if (node.getAttribute?.('data-view-name') === 'feed-full-update') return true;
+    const urn = node.getAttribute?.('data-urn') ||
+                node.getAttribute?.('data-entity-urn') ||
+                node.getAttribute?.('data-chameleon-result-urn') || '';
+    // Covers ALL known LinkedIn post URN types (including 2025 DOM variants)
+    if (/urn:li:(activity|ugcPost|share|aggregate|reshare|threadEntry|article|video|document):/i.test(urn)) return true;
+    const dvn = node.getAttribute?.('data-view-name') || '';
+    if (dvn === 'feed-full-update' || dvn.includes('search-entity-result')) return true;
     return false;
   }
 
@@ -634,21 +641,21 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
   }
 
   function isLikelySinglePostContainer(node) {
-    if (!node) return false;
+    // FIX D: Removed all getBoundingClientRect()/offsetHeight/offsetWidth calls.
+    // Each call forces a synchronous browser layout reflow. Called per-card in a
+    // tight loop, this causes catastrophic layout thrashing on Account B's
+    // heavier DOM. Structural signals are equally reliable at zero cost.
+    if (!node || node.nodeType !== 1) return false;
     const resolved = resolvePostCard(node) || node;
-    if (hasLinkedInPostSignal(resolved)) {
-      const rect = resolved.getBoundingClientRect ? resolved.getBoundingClientRect() : { height: 0, width: 0 };
-      const h = rect.height || resolved.offsetHeight || 0;
-      const w = rect.width || resolved.offsetWidth || 0;
-      if (h >= 40 && w >= 160) return true;
-    }
-    const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { height: 0, width: 0 };
-    const h = rect.height || node.offsetHeight || 0;
-    const w = rect.width || node.offsetWidth || 0;
-    if (h < 80 || w < 200) return false;
-    const likeCount = countMainActionLikeButtons(node);
+    // Known LinkedIn post signal (data-urn, role="article", stable class, etc.)
+    if (hasLinkedInPostSignal(resolved)) return true;
+    // 1–6 like buttons = single post. 0 = not a post. 7+ = feed wrapper.
+    const likeCount = countMainActionLikeButtons(resolved);
+    if (likeCount >= 1 && likeCount <= 6) return true;
     if (likeCount > 6) return false;
-    return true;
+    // Has a post anchor = likely a post card
+    if (resolved.querySelector('a[href*="/feed/update/"], a[href*="/posts/"]')) return true;
+    return false;
   }
 
   function extractCanonicalPostUrlFromText(text) {
@@ -690,7 +697,9 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
 
   function extractCanonicalFromTrackingBlob(text) {
     if (!text) return null;
-    const src = String(text);
+    // HTML-decode &quot; entities — LinkedIn encodes data-view-tracking-scope as HTML
+    // attribute value, so the raw string contains &quot;updateUrn&quot;: instead of "updateUrn":
+    const src = String(text).replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
     const direct = src.match(/(?:updateUrn|updateEntityUrn|entityUrn|trackingUrn)"?\s*[:=]\s*"?(urn:li:(activity|ugcPost|share):[A-Za-z0-9:_-]{8,64})/i);
     if (direct) {
       const urn = direct[1].match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
@@ -704,6 +713,43 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
       const built = canonicalFromUrn(loose[1], loose[2]);
       if (built && isValidCanonicalPostUrl(built)) return built;
     }
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // NUCLEAR OPTION 1 — deepAttributeUrnScan
+  // DOM-agnostic: walks EVERY element and EVERY attribute inside
+  // a root, returns the first urn:li:(activity|ugcPost|share) found.
+  // Does NOT care about class names, attribute names, or nesting depth.
+  // ═══════════════════════════════════════════════════════════
+  const DEEP_URN_RE = /urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{10,25})/i;
+
+  function deepAttributeUrnScan(rootEl) {
+    if (!rootEl || rootEl.nodeType !== 1) return null;
+    try {
+      // PASS A: walk all descendant elements and check every attribute value
+      const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_ELEMENT, null, false);
+      let node = walker.currentNode;
+      while (node) {
+        if (node.attributes) {
+          for (let i = 0; i < node.attributes.length; i++) {
+            const raw = node.attributes[i].value || '';
+            // HTML-decode in case attribute is &quot;-encoded
+            const val = raw.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+            const m = val.match(DEEP_URN_RE);
+            if (m) {
+              const u = canonicalFromUrn(m[1], m[2]);
+              if (u && isValidCanonicalPostUrl(u)) return u;
+            }
+          }
+        }
+        node = walker.nextNode();
+      }
+    } catch(e) {}
+    // FIX C: PASS B (outerHTML serialization) removed.
+    // PASS A's TreeWalker already reads every attribute of every element.
+    // Serializing outerHTML is redundant and allocates multi-MB strings on
+    // large container nodes, causing GC pauses that freeze the tab.
     return null;
   }
 
@@ -759,6 +805,12 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     for (let depth = 0; depth < 20 && node && !STOP_TAGS.has(node.tagName); depth++) {
       node = node.parentElement;
       if (!node || node.nodeType !== 1) break;
+
+      // Fast-path: data-view-name="feed-full-update" is the canonical Account B card root.
+      // It has no data-urn on the same element — returning it immediately avoids
+      // the URN check that would otherwise silently skip it.
+      const dvn = node.getAttribute?.('data-view-name') || '';
+      if (dvn === 'feed-full-update') return node;
 
       const resolved = resolvePostCard(node);
       if (!resolved) continue;
@@ -889,23 +941,30 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
         }
       }
 
-      // 4. Wrapper HTML / text fallback
+      // 4. FIX C2: Tracking-scope attribute scan — no outerHTML serialization.
+      // outerHTML on large nodes allocates MB-sized strings and causes GC pauses.
+      // We scan the data-view-tracking-scope attribute directly (the actual URN
+      // source on Account B), then fall back to textContent (safe, no allocation).
       for (const node of collectCardEvidenceNodes(target)) {
-        const html = node.outerHTML || node.innerHTML || '';
-        const m = html.match(/urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i);
-        if (m) {
-          const u = buildFromUrn(m[1], m[2]);
-          if (u && isValidCanonicalPostUrl(u)) return cleanUrl(u);
-        }
-        const tracked = extractCanonicalFromTrackingBlob(html);
-        if (tracked) return tracked;
+        const ts = node.getAttribute ? node.getAttribute('data-view-tracking-scope') : null;
+        if (ts) { const t = extractCanonicalFromTrackingBlob(ts); if (t) return t; }
         const textTracked = extractCanonicalFromTrackingBlob(node.textContent || '');
         if (textTracked) return textTracked;
       }
+      // Also scan all tracking-scope descendants inside the target
+      try {
+        for (const el of target.querySelectorAll('[data-view-tracking-scope]')) {
+          const ts = el.getAttribute('data-view-tracking-scope');
+          if (!ts) continue;
+          const t = extractCanonicalFromTrackingBlob(ts);
+          if (t) return t;
+        }
+      } catch(e) {}
 
-      // 5. Emergency extraction from embedded JSON/text blobs.
-      const emergency = extractCanonicalPostUrlFromText((target.outerHTML || target.innerHTML || ''));
-      if (emergency) return emergency;
+      // 5. NUCLEAR FALLBACK — deepAttributeUrnScan (TreeWalker over all attrs).
+      // Covers any LinkedIn DOM variant. outerHTML emergency scan removed (redundant).
+      const nuclearUrl = deepAttributeUrnScan(target);
+      if (nuclearUrl) return nuclearUrl;
 
     } catch(e) {}
 
@@ -1665,23 +1724,56 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
   // overflowY:scroll and scrollHeight=41,983px while window.scrollY stays 0.
   // ALL scrolling must target this element, never the window.
   function findScrollContainer() {
-    const main = document.querySelector('main');
-    if (main) {
-      try {
-        const st = getComputedStyle(main).overflowY;
-        if (main.scrollHeight > main.clientHeight && (st === 'scroll' || st === 'auto')) return main;
-      } catch(e) {}
-      // Even if getComputedStyle fails, use <main> if it has real scroll depth
-      if (main.scrollHeight > 2000) return main;
+    // FIX A: Universal scroll container discovery with per-page-load caching.
+    //
+    // ROOT CAUSE of Account B's 11-URL flatline: findScrollContainer() was
+    // returning the wrong element (or null), so aggressiveScroll() moved the
+    // wrong container. LinkedIn's lazy-loader listens to scroll events on the
+    // REAL scroll container — when we scroll the wrong one, no new posts ever
+    // load. Account B uses a hashed-class <div> that none of our selectors matched.
+    //
+    // Fix: cache the real container after the first discovery (O(1) thereafter).
+    // Phase 1 = fast known-selector check. Phase 2 = universal walk over all
+    // divs/sections, picking the tallest overflow:auto/scroll element >= 400px.
+    if (window.__nexoraScrollContainer && document.contains(window.__nexoraScrollContainer)) {
+      return window.__nexoraScrollContainer;
     }
-    // Fallbacks for other LinkedIn page variants
-    for (const sel of ['[role="main"]', '.scaffold-layout__main', '.scaffold-layout__content', '.search-results-container']) {
+    window.__nexoraScrollContainer = null;
+    const _cache = (el) => { window.__nexoraScrollContainer = el; return el; };
+
+    // Phase 1: known selectors (O(1) — fast path for Account A)
+    for (const sel of ['main', '[role="main"]', '.scaffold-layout__main', '.scaffold-layout__content', '.search-results-container']) {
       const el = document.querySelector(sel);
       if (!el) continue;
       try {
         const st = getComputedStyle(el).overflowY;
-        if (el.scrollHeight > el.clientHeight * 1.5 && (st === 'scroll' || st === 'auto')) return el;
+        if (el.scrollHeight > el.clientHeight * 1.3 && (st === 'scroll' || st === 'auto')) return _cache(el);
       } catch(e) {}
+      if (sel === 'main' && el.scrollHeight > 3000) return _cache(el);
+    }
+
+    // Phase 2: universal walk — no class or tag name assumptions.
+    // Catches Account B's hashed-class scroll container.
+    // Result is cached so this expensive walk only runs ONCE per page load.
+    let best = null, bestScrollH = 0;
+    try {
+      document.querySelectorAll('div, section, main').forEach(el => {
+        try {
+          const ch = el.clientHeight;
+          if (ch < 400) return;
+          const sh = el.scrollHeight;
+          if (sh <= ch * 1.3) return;
+          const st = getComputedStyle(el).overflowY;
+          if (st !== 'scroll' && st !== 'auto') return;
+          if (sh > bestScrollH) { bestScrollH = sh; best = el; }
+        } catch(e) {}
+      });
+    } catch(e) {}
+
+    if (best) {
+      const cls = typeof best.className === 'string' ? best.className.slice(0, 80) : '';
+      console.log(`[Nexora][ScrollContainer] 🔍 Universal: <${best.tagName.toLowerCase()}> class="${cls}" scrollH=${best.scrollHeight} clientH=${best.clientHeight}`);
+      return _cache(best);
     }
     return null;
   }
@@ -1742,6 +1834,8 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     const urnAttrs = ['data-urn','data-chameleon-result-urn','data-entity-urn','data-update-urn'];
     const URN_RE = /urn:li:(activity|ugcPost|share):([A-Za-z0-9:_-]{8,64})/i;
     const seen = new Set();
+
+    // PRIMARY: scan all direct URN attribute elements
     document.querySelectorAll(urnAttrs.map(a => `[${a}]`).join(', ')).forEach(el => {
       try {
         for (const attr of urnAttrs) {
@@ -1771,9 +1865,239 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
         }
       } catch(e) {}
     });
-    if (added > 0) console.log(`[SearchOnly][UrnSweep] +${added} posts via URN attributes`);
+
+    // SECONDARY: scan data-view-tracking-scope JSON blobs (Account B variant).
+    // On this DOM variant, the outer card wrapper has NO data-urn attribute.
+    // Instead the post URN is embedded as "updateUrn" inside the JSON blob stored
+    // in data-view-tracking-scope on the outermost div (class="full-height").
+    // The JSON is HTML-encoded (&quot;), so we must decode before parsing.
+    // FIX #5: Scope to the main content area only — not the entire document.
+    // LinkedIn puts data-view-tracking-scope on nav items, sidebars, and ads too.
+    // Scanning the whole page is O(n) on hundreds of elements; scoping to <main>
+    // or the scaffold content area reduces the set to only post-area elements.
+    const trackingScopeRoot = document.querySelector('main, [role="main"], .scaffold-layout__main') || document;
+    trackingScopeRoot.querySelectorAll('[data-view-tracking-scope]').forEach(el => {
+      try {
+        if (seen.has(el)) return;
+        const raw = el.getAttribute('data-view-tracking-scope') || '';
+        if (!raw) return;
+        const url = extractCanonicalFromTrackingBlob(raw);
+        if (!url || !isValidCanonicalPostUrl(url) || seenUrls.has(url) || seen.has(url)) return;
+        seen.add(url);
+        if (isAdOrSuggestedBlock(el)) return;
+        seenUrls.add(url);
+        // Extract metrics NOW while the element is still in the DOM.
+        // Tracking-scope discovered containers are the outermost div wrappers;
+        // they contain the full action bar so extractMetrics works on them.
+        const metrics = extractMetrics(el);
+        allPosts.push({
+          url,
+          likes: metrics.likes || 0,
+          postComments: metrics.postComments || 0,
+          postShares: metrics.postShares || 0,
+          author: metrics.author || 'Unknown',
+          textSnippet: metrics.textSnippet || '',
+          postedAtMs: metrics.postedAtMs || 0,
+          mediaType: metrics.mediaType || 'text',
+          commentable: true, container: el, hasRealUrl: true,
+          discoveryIndex: allPosts.length, urnDiscovered: true, trackingScopeDiscovered: true
+        });
+        added++;
+      } catch(e) {}
+    });
+
+    if (added > 0) console.log(`[SearchOnly][UrnSweep] +${added} posts via URN/trackingScope attributes`);
     return added;
   }
+
+  // ═══════════════════════════════════════════════════════════
+  // NUCLEAR OPTION 2 — harvestByButtonBoundary
+  // Finds post cards by the co-presence of Like + Comment buttons.
+  // Does NOT rely on ANY LinkedIn class name. The only assumption is
+  // that every post has both a Like-type and Comment-type button.
+  // Once a boundary is found, deepAttributeUrnScan extracts the URN
+  // from anywhere in the card tree.
+  // ═══════════════════════════════════════════════════════════
+  function harvestByButtonBoundary(seenUrls, seenCards, allPosts) {
+    let added = 0;
+    // FIX #2: URL-keyed string cache — survives DOM recycling unlike WeakSet.
+    // WeakSet on button elements is cold every time LinkedIn's virtual list
+    // removes and re-inserts nodes. String URLs persist across DOM mutations.
+    if (!window.__btnBoundaryUrlCache) window.__btnBoundaryUrlCache = new Set();
+    const urlCache = window.__btnBoundaryUrlCache;
+    // Keep the WeakSet too — it prevents walking the same boundary WITHIN one call.
+    const boundaryCache = window.__btnBoundaryCache || (window.__btnBoundaryCache = new WeakSet());
+
+    // Find every Like-type button in the live DOM
+    document.querySelectorAll('button[aria-label], [role="button"][aria-label]').forEach(btn => {
+      try {
+        // FIX #1: Use multilingual isLikeButton() instead of English-only
+        // aria-label*="Like" selectors — this was silently returning 0 cards
+        // on any LinkedIn account with a non-English UI language.
+        if (!isLikeButton(btn) || boundaryCache.has(btn)) return;
+        boundaryCache.add(btn);
+
+        // Walk UP. The first ancestor that contains BOTH a like-type button
+        // AND a comment-type button is the post card boundary.
+        let node = btn.parentElement;
+        for (let depth = 0; depth < 25 && node && !STOP_TAGS.has(node.tagName); depth++) {
+          if (!node || node.nodeType !== 1) break;
+
+          // FIX #1: Use isLikeButton() / isCommentButton() for multilingual detection.
+          // The old hardcoded 'button[aria-label*="Like"]' only matched English UIs;
+          // Arabic, French, German, Turkish etc. were silently returning false.
+          let hasLike = false, hasComment = false;
+          node.querySelectorAll('button[aria-label], [role="button"][aria-label]').forEach(b => {
+            if (!hasLike && isLikeButton(b)) hasLike = true;
+            if (!hasComment && isCommentButton(b)) hasComment = true;
+          });
+
+          if (hasLike && hasComment) {
+            // Found the card boundary
+            if (seenCards.has(node) || boundaryCache.has(node)) break;
+            boundaryCache.add(node);
+
+            if (isAdOrSuggestedBlock(node)) break;
+
+            // NUCLEAR: scan every attribute of every descendant for any URN
+            const url = deepAttributeUrnScan(node);
+            if (!url || !isValidCanonicalPostUrl(url)) break;
+
+            // FIX #2: Check string URL cache — fast O(1) lookup, survives node recycling.
+            if (urlCache.has(url) || seenUrls.has(url)) { seenCards.add(node); break; }
+
+            urlCache.add(url);
+            seenUrls.add(url);
+            seenCards.add(node);
+
+            const metrics = extractMetrics(node);
+            allPosts.push({
+              url,
+              likes: metrics.likes || 0,
+              postComments: metrics.postComments || 0,
+              postShares: metrics.postShares || 0,
+              author: metrics.author || 'Unknown',
+              textSnippet: metrics.textSnippet || '',
+              postedAtMs: metrics.postedAtMs || 0,
+              mediaType: metrics.mediaType || 'text',
+              commentable: true,
+              container: node,
+              hasRealUrl: true,
+              discoveryIndex: allPosts.length,
+              btnBoundaryDiscovered: true
+            });
+            added++;
+            break;
+          }
+          node = node.parentElement;
+        }
+      } catch(e) {}
+    });
+
+    if (added > 0) console.log(`[SearchOnly][BtnBoundary] +${added} posts via button-boundary nuclear scan`);
+    return added;
+  }
+
+  // ── harvestByBodyRegex: BRUTE-FORCE innerHTML regex — the ultimate backstop ──
+  // Evidence from Account B console: btns=28, cards=0, urns=0, anchors=0.
+  // This DOM variant has NO data-urn attributes and NO post anchor links.
+  // The URNs exist only as raw text embedded in serialized HTML (inline JSON
+  // blobs, script content, attribute values with non-standard names).
+  // This function serializes document.body.innerHTML ONCE and regex-scans the
+  // entire string globally. It is O(n) on the HTML length, zero DOM traversal,
+  // and cannot be broken by any DOM restructuring LinkedIn makes.
+  //
+  // Called at the END of every scroll step when all DOM-based methods find 0.
+  // Metrics start at 0; harvestNetworkBuffer and refreshMetrics enrich them later.
+  function harvestByBodyRegex(seenUrls, allPosts) {
+    // THE DEFINITIVE BRUTE-FORCE BACKSTOP.
+    // Evidence: btns=127, urns=0, anchors=0 — zero from ALL DOM methods.
+    // Previous regex (/activity|ugcPost|share/) found nothing — that means
+    // Account B uses urn:li:fsd_update: (LinkedIn's newer URN type) which
+    // wraps the activity URN inside parentheses:
+    //   urn:li:fsd_update:(urn:li:activity:1234567890123,FEED_DETAIL,...)
+    // We now run FOUR patterns to catch every possible encoding variant.
+    let added = 0;
+    try {
+      const raw = document.body ? (document.body.innerHTML || '') : '';
+      if (raw.length < 100) return 0;
+
+      // Decode the two most common encoding variants up front (one pass each)
+      // so all four patterns below work on clean text.
+      const htmlDecoded = raw
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/&#39;/g, "'");
+      const urlDecoded = raw
+        .replace(/urn%3Ali%3A/gi, 'urn:li:')
+        .replace(/ugcPost/gi, 'ugcPost')   // normalise capitalisation
+        .replace(/%3A/g, ':');
+      const unicodeDecoded = raw
+        .replace(/\\u003A/gi, ':')
+        .replace(/\\u002F/gi, '/');
+
+      const batch = new Map();
+      const push = (type, id) => {
+        const t = (type || '').toLowerCase();
+        const url = t === 'ugcpost'
+          ? `https://www.linkedin.com/feed/update/urn:li:ugcPost:${id}`
+          : t === 'share'
+            ? `https://www.linkedin.com/feed/update/urn:li:share:${id}`
+            : `https://www.linkedin.com/feed/update/urn:li:activity:${id}`;
+        const clean = cleanUrl(url);
+        if (clean && isValidCanonicalPostUrl(clean) && !seenUrls.has(clean)) batch.set(clean, true);
+      };
+
+      let m;
+      // Pattern 1: Direct numeric — activity/ugcPost/share (original pattern)
+      const P1 = /urn:li:(activity|ugcPost|share):([0-9]{7,30})/gi;
+      while ((m = P1.exec(htmlDecoded)) !== null) push(m[1], m[2]);
+
+      // Pattern 2: fsd_update wrapping an activity URN (Account B's variant)
+      //   urn:li:fsd_update:(urn:li:activity:1234,...)
+      //   urn:li:fsd_update:urn:li:activity:1234   (some variants omit parens)
+      const P2 = /urn:li:fsd_update:[:(]urn:li:(activity|ugcPost|share):([0-9]{7,30})/gi;
+      while ((m = P2.exec(htmlDecoded)) !== null) push(m[1], m[2]);
+
+      // Pattern 3: URL-encoded form  urn%3Ali%3Aactivity%3A1234
+      const P3 = /urn:li:(activity|ugcPost|share):([0-9]{7,30})/gi;
+      while ((m = P3.exec(urlDecoded)) !== null) push(m[1], m[2]);
+      // fsd_update in URL-encoded form
+      const P3b = /urn:li:fsd_update:[:(]urn:li:(activity|ugcPost|share):([0-9]{7,30})/gi;
+      while ((m = P3b.exec(urlDecoded)) !== null) push(m[1], m[2]);
+
+      // Pattern 4: Unicode-escaped  urn\u003Ali\u003Aactivity\u003A1234
+      const P4 = /urn:li:(activity|ugcPost|share):([0-9]{7,30})/gi;
+      while ((m = P4.exec(unicodeDecoded)) !== null) push(m[1], m[2]);
+
+      // ALWAYS-ON diagnostic: print what we found (even on 0)
+      // so we can see exactly what pattern IS present in the HTML.
+      const anyUrn = htmlDecoded.match(/urn:li:[a-zA-Z_]+:[^"'\s<>]{5,120}/);
+      console.log(
+        `[SearchOnly][BodyRegex] scanned=${Math.round(raw.length/1024)}KB` +
+        ` new=${batch.size} seenUrls=${seenUrls.size}` +
+        ` sampleUrn=${anyUrn ? anyUrn[0].slice(0, 110) : 'NONE-FOUND'}`
+      );
+
+      batch.forEach((_, url) => {
+        seenUrls.add(url);
+        allPosts.push({
+          url, likes: 0, postComments: 0, postShares: 0,
+          author: 'Unknown', textSnippet: '', postedAtMs: 0, mediaType: 'text',
+          commentable: true, container: null, hasRealUrl: true,
+          discoveryIndex: allPosts.length, regexDiscovered: true
+        });
+        added++;
+      });
+      if (added > 0) console.log(`[SearchOnly][BodyRegex] +${added} posts added (total=${seenUrls.size})`);
+    } catch(e) {
+      console.warn('[SearchOnly][BodyRegex] Error:', e);
+    }
+    return added;
+  }
+
+
+
 
   // ── harvestByAnchors: anchor-first, zero-layout-thrashing discovery ────────────
   // Performance-optimized rewrite. Key changes vs previous version:
@@ -1842,6 +2166,32 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     });
 
     if (added > 0) console.log(`[SearchOnly][AnchorHarvest] +${added} new posts`);
+    return added;
+  }
+
+  // ── harvestFiberSpyBuffer: drain URLs from fiberSpy.js into allPosts ──────
+  // fiberSpy now sends URLs only. We create zero-metric stubs here.
+  // Real metrics will be fetched by background.js postScraper after scrolling.
+  function harvestFiberSpyBuffer(seenUrls, allPosts, keyword) {
+    const buf = window.__fiberSpyUrlBuffer;
+    if (!buf || buf.length === 0) return 0;
+    const batch = buf.splice(0, buf.length);
+    let added = 0;
+    for (const url of batch) {
+      try {
+        if (!url || !isValidCanonicalPostUrl(url)) continue;
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+        allPosts.push({
+          url, likes: 0, postComments: 0, postShares: 0,
+          author: 'Unknown', textSnippet: '', postedAtMs: 0, mediaType: 'text',
+          commentable: true, container: null, hasRealUrl: true,
+          discoveryIndex: allPosts.length, fiberDiscovered: true
+        });
+        added++;
+      } catch(e) {}
+    }
+    if (added > 0) console.log(`[SearchOnly][FiberSpyBuffer] +${added} raw URNs queued (metrics pending post-scrape)`);
     return added;
   }
 
@@ -2319,24 +2669,31 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
       '.occludable-update',
       '[data-view-name="feed-full-update"]',
       '.feed-shared-update-v2',
-      // Search result page cards — confirmed safe selectors
+      // Search result page cards
       'li.reusable-search__result-container',
       '.reusable-search__result-container',
-      // 2025 LinkedIn search DOM variants (data-view-name is always post-specific)
+      // 2025 LinkedIn search DOM variants
       '[data-view-name="search-entity-result-universal-template"]',
       '[data-view-name*="search-entity-result"]',
-      // URN-bearing li elements — data-urn only exists on real post cards
+      // URN-bearing elements — any tag, not just li
       'li[data-urn]',
+      'div[data-urn]',
+      'section[data-urn]',
       'li[data-chameleon-result-urn]',
+      'div[data-chameleon-result-urn]',
       'li[data-entity-urn]',
+      'div[data-entity-urn]',
       // Artdeco & generic containers
       'li.artdeco-card',
       '.search-entity',
       'article',
       '[data-urn].feed-shared-update-v2',
       'div.search-result__wrapper',
-      // 2025 voyager lite-card: only when gated by data-urn
-      '[class*="update-components"][data-urn]'
+      // 2025 voyager update-components container
+      '[class*="update-components"][data-urn]',
+      // 2025 search feed: ember-view wrapper around a post card
+      '[data-view-name="search-entity-result-universal-template"] article',
+      '[data-view-name*="search-entity-result"] [role="article"]'
     ];
     let step = 0;
     let totalSavedIncremental = 0;
@@ -2823,6 +3180,9 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
       console.warn('[SearchOnly][EmergencySync] Watchdog triggered — writing checkpoint immediately.');
       writeCheckpoint(allPosts, window.__nexoraCheckpointState);
     };
+    // fiberSpy is running continuously in the MAIN world via setInterval, 
+    // no need to start it here. We just drain its buffer in the loop.
+
     // ── Global hard timeout: 12 minutes max for the entire scroll loop ──────────
     // Prevents the job from running forever if the tab is backgrounded or if
     // LinkedIn's lazy-loading stalls indefinitely.
@@ -2845,15 +3205,23 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
       }
 
 
-        // ── PRE-SCROLL: drain network buffer first (pure memory, zero DOM cost) ──
+        // ── PRE-SCROLL harvest ──
+        // FIX B: _preScrollSize captured HERE — before any harvests — so the
+        // nuclear gate comparison is meaningful. The previous version set it
+        // AFTER the fast-path harvests, making the delta always 0 (gate always open).
+        const _preScrollSize = seenUrls.size;
         harvestNetworkBuffer(seenUrls, allPosts, keyword);
-        // DOM fallback — throttled to every 2nd step. The WeakSet cache in
-        // harvestByAnchors means only newly-rendered anchors are processed;
-        // scanning the whole document every step is wasteful once the feed is large.
+        harvestFiberSpyBuffer(seenUrls, allPosts, keyword);
         if (step % 2 === 0) {
           harvest(seenUrls, seenCards, allPosts, { overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
           harvestByAnchors(seenUrls, seenCards, allPosts);
           harvestByUrn(seenUrls, allPosts);
+        }
+        // Nuclear gate: only run the expensive button-boundary scan if fast paths
+        // found nothing new this step OR we are early/low on count.
+        const _preFoundNew = seenUrls.size > _preScrollSize;
+        if (!_preFoundNew || seenUrls.size < 15 || step < 5) {
+          harvestByButtonBoundary(seenUrls, seenCards, allPosts);
         }
 
         // ── Scroll ────────────────────────────────────────────────────────
@@ -2865,22 +3233,36 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
 
         // ── POST-SCROLL harvest ──
         harvestNetworkBuffer(seenUrls, allPosts, keyword); // drain API buffer immediately
+        harvestFiberSpyBuffer(seenUrls, allPosts, keyword); // drain FiberSpy buffer
         const useDeepScan = (step % 3 === 0);
         await yieldToMain(); // give browser a frame before heavy DOM scan
+        const _postSizeBefore = seenUrls.size;
         harvest(seenUrls, seenCards, allPosts, { deepScan: useDeepScan, overrideSelectors: SEARCH_ONLY_CARD_SELECTORS });
         if (step % 2 === 0) {
           await yieldToMain();
           harvestByAnchors(seenUrls, seenCards, allPosts);
           harvestByUrn(seenUrls, allPosts);
         }
+        // FIX #3: Nuclear post-scroll — only activate if fast paths found nothing new
+        // OR we're still in the early ramp-up phase.
         await yieldToMain();
-        // refreshMetricsForVisibleCards calls buildPageMetricIndex which runs multiple
-        // querySelectorAll passes including Phase 3b anchor scan — throttle to every 3rd step.
-        // Only run it when there are still posts with likes=0 to fix; skip it entirely once
-        // all visible posts have been enriched (avoids a pointless full-DOM scan).
-        if (step % 3 === 0) {
+        const _fastPathFoundNew = seenUrls.size > _postSizeBefore;
+        if (!_fastPathFoundNew || seenUrls.size < 20 || step < 8) {
+          harvestByButtonBoundary(seenUrls, seenCards, allPosts);
+        }
+        // MutationObserver runs continuously — catches URNs the instant they render.
+        // No per-step fiber call needed.
+        await yieldToMain();
+        harvestByBodyRegex(seenUrls, allPosts);
+        // FIX #4: Throttle buildPageMetricIndex to every 5 steps (was every 3).
+        // Each call does 4 full document-wide querySelectorAll passes — on Account B's
+        // heavier DOM this is the single biggest contributor to tab lag.
+        // Skip it entirely once 80%+ of posts have likes>0 (no more zero-likes to fix).
+        if (step % 5 === 0) {
+          const totalPosts = allPosts.length;
           const zeroLikePosts = allPosts.filter(p => (Number(p.likes) || 0) === 0).length;
-          if (zeroLikePosts > 0) {
+          const pctEnriched = totalPosts > 0 ? (totalPosts - zeroLikePosts) / totalPosts : 0;
+          if (zeroLikePosts > 0 && pctEnriched < 0.8) {
             await yieldToMain();
             refreshMetricsForVisibleCards(15);
           }
@@ -2998,6 +3380,35 @@ window.addEventListener('beforeunload', window.__nexoraBeforeUnloadHandler);
     const collectedCandidates = finalSnapshot.ranked.length;
     console.log('[SearchOnly] scroll loop done steps=' + step + ' keyword="' + keyword + '" collectedCandidates=' + collectedCandidates + ' qualified=' + finalSnapshot.qualified.length + ' saved=0');
     heartbeat('Phase1-Limit', `Search-only scroll finished (${step}/${SEARCH_SCROLL_TARGET}) | qualified ${finalSnapshot.qualified.length}`);
+
+    // ── BACKGROUND TAB SNIPER: dispatch raw URLs to background.js ──────────────
+    // Instead of running QualGate here with likes=0, hand ALL unique post URLs
+    // to background.js. It will open each post in a hidden tab, use postScraper.js
+    // to get the real likes/comments from the static DOM, run QualGate there,
+    // then save only the posts that pass.
+    const allSniperUrls = allPosts
+      .filter(p => p.url && isValidCanonicalPostUrl(p.url))
+      .map(p => p.url)
+      .filter((u, i, arr) => arr.indexOf(u) === i); // deduplicate
+    console.log(`[SearchOnly][Sniper] Dispatching ${allSniperUrls.length} raw URLs to background sniper.`);
+    try {
+      chrome.runtime.sendMessage({
+        action: 'SNIPER_QUEUE',
+        urls: allSniperUrls,
+        keyword,
+        dashboardUrl,
+        userId,
+        linkedInProfileId: window.__nexoraLinkedInProfileId || null,
+        settings: {
+          minLikes: settings.minLikes || 10,
+          minComments: settings.minComments || 0,
+          targetMax: SEARCH_ONLY_TARGET_MAX || 15,
+          keyword
+        }
+      });
+    } catch(e) {
+      console.warn('[SearchOnly][Sniper] Failed to dispatch SNIPER_QUEUE:', e.message);
+    }
     } // end search-only deep scroll branch
 
     // ── Step 5: Single validation pass (after all scrolling; no loops) ──

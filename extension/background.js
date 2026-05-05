@@ -23,6 +23,14 @@
 
 console.log("[Worker] ═══ Safety Worker v11 (Multi-Pass Deep Extraction) Initialized ═══");
 
+const DEBUG_KEEP_TAB_OPEN = true; // Set to true to stop auto-closing tabs for debugging
+async function safeRemoveTab(tabId) {
+  if (DEBUG_KEEP_TAB_OPEN) {
+    console.log(`🐛 [Debug] Keeping tab open instead of closing: ${tabId}`);
+    return Promise.resolve();
+  }
+  return chrome.tabs.remove(tabId);
+}
 // ── Persistent State (chrome.storage.local) ──
 if (!self.__nexoraControlledNavTabs) self.__nexoraControlledNavTabs = new Set();
 if (!self.__globalSyncedUrlsByKeyword) self.__globalSyncedUrlsByKeyword = new Map();
@@ -363,7 +371,7 @@ async function _checkJobsInner() {
     } else {
       console.log("🧹 [Worker] Stale job detected (15min+). Cleaning up...");
       if (state.activeTabId) {
-        try { await chrome.tabs.remove(state.activeTabId); } catch (e) { }
+        try { await safeRemoveTab(state.activeTabId); } catch (e) { }
       }
       await saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
     }
@@ -388,7 +396,7 @@ async function _checkJobsInner() {
 
   // Gate 4: Clean any stale tab (safety net)
   if (state.activeTabId !== null) {
-    try { await chrome.tabs.remove(state.activeTabId); console.log(`🧹 [Worker] Cleaned stale tab ${state.activeTabId}.`); } catch (e) { }
+    try { await safeRemoveTab(state.activeTabId); console.log(`🧹 [Worker] Cleaned stale tab ${state.activeTabId}.`); } catch (e) { }
     await saveState({ activeTabId: null });
   }
 
@@ -706,18 +714,86 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
 
         if (!currentTab.url || !currentTab.url.includes('linkedin.com')) {
           console.warn(`⚠️ [Worker] Tab URL not LinkedIn: ${currentTab.url}`);
-          chrome.tabs.remove(tab.id).catch(() => { });
+          safeRemoveTab(tab.id).catch(() => { });
           await finishCycle(null, false, settings.searchOnlyMode);
           return false;
         }
 
         console.log(`📍 [Worker] Tab verified: ${currentTab.url.substring(0, 80)}...`);
 
+        // ── SEARCH-ONLY: inject new modular engine ─────────────────────────
+        // ── COMMENT CAMPAIGN: inject legacy content.js (UNCHANGED) ──────────
+        if (isSearchOnlyJob) {
+          // Step 1: Inject interceptor into MAIN world FIRST.
+          // Patches fetch+XHR before LinkedIn fires scroll-triggered API calls,
+          // ensuring all search result data is captured by the interceptor.
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ['src/interceptor.js'],
+              world: 'MAIN',
+            });
+            console.log('🕸️ [Worker] Interceptor injected in MAIN world.');
+          } catch (e) {
+            console.warn('⚠️ [Worker] MAIN-world interceptor failed (non-fatal):', e.message);
+          }
+
+          // Step 2: Inject content-world modules in dependency order
+          const SEARCH_ENGINE_FILES = [
+            'src/config.js',
+            'src/logger.js',
+            'src/layout-detector.js',
+            'src/dom-adapter.js',
+            'src/extractor.js',
+            'src/filter.js',
+            'src/transport.js',
+            'src/observer.js',
+            'src/core-engine.js',
+          ];
+          try {
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: SEARCH_ENGINE_FILES });
+          } catch (e) {
+            console.error("❌ [Worker] Search engine injection failed:", e.message);
+            safeRemoveTab(tab.id).catch(() => { });
+            await finishCycle(null, false, true);
+            return false;
+          }
+
+          await sleep(800);
+
+          console.log("🚀 [Worker] Starting new Search Engine...");
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: (k, s, du, u) => {
+                if (!window.__NexoraEngine) throw new Error('__NexoraEngine not defined — module load failed.');
+                window.__NexoraEngine.start(k, s, du, u);
+              },
+              args: [keyword, { ...settings }, dashboardUrl, userId]
+            });
+            console.log("✅ [Worker] Search Engine started.");
+            _lastContentHeartbeat = Date.now();
+            return true;
+          } catch (e) {
+            console.error(`❌ [Worker] Search engine start error on attempt #${injectionCount}:`, e.message);
+            if (injectionCount < MAX_INJECTIONS) {
+              console.log("🔄 [Worker] Retrying...");
+              await sleep(5000);
+              isInjecting = false;
+              return injectAndStart();
+            }
+            safeRemoveTab(tab.id).catch(() => { });
+            await finishCycle(null, false, true);
+            return false;
+          }
+        }
+
+        // ── COMMENT CAMPAIGN path (original code — DO NOT MODIFY) ─────────
         try {
           await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
         } catch (e) {
           console.error("❌ [Worker] Inject failed:", e.message);
-          chrome.tabs.remove(tab.id).catch(() => { });
+          safeRemoveTab(tab.id).catch(() => { });
           await finishCycle(null, false, settings.searchOnlyMode);
           return false;
         }
@@ -728,19 +804,13 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
         try {
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            func: (k, s, c, du, u, useSearchOnly) => {
+            func: (k, s, c, du, u) => {
               const merged = { ...s };
-              if (useSearchOnly) {
-                if (window.__startSearchOnly) window.__startSearchOnly(k, merged, du, u);
-                else if (window.__startExtraction) window.__startExtraction(k, merged, [], du, u);
-                else throw new Error('Search-only starter not defined on window.');
-              } else {
-                if (window.__startCommentCampaign) window.__startCommentCampaign(k, merged, c, du, u);
-                else if (window.__startExtraction) window.__startExtraction(k, merged, c, du, u);
-                else throw new Error('Comment-campaign starter not defined on window.');
-              }
+              if (window.__startCommentCampaign) window.__startCommentCampaign(k, merged, c, du, u);
+              else if (window.__startExtraction) window.__startExtraction(k, merged, c, du, u);
+              else throw new Error('Comment-campaign starter not defined on window.');
             },
-            args: [keyword, { ...settings, passIndex, priorPosts }, comments, dashboardUrl, userId, isSearchOnlyJob]
+            args: [keyword, { ...settings, passIndex, priorPosts }, comments, dashboardUrl, userId]
           });
           console.log("✅ [Worker] Content script started.");
           _lastContentHeartbeat = Date.now();
@@ -753,7 +823,7 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
             isInjecting = false;
             return injectAndStart();
           }
-          chrome.tabs.remove(tab.id).catch(() => { });
+          safeRemoveTab(tab.id).catch(() => { });
           await finishCycle(null, false, settings.searchOnlyMode);
           return false;
         }
@@ -871,7 +941,7 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
         }
 
         console.warn("⏱️ [Worker] WATCHDOG: Emergency sync complete. Force-killing tab.");
-        chrome.tabs.remove(watchdogTabId).catch(() => { });
+        safeRemoveTab(watchdogTabId).catch(() => { });
         await finishCycle(null, false, settings.searchOnlyMode);
       }
     }, WATCHDOG_MS);
@@ -882,11 +952,128 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
   }
 }
 
+// ── Background Tab Sniper v3: FETCH-BASED (Zero Tabs) ────────────────────────
+// fetch() each post URL from the background service worker (no tabs opened).
+// Parses metrics from LinkedIn's embedded JSON in the page HTML.
+// ZERO renderer processes = ZERO browser freezes.
+async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedInProfileId, settings }) {
+  if (!urls || urls.length === 0) return;
+
+  const minLikes    = Number(settings.minLikes)    || 10;
+  const minComments = Number(settings.minComments) || 0;
+  const targetMax   = Number(settings.targetMax)   || 15;
+  const workList    = urls.slice(0, 40); // Hard cap: 40 URLs max
+
+  console.log(`[Sniper] 🎯 FETCH mode: ${workList.length} URLs for "${keyword}" (minLikes=${minLikes})`);
+  showPremiumToast('Sniper Active', `🎯 Fetching ${workList.length} posts for "${keyword}"...`, false);
+
+  const qualified = [];
+  const INT4_MAX = 2147483647;
+  const safeInt = (v) => Math.min(Math.max(Math.round(Number(v) || 0), 0), INT4_MAX);
+
+  function extractNum(html, ...keys) {
+    for (const key of keys) {
+      const re = new RegExp(`"${key}"\\s*:\\s*(\\d+)`, 'g');
+      let best = 0, m;
+      while ((m = re.exec(html)) !== null) {
+        const n = parseInt(m[1], 10);
+        if (n > best) best = n;
+      }
+      if (best > 0) return best;
+    }
+    return 0;
+  }
+
+  function extractText(html) {
+    const re = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+    let longest = '', m;
+    while ((m = re.exec(html)) !== null) {
+      const s = m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"').trim();
+      if (s.length > longest.length && s.length > 20 && s.length < 2000) longest = s;
+    }
+    return longest.slice(0, 300);
+  }
+
+  function extractAuthor(html) {
+    const m = html.match(/"(?:actorName|localizedName|firstName|name)"\s*:\s*"([^"]{2,80})"/);
+    return m ? m[1] : 'Unknown';
+  }
+
+  for (let i = 0; i < workList.length; i++) {
+    const url = workList[i];
+    try {
+      console.log(`[Sniper] (${i + 1}/${workList.length}) → ${url}`);
+      const resp = await fetch(url, {
+        method: 'GET', credentials: 'include', cache: 'no-store',
+        headers: { 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' }
+      });
+      if (!resp.ok) { console.warn(`[Sniper] ⏭️ HTTP ${resp.status}`); await sleep(400); continue; }
+
+      const html = await resp.text();
+      if (html.includes('authwall') || html.includes('session_redirect') || html.length < 5000) {
+        console.warn(`[Sniper] ⏭️ Auth/empty page`); await sleep(400); continue;
+      }
+
+      const likes    = extractNum(html, 'numLikes', 'likeCount');
+      const comments = extractNum(html, 'numComments', 'commentCount', 'totalSocialCommentCount');
+      const text     = extractText(html);
+      const author   = extractAuthor(html);
+      let mediaType  = 'text';
+      if (/"mediaType"\s*:\s*"VIDEO"/.test(html)) mediaType = 'video';
+      else if (/"mediaType"\s*:\s*"IMAGE"/.test(html)) mediaType = 'image';
+      else if (/"mediaType"\s*:\s*"ARTICLE"/.test(html)) mediaType = 'article';
+
+      console.log(`[Sniper] likes=${likes}, comments=${comments}`);
+      if (likes >= minLikes && comments >= minComments) {
+        const urnMatch = url.match(/urn:li:(activity|ugcPost|share):(\d+)/);
+        const id = urnMatch ? `${urnMatch[1]}_${urnMatch[2]}` : url.split('/').filter(Boolean).pop();
+        qualified.push({
+          url: url.endsWith('/') ? url : url + '/',
+          likes: safeInt(likes), comments: safeInt(comments), shares: 0,
+          author, preview: text.slice(0, 200), postText: text,
+          timestamp: new Date().toISOString(), mediaType, id,
+          engagementTier: 'high', commentable: true, hasRealUrl: true,
+          qualificationReason: `sniper_fetch_likes=${likes}`
+        });
+        console.log(`[Sniper] ✅ PASS #${qualified.length}: likes=${likes}`);
+        if (qualified.length >= targetMax) { console.log(`[Sniper] 🎯 Target reached.`); break; }
+      } else {
+        console.log(`[Sniper] ❌ FAIL: likes=${likes} (<${minLikes})`);
+      }
+    } catch (e) {
+      console.error(`[Sniper] Error on ${url}:`, e.message);
+    }
+    await sleep(600);
+  }
+
+  console.log(`[Sniper] 🏁 ${qualified.length}/${workList.length} qualified.`);
+  if (qualified.length === 0) {
+    showPremiumToast('Sniper Done', `⚠️ 0 posts passed (${minLikes} likes) for "${keyword}".`, true);
+    return;
+  }
+  try {
+    const deviceId = await getExtensionFingerprint();
+    const resp2 = await fetch(`${dashboardUrl}/api/extension/results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
+      body: JSON.stringify({ keyword, posts: qualified, linkedInProfileId, debugInfo: { source: 'sniper_fetch', checked: workList.length } })
+    });
+    if (resp2.ok) {
+      const r = await resp2.json().catch(() => ({}));
+      console.log(`[Sniper] ✅ Synced. savedCount=${r.savedCount || 0}`);
+      showPremiumToast('Sniper Complete', `✅ Saved ${r.savedCount || qualified.length} posts for "${keyword}"!`, false);
+    } else { throw new Error(`HTTP ${resp2.status}`); }
+  } catch (e) {
+    console.error('[Sniper] ❌ Sync failed:', e.message);
+    showPremiumToast('Sync Error', `❌ Failed to save: ${e.message}`, true);
+  }
+}
+
 // ── Finish Cycle ──
 // v9 FIX 2: Uses position-aware cooldown (3-keyword grouping for search mode)
 async function finishCycle(tabId, incrementKeyword = true, searchOnlyMode = false) {
   if (tabId) {
-    try { await chrome.tabs.remove(tabId); } catch (e) { }
+    try { await safeRemoveTab(tabId); } catch (e) { }
   }
 
   const state = await loadState();
@@ -951,6 +1138,24 @@ async function finishCycle(tabId, incrementKeyword = true, searchOnlyMode = fals
   const cdLabel = cd >= 60000 ? `${cdMin} min` : `${cdSec}s`;
   console.log(`[Worker] Cycle done. Cooldown: ${cdLabel}${failures > 0 ? ` (backoff level ${failures})` : ''}.`);
   showPremiumToast('Cycle Complete', `✅ Done! Cooling ${cdLabel} before next keyword...`, false);
+
+  // ── SNIPER: launch AFTER main tab is closed (no renderer competition) ────────
+  // The SNIPER_QUEUE handler only stores the queue. We pick it up here, after
+  // finishCycle has removed the main tab and all state is written to storage.
+  // This guarantees the sniper tabs do not compete with the scroll renderer.
+  try {
+    const sniperData = await chrome.storage.local.get(['pendingSniperQueue']);
+    if (sniperData.pendingSniperQueue) {
+      const q = sniperData.pendingSniperQueue;
+      await chrome.storage.local.remove('pendingSniperQueue');
+      console.log(`[Worker] 🎯 Launching sniper AFTER main tab closed. ${(q.urls||[]).length} URLs.`);
+      // Small delay so the renderer fully releases the closed tab
+      await sleep(2000);
+      processSniperQueue(q).catch(e => console.error('[Worker] Sniper error:', e.message));
+    }
+  } catch(e) {
+    console.warn('[Worker] Could not read pendingSniperQueue:', e.message);
+  }
 }
 
 async function handleTerminalJobResult(message, senderTabId) {
@@ -1174,6 +1379,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'SNIPER_QUEUE') {
+    if (sendResponse) sendResponse({ ok: true, accepted: true });
+    const { urls, keyword, dashboardUrl, userId, linkedInProfileId, settings } = message;
+    console.log(`[Worker] 💾 SNIPER_QUEUE stored: ${(urls||[]).length} URLs for "${keyword}" (will launch after main tab closes)`);
+    // Store in chrome.storage — do NOT launch now. finishCycle() will pick this up
+    // AFTER the main scroll tab is closed, preventing renderer competition and freezes.
+    chrome.storage.local.set({
+      pendingSniperQueue: { urls, keyword, dashboardUrl, userId, linkedInProfileId, settings }
+    });
+    return true;
+  }
+
   if (message.action === 'IDENTITY_DETECTED') {
     chrome.storage.local.set({ linkedInProfileId: message.linkedInProfileId });
     if (sendResponse) sendResponse({ ok: true });
@@ -1278,56 +1495,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.error('[Worker] Terminal result handling failed:', e.message);
     });
     return;
-    const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
-    const posted = message.commentsPostedCount || 0;
-    const assigned = message.assignedCommentsCount || 0;
-    const blocked = message.linkedinBlocked || false;
-    const isSearchOnly = message.searchOnlyMode === true;
-
-    console.log(`🏁 [Worker] Job ${status}. Real posts extracted: ${message.postsExtracted || 'N/A'} | SearchOnly: ${isSearchOnly} | Blocked: ${blocked}${message.reason ? ` | reason=${message.reason}` : ''}${message.resultStatus ? ` | result=${message.resultStatus}` : ''}`);
-
-    let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
-
-    if (message.action === 'JOB_FAILED' && message.reason === 'CYCLE_INSUFFICIENT_TARGETS') {
-      (async () => {
-        const st = await loadState();
-        const kw = message.keyword || st.currentKeyword;
-        if (message.insufficientRetryPass) {
-          await saveState({ pendingCommentInsufficientRetry: null });
-          console.log(`[Worker] Comment campaign: insufficient targets after retry for "${kw}" — advancing.`);
-          showPremiumToast('Campaign', `Insufficient posts after retry for "${kw}".`, true);
-        } else if (kw) {
-          await saveState({ pendingCommentInsufficientRetry: kw });
-          console.log(`[Worker] Comment campaign: scheduling one retry for "${kw}" (insufficient targets).`);
-          showPremiumToast('Campaign', `Not enough posts — retrying once for "${kw}".`, false);
-        }
-        await finishCycle(sender.tab?.id ?? st.activeTabId, message.insufficientRetryPass === true, false);
-      })();
-      return;
-    }
-
-    if (isSuccessfulCycle && !isSearchOnly) {
-      if (assigned > 0 && posted < assigned) {
-        console.log(`[Worker] ✅ Partial comments: ${posted}/${assigned} — cycle complete.`);
-        showPremiumToast('Partial comments', `Posted ${posted}/${assigned}. Cycle complete.`, false);
-      }
-    }
-
-    if (message.action === 'JOB_FAILED' && !isSearchOnly && message.reason === 'NO_COMMENTS_POSTED') {
-      showPremiumToast('Comments not posted', 'No comments were posted this run; same cycle will retry after cooldown.', true);
-    }
-
-    if (blocked) {
-      console.error(`[Worker] 🚫 LINKEDIN RESTRICTION DETECTED. Pausing 30 min.`);
-      showPremiumToast('🚫 Account Restricted', `LinkedIn blocking comments. Pausing 30 min.`, true);
-      loadState().then(s => finishCycle(sender.tab?.id ?? s.activeTabId, false, isSearchOnly));
-      saveState({ cooldownMs: 1800000 });
-      return;
-    }
-
-    loadState().then(s => finishCycle(sender.tab?.id ?? s.activeTabId, isSuccessfulCycle, isSearchOnly));
   }
 });
+
 
 // ── Alarm + Startup ──
 chrome.alarms.create('checkJobsAlarm', { periodInMinutes: 1 });

@@ -33,6 +33,13 @@
     'dash/posts',
     'dash/feed',
     'socialActions',
+    // Account B (newer LinkedIn variant) uses these endpoints:
+    'dash/updates',
+    'dash/feedUpdates',
+    'fsd_update',
+    'fsd_feedUpdate',
+    'com.linkedin.voyager.dash.feed',
+    'com.linkedin.voyager.dash.search',
   ];
   function shouldIntercept(url) {
     if (!url) return false;
@@ -46,9 +53,14 @@
   const _globalSeen = new Set();
 
   // ── URN patterns ────────────────────────────────────────────────────────────
-  // Match all LinkedIn post-type URNs in one pass over raw text
+  // P1: direct activity/ugcPost/share URNs (Account A / classic LinkedIn)
   const URN_GLOBAL_RE = /urn:li:(activity|ugcPost|share):(\d+)/gi;
   const URN_SINGLE_RE = /urn:li:(activity|ugcPost|share):(\d+)/i;
+  // P2: fsd_update wrapper URNs (Account B / newer LinkedIn dash API)
+  //   Format: urn:li:fsd_update:(urn:li:activity:1234567890123,FEED_DETAIL,...)
+  //   or:     urn:li:fsd_update:urn:li:activity:1234567890123
+  const FSD_GLOBAL_RE = /urn:li:fsd_update:[:(]urn:li:(activity|ugcPost|share):(\d+)/gi;
+  const FSD_SINGLE_RE = /urn:li:fsd_update:[:(]urn:li:(activity|ugcPost|share):(\d+)/i;
 
   function urnToUrl(type, id) {
     const t = type.toLowerCase();
@@ -74,50 +86,26 @@
   }
 
   // ── PASS 1+2: Raw text scan ──────────────────────────────────────────────────
-  // Finds every URN in the raw response string, then extracts a text window
-  // around it and regex-scans for metric numbers. Zero JSON parsing overhead.
   function rawTextScan(body) {
-    const results = new Map(); // url → post object
+    const results = new Map();
 
-    let m;
-    URN_GLOBAL_RE.lastIndex = 0;
-    while ((m = URN_GLOBAL_RE.exec(body)) !== null) {
-      const type = m[1]; const id = m[2];
+    const processHit = (type, id, matchIndex) => {
       const url = urnToUrl(type, id);
-      if (_globalSeen.has(url)) continue;
-
-      // Extract a generous window around the URN hit for metric searching
-      const start = Math.max(0, m.index - 400);
-      const end   = Math.min(body.length, m.index + 800);
+      if (_globalSeen.has(url)) return;
+      const start = Math.max(0, matchIndex - 400);
+      const end   = Math.min(body.length, matchIndex + 800);
       const win   = body.slice(start, end);
-
-      // ── numLikes / numReactions / count adjacent to reaction field ──────────
-      // Matches: "numLikes":247  "totalReactionCount":12  "likeCount":5
-      let likes = 0;
-      const likesM = win.match(/"(?:numLikes|totalReactionCount|likeCount|reactionCount)"\s*:\s*(\d+)/);
-      if (likesM) likes = parseInt(likesM[1], 10);
-
-      // ── numComments / commentCount ───────────────────────────────────────────
-      let comments = 0;
-      const commM = win.match(/"(?:numComments|commentCount|totalCommentCount)"\s*:\s*(\d+)/);
-      if (commM) comments = parseInt(commM[1], 10);
-
-      // ── numShares / repostCount ──────────────────────────────────────────────
-      let reposts = 0;
-      const shareM = win.match(/"(?:numShares|repostCount|shareCount)"\s*:\s*(\d+)/);
-      if (shareM) reposts = parseInt(shareM[1], 10);
-
-      // ── Text (commentary) ────────────────────────────────────────────────────
-      // Match: "text":"Hello world"  (up to 600 chars)
-      let text = '';
-      const textM = win.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      if (textM) text = textM[1].replace(/\\n/g, ' ').replace(/\\u[\dA-Fa-f]{4}/g, '').substring(0, 600);
-
-      // ── Author name ──────────────────────────────────────────────────────────
-      let author = 'Unknown';
-      const nameM = win.match(/"(?:firstName|fullName|localizedName)"\s*:\s*"([^"]{1,60})"/);
-      if (nameM) author = nameM[1];
-
+      let likes = 0, comments = 0, reposts = 0, text = '', author = 'Unknown';
+      const likesM  = win.match(/"(?:numLikes|totalReactionCount|likeCount|reactionCount)"\s*:\s*(\d+)/);
+      if (likesM)  likes    = parseInt(likesM[1], 10);
+      const commM   = win.match(/"(?:numComments|commentCount|totalCommentCount)"\s*:\s*(\d+)/);
+      if (commM)   comments = parseInt(commM[1], 10);
+      const shareM  = win.match(/"(?:numShares|repostCount|shareCount)"\s*:\s*(\d+)/);
+      if (shareM)  reposts  = parseInt(shareM[1], 10);
+      const textM   = win.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (textM)   text     = textM[1].replace(/\\n/g, ' ').replace(/\\u[\dA-Fa-f]{4}/g, '').substring(0, 600);
+      const nameM   = win.match(/"(?:firstName|fullName|localizedName)"\s*:\s*"([^"]{1,60})"/);
+      if (nameM)   author   = nameM[1];
       const existing = results.get(url);
       // Merge: keep highest likes value across multiple window hits for same URN
       if (existing) {
@@ -128,7 +116,18 @@
       } else {
         results.set(url, { url, urn: `urn:li:${type}:${id}`, likes, comments, reposts, text, author, postedAtMs: 0, source: 'network' });
       }
-    }
+    };
+
+    // Pass 1: classic activity/ugcPost/share URNs (Account A)
+    let m;
+    URN_GLOBAL_RE.lastIndex = 0;
+    while ((m = URN_GLOBAL_RE.exec(body)) !== null) processHit(m[1], m[2], m.index);
+
+    // Pass 2: fsd_update wrapper URNs (Account B / newer LinkedIn dash API)
+    FSD_GLOBAL_RE.lastIndex = 0;
+    while ((m = FSD_GLOBAL_RE.exec(body)) !== null) processHit(m[1], m[2], m.index);
+
+    if (results.size > 0) console.log(`[LI-Interceptor] rawTextScan: ${results.size} URNs (P1+fsd_update)`);
     return results;
   }
 
@@ -157,11 +156,16 @@
         const urnRaw =
           node.updateUrn || node.entityUrn || node.dashEntityUrn ||
           node.urn || node.preDashEntityUrn ||
+          // Account B fsd_update paths
+          dig(node, 'updateV2', 'entityUrn') ||
+          dig(node, 'updateV2', 'dashEntityUrn') ||
           dig(node, 'update', 'entityUrn') ||
           dig(node, 'entityResult', 'entityUrn') ||
           dig(node, 'socialContent', 'entityUrn') || '';
 
-        const mm = URN_SINGLE_RE.exec(String(urnRaw));
+        // Try extracting from fsd_update wrapper first (Account B), then classic URN
+        const urnStr = String(urnRaw);
+        let mm = FSD_SINGLE_RE.exec(urnStr) || URN_SINGLE_RE.exec(urnStr);
         if (!mm) continue;
         const url = urnToUrl(mm[1], mm[2]);
 

@@ -1,0 +1,2624 @@
+<div class="full-height" data-view-name="feed-full-update" data-view-tracking-scope="[{&quot;topicName&quot;:&quot;FeedUpdateServedEvent&quot;,&quot;contentTrackingId&quot;:&quot;O/ubSktgQM6DpKuVsnwt8g==&quot;,&quot;breadcrumb&quot;:{&quot;$type&quot;:&quot;proto.sdui.breadcrumbs.feed.FeedUpdateServedBreadcrumb&quot;,&quot;updateUrn&quot;:&quot;urn:li:activity:7457093724314083328&quot;,&quot;moduleKey&quot;:&quot;feed-item:desktop&quot;,&quot;requestId&quot;:&quot;no-request-id&quot;,&quot;trackingId&quot;:&quot;O/ubSktgQM6DpKuVsnwt8g==&quot;,&quot;trackingPipelineType&quot;:&quot;BREADCRUMB&quot;,&quot;actionEventTopicName&quot;:&quot;FeedActionEvent&quot;,&quot;impressionEventTopicName&quot;:&quot;FeedImpressionEvent&quot;}}]">
+      <div class="full-height">
+        <div class="feed-shared-update-v2 feed-shared-update-v2--minimal-padding full-height feed-shared-update-v2--with-carousel-fix relative
+            
+            
+            
+            
+            feed-shared-update-v2--wrapped
+            
+            
+            
+            " id="ember36" role="article" data-urn="urn:li:activity:7457093724314083328">
+          
+      <div>
+        
+              <div class="feed-shared-update-v2__control-menu-container display-flex flex-column flex-grow-1 full-height">
+                
+                <h2 class="visually-hidden">
+                    Feed post
+                </h2>
+                <div class="fie-impression-container">
+<!---->                  <div class="relative">
+                      
+    <div class="DlWwCynDATjjWVqnjagznsUbuGazZiiSHFY
+        display-flex align-items-flex-start
+        update-components-actor--with-control-menu
+        
+        ">
+<!---->
+      <div class="update-components-actor__container
+          
+          display-flex flex-grow-1">
+          <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  update-components-actor__image relative
+              " aria-label="View Jenna Jones’  graphic link" target="_self" href="https://www.linkedin.com/in/jennaleejones95?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAABehkfMBbn1u1bC4JdnxsLXP8yGXanOJzFM" data-test-app-aware-link="">
+            <span class="js-update-components-actor__avatar">
+              
+    <div class="ivm-image-view-model    update-components-actor__avatar">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+        <div class="EntityPhoto-circle-3-ghost-person ivm-view-attr__ghost-entity  update-components-actor__avatar-image">
+            <div class="visually-hidden">Jenna Jones</div>
+        </div>
+    </div>
+  
+          </div>
+  
+            </span>
+          </a>
+        <div class="update-components-actor__meta
+            ">
+          <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  update-components-actor__meta-link" aria-label="View: Jenna Jones Premium • 3rd+ GTM Leadership @ Cursor" target="_self" href="https://www.linkedin.com/in/jennaleejones95?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAABehkfMBbn1u1bC4JdnxsLXP8yGXanOJzFM" data-test-app-aware-link="">
+            <span class="update-components-actor__title">
+              <span class="XvcXCHaByZHFQawqmGvFtBwIydgIAThSPuJULYH
+                  hoverable-link-text t-14 t-bold text-body-medium-bold
+                  t-black
+                  
+                  update-components-actor__single-line-truncate">
+                <span dir="ltr"><span aria-hidden="true"><!---->Jenna Jones<!----></span><span class="visually-hidden"><!---->Jenna Jones<!----></span></span>
+              </span>
+                <span class="update-components-actor__supplementary-actor-info update-components-actor__supplementary-actor-info--align-icon update-components-actor__single-line-truncate text-body-xsmall
+                    t-black--light
+                    flex-shrink-zero">
+                  <span aria-hidden="true"><span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!----></span><span class="visually-hidden"><!---->Premium • 3rd+<!----></span>
+                </span>
+            </span>
+
+              <span class="update-components-actor__description text-body-xsmall
+                  t-black--light">
+                <span aria-hidden="true"><!---->GTM Leadership @ Cursor<!----></span><span class="visually-hidden"><!---->GTM Leadership @ Cursor<!----></span>
+              </span>
+
+          </a>
+<!---->            <span class="update-components-actor__sub-description text-body-xsmall
+                t-black--light
+                
+                ">
+              <span aria-hidden="true"><!---->2h •<span class="white-space-pre"> </span><span><li-icon aria-hidden="true" type="globe-americas" class="v-align-bottom" size="small"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" data-supported-dps="16x16" fill="currentColor" class="mercado-match" width="16" height="16" focusable="false">
+      <path d="M8 1a7 7 0 107 7 7 7 0 00-7-7zM3 8a5 5 0 011-3l.55.55A1.5 1.5 0 015 6.62v1.07a.75.75 0 00.22.53l.56.56a.75.75 0 00.53.22H7v.69a.75.75 0 00.22.53l.56.56a.75.75 0 01.22.53V13a5 5 0 01-5-5zm6.24 4.83l2-2.46a.75.75 0 00.09-.8l-.58-1.16A.76.76 0 0010 8H7v-.19a.51.51 0 01.28-.45l.38-.19a.74.74 0 01.68 0L9 7.5l.38-.7a1 1 0 00.12-.48v-.85a.78.78 0 01.21-.53l1.07-1.09a5 5 0 01-1.54 9z"></path>
+    </svg></li-icon></span><span class="white-space-pre"> </span><!----><!----></span><span class="visually-hidden"><!---->2 hours ago • Visible to anyone on or off LinkedIn<!----></span>
+            </span>
+        </div>
+      </div>
+
+        
+    <button class="follow   update-components-actor__follow-button update-components-update-v2__follow-button update-components-actor__cta-button--lockup-redesign artdeco-button text-body-medium-bold
+            
+            update-components-update-v2__cta-button--next-to-control-menu
+            
+            artdeco-button--tertiary
+            " aria-label="Follow Jenna Jones" aria-pressed="false" type="button">
+          <svg role="none" aria-hidden="true" class="artdeco-button__icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="add-small">
+<!---->    
+    <use href="#add-small" width="16" height="16"></use>
+</svg>
+
+        <span aria-hidden="true">Follow</span>
+    </button>
+  
+
+<!---->    </div>
+  
+                        
+    <div class="feed-shared-control-menu display-flex
+        feed-shared-update-v2__control-menu absolute text-align-right
+        
+        ">
+<!---->
+        <div id="ember38" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+          <button aria-expanded="false" aria-label="Open control menu for post by Jenna Jones" tabindex="0" id="ember39" class="feed-shared-control-menu__trigger artdeco-button artdeco-button--tertiary artdeco-button--muted artdeco-button--1 artdeco-button--circle artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view" type="button">
+              
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M3.25 8C3.25 8.69 2.69 9.25 2 9.25C1.31 9.25 0.75 8.69 0.75 8C0.75 7.31 1.31 6.75 2 6.75C2.69 6.75 3.25 7.31 3.25 8ZM14 6.75C13.31 6.75 12.75 7.31 12.75 8C12.75 8.69 13.31 9.25 14 9.25C14.69 9.25 15.25 8.69 15.25 8C15.25 7.31 14.69 6.75 14 6.75ZM8 6.75C7.31 6.75 6.75 7.31 6.75 8C6.75 8.69 7.31 9.25 8 9.25C8.69 9.25 9.25 8.69 9.25 8C9.25 7.31 8.69 6.75 8 6.75Z" fill="currentColor"></path>
+  </svg>
+
+                      
+<!----></button>
+          <div tabindex="-1" aria-hidden="true" id="ember40" class="feed-shared-control-menu__content artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--has-arrow artdeco-dropdown__content--arrow-right artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view" aria-label="Control Menu Options"><!----></div>
+        </div>
+
+<!---->
+<!---->
+<!---->
+<!---->
+<!---->
+<!----><!---->    </div>
+  
+                                      </div>
+<!---->
+                  <!---->
+
+<!---->                          
+    <div class="gnJpFmyOcTkFRmOJKgCElOfRWkkyopnZbwtE" style="" tabindex="-1">
+          
+    <div class="feed-shared-inline-show-more-text
+        feed-shared-update-v2__description feed-shared-inline-show-more-text--minimal-padding
+        
+        feed-shared-inline-show-more-text--3-lines
+        feed-shared-inline-show-more-text--expanded
+        
+        
+        " tabindex="-1" style="max-height: none; display: block;">
+      
+            
+    <div class="update-components-text relative update-components-update-v2__commentary " dir="ltr">
+<!---->
+      <span class="break-words
+          tvm-parent-container">
+<!---->        <span dir="ltr"><!---->Honored to step into a leadership role at Cursor! Grateful for the opportunity to continue to learn from and grow with such a talented team 🚀<span class="white-space-pre"> </span><span><br></span><span><br></span><!---->I'm hiring for my team in SF, so if you're excited about how Cursor is transforming the way software is built, let’s chat!<span class="white-space-pre"> </span><a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc " target="_self" tabindex="0" href="https://lnkd.in/d9Jt9yEA" data-test-app-aware-link=""><!---->https://lnkd.in/d9Jt9yEA<!----></a></span>
+      </span>
+    </div>
+  
+          <!----><!---->    </div>
+  
+        
+<!---->    </div>
+  
+<!----><!---->
+<!---->
+                      <!---->
+
+                        <!---->
+
+                  <!---->
+
+<!---->
+                    
+    
+    <div id="ember41" class="update-v2-social-activity
+        
+        ">
+      
+          
+    <div class="social-details-social-counts social-details-social-counts--no-vertical-padding
+        
+        
+        
+        
+        ">
+      <div class="display-flex flex-grow-1 full-width">
+        <div class="relative full-width">
+          <ul class="display-flex flex-wrap">
+              <li class="social-details-social-counts__item social-details-social-counts__reactions social-details-social-counts__item--height-two-x
+                  social-details-social-counts__reactions--left-aligned
+                  ">
+                <button data-reaction-details="" aria-label="185 reactions" class="t-black--light display-flex align-items-center social-details-social-counts__count-value social-details-social-counts__count-value-hover
+                    text-body-small
+                    hoverable-link-text
+                    " type="button">
+    <img class="reactions-icon social-detail-social-counts__count-icon social-detail-social-counts__count-icon--0 reactions-icon__consumption--small data-test-reactions-icon-type-LIKE data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/8ekq8gho1ruaf8i7f86vd1ftt" alt="like" data-test-reactions-icon-type="LIKE" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+    <img class="reactions-icon social-detail-social-counts__count-icon social-detail-social-counts__count-icon--1 reactions-icon__consumption--small reactions-icon--stacked data-test-reactions-icon-type-PRAISE data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/b1dl5jk88euc7e9ri50xy5qo8" alt="celebrate" data-test-reactions-icon-type="PRAISE" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+    <img class="reactions-icon social-detail-social-counts__count-icon social-detail-social-counts__count-icon--2 reactions-icon__consumption--small reactions-icon--stacked data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+                      <span aria-hidden="true" class="social-details-social-counts__reactions-count
+                        ">
+185                    </span>
+                </button>
+              </li>
+
+              <li data-non-reaction-details="" class="display-flex flex-grow-1 max-full-width">
+                <ul class="display-flex flex-grow-1 max-full-width">
+                    <li class="social-details-social-counts__item social-details-social-counts__comments social-details-social-counts__item--height-two-x
+                        social-details-social-counts__item--right-aligned
+                        ">
+                        <button aria-label="43 comments on Jenna Jones’ post" class="t-black--light social-details-social-counts__count-value social-details-social-counts__count-value-hover
+                            text-body-small
+                            hoverable-link-text
+                            social-details-social-counts__btn
+                            " type="button">
+                          <span aria-hidden="true">
+                              43 comments
+                          </span>
+                        </button>
+                    </li>
+
+<!---->
+<!---->                </ul>
+              </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  
+
+<!---->
+          
+    <section class="social-details-reactors-facepile" id="reactors-facepile-id">
+        <h3 class="social-details-reactors-facepile__reactions-text t-sans t-16 t-black mt4 mh0 mb2" id="social-details-reactors-facepile__reactions-text">
+          Reactions
+        </h3>
+        <ul class="social-details-reactors-facepile__list" aria-labelledby="social-details-reactors-facepile__reactions-text">
+            <li class="social-details-reactors-facepile__list-item">
+              <a tabindex="0" rel="noopener noreferrer" target="_blank" href="https://www.linkedin.com/in/ACoAAAEvotABPl3W3vWTQZ-lUZr27ssX4NGQrnU" id="ember241" class="social-details-reactors-facepile__profile-link ember-view" aria-label="View Brandon Sammut’s  graphic link, reacted with PRAISE, graphic">
+                <div id="ember242" class="artdeco-entity-lockup artdeco-entity-lockup--size-3 ember-view">
+                  <div id="ember243" class="artdeco-entity-lockup__image artdeco-entity-lockup__image--type-circle ember-view" type="circle">
+                    
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="100" src="https://media.licdn.com/dms/image/v2/D5603AQFHINrdT7BWZQ/profile-displayphoto-scale_100_100/B56ZxI4rZ8JQAc-/0/1770749348484?e=1779321600&amp;v=beta&amp;t=fSk5n3557F1eCUvYcXF1BEZEmoS3-AWVLZbC2DOx6Ag" loading="lazy" height="100" alt="View Brandon Sammut’s  graphic link" id="ember244" class="ivm-view-attr__img--centered EntityPhoto-circle-3  social-details-reactors-facepile__actor-image evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+                    
+    <img class="reactions-icon social-details-reactors-facepile__icon reactions-icon__consumption--small data-test-reactions-icon-type-PRAISE data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/72p0gef8k748mc8rq861vx9bh" alt="celebrate" data-test-reactions-icon-type="PRAISE" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+                  
+</div>
+                
+</div>
+              </a>
+            </li>
+            <li class="social-details-reactors-facepile__list-item">
+              <a tabindex="0" rel="noopener noreferrer" target="_blank" href="https://www.linkedin.com/in/ACoAACPN_iYBF7Ec4uSGSCOIaqS2LDEYrgTFY5o" id="ember245" class="social-details-reactors-facepile__profile-link ember-view" aria-label="View Hayden Knudsen’s  graphic link, reacted with LIKE, graphic">
+                <div id="ember246" class="artdeco-entity-lockup artdeco-entity-lockup--size-3 ember-view">
+                  <div id="ember247" class="artdeco-entity-lockup__image artdeco-entity-lockup__image--type-circle ember-view" type="circle">
+                    
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="100" src="https://media.licdn.com/dms/image/v2/D5603AQH6fA62_jIbCg/profile-displayphoto-shrink_100_100/profile-displayphoto-shrink_100_100/0/1707264207254?e=1779321600&amp;v=beta&amp;t=xYBxURuWiTzRy8Xm1IzmiBBp4NCaZLFrwqubbZwW_FM" loading="lazy" height="100" alt="View Hayden Knudsen’s  graphic link" id="ember248" class="ivm-view-attr__img--centered EntityPhoto-circle-3  social-details-reactors-facepile__actor-image evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+                    
+    <img class="reactions-icon social-details-reactors-facepile__icon reactions-icon__consumption--small data-test-reactions-icon-type-LIKE data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/4c1dzspg0yqfip47a9y26tnx8" alt="like" data-test-reactions-icon-type="LIKE" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+                  
+</div>
+                
+</div>
+              </a>
+            </li>
+            <li class="social-details-reactors-facepile__list-item">
+              <a tabindex="0" rel="noopener noreferrer" target="_blank" href="https://www.linkedin.com/in/ACoAAAmkej8B0C0gedwKH4hgwLHC28ese00pwRo" id="ember249" class="social-details-reactors-facepile__profile-link ember-view" aria-label="View Shaunaq Kulkarni’s  graphic link, reacted with PRAISE, graphic">
+                <div id="ember250" class="artdeco-entity-lockup artdeco-entity-lockup--size-3 ember-view">
+                  <div id="ember251" class="artdeco-entity-lockup__image artdeco-entity-lockup__image--type-circle ember-view" type="circle">
+                    
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="100" src="https://media.licdn.com/dms/image/v2/D5603AQFuhR9LeucAkg/profile-displayphoto-scale_100_100/B56Zrg40UBMMAc-/0/1764709582538?e=1779321600&amp;v=beta&amp;t=QU0bSKXiRjh7GsLbZt2Gr5nP8NdiPNP1IjVYE50JsYY" loading="lazy" height="100" alt="View Shaunaq Kulkarni’s  graphic link" id="ember252" class="ivm-view-attr__img--centered EntityPhoto-circle-3  social-details-reactors-facepile__actor-image evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+                    
+    <img class="reactions-icon social-details-reactors-facepile__icon reactions-icon__consumption--small data-test-reactions-icon-type-PRAISE data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/72p0gef8k748mc8rq861vx9bh" alt="celebrate" data-test-reactions-icon-type="PRAISE" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+                  
+</div>
+                
+</div>
+              </a>
+            </li>
+            <li class="social-details-reactors-facepile__list-item">
+              <a tabindex="0" rel="noopener noreferrer" target="_blank" href="https://www.linkedin.com/in/ACoAABe5gjUBx5T_xNI99xRBpQ_Wh-0362qfBSQ" id="ember253" class="social-details-reactors-facepile__profile-link ember-view" aria-label="View Andrew Schieve, CPIM’s  graphic link, reacted with LIKE, graphic">
+                <div id="ember254" class="artdeco-entity-lockup artdeco-entity-lockup--size-3 ember-view">
+                  <div id="ember255" class="artdeco-entity-lockup__image artdeco-entity-lockup__image--type-circle ember-view" type="circle">
+                    
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="100" src="https://media.licdn.com/dms/image/v2/D5603AQEcuBXHlEgnNg/profile-displayphoto-shrink_100_100/profile-displayphoto-shrink_100_100/0/1725897566261?e=1779321600&amp;v=beta&amp;t=Vmtmmy9qZJHh9fgo3tAsbb4-e8LcwMkcCB9w-PWqRbY" loading="lazy" height="100" alt="View Andrew Schieve, CPIM’s  graphic link" id="ember256" class="ivm-view-attr__img--centered EntityPhoto-circle-3  social-details-reactors-facepile__actor-image evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+                    
+    <img class="reactions-icon social-details-reactors-facepile__icon reactions-icon__consumption--small data-test-reactions-icon-type-LIKE data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/4c1dzspg0yqfip47a9y26tnx8" alt="like" data-test-reactions-icon-type="LIKE" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+                  
+</div>
+                
+</div>
+              </a>
+            </li>
+            <li class="social-details-reactors-facepile__list-item">
+              <a tabindex="0" rel="noopener noreferrer" target="_blank" href="https://www.linkedin.com/in/ACoAACfvkScBHG6Nxh-y-_Gs03bBP6b-27cL2AM" id="ember257" class="social-details-reactors-facepile__profile-link ember-view" aria-label="View Adam Holzer’s  graphic link, reacted with LIKE, graphic">
+                <div id="ember258" class="artdeco-entity-lockup artdeco-entity-lockup--size-3 ember-view">
+                  <div id="ember259" class="artdeco-entity-lockup__image artdeco-entity-lockup__image--type-circle ember-view" type="circle">
+                    
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="100" src="https://media.licdn.com/dms/image/v2/D5603AQEmwQLSMqjW2w/profile-displayphoto-scale_100_100/B56Z2iWtnAHQAc-/0/1776545360603?e=1779321600&amp;v=beta&amp;t=HFWdQB68t4tNCz0Rin_4M-XyBN_RXL7pygm704EmA_E" loading="lazy" height="100" alt="View Adam Holzer’s  graphic link" id="ember260" class="ivm-view-attr__img--centered EntityPhoto-circle-3  social-details-reactors-facepile__actor-image evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+                    
+    <img class="reactions-icon social-details-reactors-facepile__icon reactions-icon__consumption--small data-test-reactions-icon-type-LIKE data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/4c1dzspg0yqfip47a9y26tnx8" alt="like" data-test-reactions-icon-type="LIKE" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+                  
+</div>
+                
+</div>
+              </a>
+            </li>
+            <li class="social-details-reactors-facepile__list-item">
+              <a tabindex="0" rel="noopener noreferrer" target="_blank" href="https://www.linkedin.com/in/ACoAADFF1O4BYlFa-0ZLVethwET18AtoQfOJA2k" id="ember261" class="social-details-reactors-facepile__profile-link ember-view" aria-label="View Cameron Nagel’s  graphic link, reacted with EMPATHY, graphic">
+                <div id="ember262" class="artdeco-entity-lockup artdeco-entity-lockup--size-3 ember-view">
+                  <div id="ember263" class="artdeco-entity-lockup__image artdeco-entity-lockup__image--type-circle ember-view" type="circle">
+                    
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="100" src="https://media.licdn.com/dms/image/v2/D5603AQGo57M_Tuju6A/profile-displayphoto-shrink_100_100/profile-displayphoto-shrink_100_100/0/1696125036449?e=1779321600&amp;v=beta&amp;t=woZIGxUJUtFs5-Kaw6O63StU1x4byPxTfnUZNf_J4uY" loading="lazy" height="100" alt="View Cameron Nagel’s  graphic link" id="ember264" class="ivm-view-attr__img--centered EntityPhoto-circle-3  social-details-reactors-facepile__actor-image evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+                    
+    <img class="reactions-icon social-details-reactors-facepile__icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/7y5llkdpxktvffo2q2d1ni7s9" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+                  
+</div>
+                
+</div>
+              </a>
+            </li>
+            <li class="social-details-reactors-facepile__list-item social-details-reactors-facepile__list-item--left EntityPhoto-circle-3 ml2">
+              <button aria-expanded="false" aria-label="See 179 more reactions" class="social-details-reactors-facepile__reactions-modal-button t-sans t-16 t-black--light" data-jump-link-target="reactors-facepile-see-more-jump-target" type="button">
+                …
+              </button>
+            </li>
+        </ul>
+    </section>
+  
+
+          
+    <div class="feed-shared-social-action-bar
+        
+        feed-shared-social-action-bar--full-width
+        
+        feed-shared-social-action-bar--has-social-counts
+        ">
+      
+<!---->              
+    <span class="reactions-react-button feed-shared-social-action-bar__action-button feed-shared-social-action-bar--new-padding">
+<!---->      <button aria-pressed="false" aria-label="React Like" id="ember43" class="artdeco-button artdeco-button--muted artdeco-button--3 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+              <svg role="none" aria-hidden="true" class="artdeco-button__icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="thumbs-up-outline-small">
+<!---->    
+    <use href="#thumbs-up-outline-small" width="16" height="16"></use>
+</svg>
+
+
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember44" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  
+              <span tabindex="-1" id="ember45" class="artdeco-hoverable-trigger artdeco-hoverable-trigger--content-placed-top artdeco-hoverable-trigger--is-hoverable ember-view feed-shared-social-action-bar__action-button feed-shared-social-action-bar--new-padding">
+  <div>
+    <button role="button" aria-label="Comment" tabindex="0" id="feed-shared-social-action-bar-comment-ember42" class="artdeco-button artdeco-button--muted artdeco-button--3 artdeco-button--tertiary ember-view social-actions-button comment-button flex-wrap " data-finite-scroll-hotkey="c">        <svg role="none" aria-hidden="true" class="artdeco-button__icon " xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="comment-small">
+<!---->    
+    <use href="#comment-small" width="16" height="16"></use>
+</svg>
+
+
+<span class="artdeco-button__text">
+    Comment
+</span></button>
+  </div>
+  <div id="artdeco-gen-42" class="ember-view"><div id="ember48" class="ember-view"></div></div>
+</span>
+              
+    <div id="ember49" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view feed-shared-social-action-bar__action-button feed-shared-social-action-bar--new-padding">
+      <span tabindex="-1" id="ember51" class="artdeco-hoverable-trigger artdeco-hoverable-trigger--content-placed-top artdeco-hoverable-trigger--is-hoverable ember-view flex-1 display-flex">
+        <button aria-expanded="false" aria-label="" tabindex="0" id="ember52" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view 
+            artdeco-button social-actions-button social-reshare-button flex-wrap
+            artdeco-button--muted artdeco-button--3 artdeco-button--tertiary" data-finite-scroll-hotkey="r" type="button">
+            <svg role="none" aria-hidden="true" class="artdeco-button__icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="repost-small">
+<!---->    
+    <use href="#repost-small" width="16" height="16"></use>
+</svg>
+
+            <span class="artdeco-button__text social-action-button__text">Repost</span>
+        
+<!----></button>
+
+        <div tabindex="-1" aria-hidden="true" id="ember53" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view social-reshare-button__share-dropdown-content"><!----></div>
+
+        <div id="artdeco-gen-43" class="ember-view"><div id="ember55" class="ember-view"></div></div>
+      </span>
+        <div>
+  
+      
+<!---->  
+  
+</div>
+
+<!---->
+<!---->    </div>
+  
+                <div class="feed-shared-social-action-bar__action-button feed-shared-social-action-bar--new-padding">
+                  <span tabindex="-1" id="ember56" class="artdeco-hoverable-trigger artdeco-hoverable-trigger--content-placed-top artdeco-hoverable-trigger--is-hoverable ember-view">
+                    
+    <button aria-label="Send in a private message" id="ember57" class="artdeco-button artdeco-button--muted artdeco-button--3 artdeco-button--tertiary ember-view social-actions-button send-privately-button flex-wrap
+         send-privately-button" data-finite-scroll-hotkey="s" type="button">        <svg role="none" aria-hidden="true" class="artdeco-button__icon " xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="send-privately-small" data-rtl="true">
+<!---->    
+    <use href="#send-privately-small" width="16" height="16"></use>
+</svg>
+
+
+<span class="artdeco-button__text">
+    
+        <span class="artdeco-button__text social-action-button__text">
+          Send
+        </span>
+    
+</span></button>
+  
+                    <div id="artdeco-gen-44" class="ember-view"><div id="ember59" class="ember-view"></div></div>
+                  </span>
+                </div>
+<!----><!---->          
+    </div>
+  
+<!----><!----><!---->    
+    </div>
+  
+  
+                  <!---->                </div>
+
+                  
+    
+    <div id="ember60" class="update-v2-social-activity
+        
+        ">
+      
+<!----><!---->
+<!---->
+<!---->
+          
+<!---->                    
+
+<!---->
+          <div class="feed-shared-update-v2__comments-container display-flex flex-column
+              ">
+              <div id="ember61" class="comments-comment-box--cr
+    
+    comments-comment-box--has-avatar
+    
+    
+    
+    " data-scroll-name="true">
+      <div class="display-flex flex-1">
+          
+    <div class="feed-shared-avatar-image b0 member comments-comment-box__avatar-image--cr">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Samm Asss" id="ember62" class="avatar member EntityPhoto-circle-1 evi-image ghost-person ember-view">
+    </div>
+  
+
+<!---->        <form class="comments-comment-box__form">
+          <div class="comments-comment-texteditor
+              ">
+            <div class="display-flex
+                flex-wrap">
+              <div class="comments-comment-box-comment__text-editor">
+  
+      
+      
+  
+    <div>
+<!---->        
+    
+    <div class="editor-container relative">
+      <div>
+        <div class="editor-content ql-container"><div class="ql-editor ql-blank" data-gramm="false" contenteditable="true" data-placeholder="Add a comment…" aria-placeholder="Add a comment…" aria-label="Text editor for creating content" role="textbox" aria-multiline="true" aria-describedby="ember228-text-editor-placeholder" data-test-ql-editor-contenteditable="true"><p><br></p></div><div class="ql-clipboard" contenteditable="true" tabindex="-1"></div></div>
+          <span class="a11y-text" aria-hidden="true" id="ember228-text-editor-placeholder">
+            Add a comment…
+          </span>
+
+<!---->      </div>
+<!---->    </div>
+  
+  
+    </div>
+  
+
+  
+  
+</div>
+<!---->              <div class="display-flex justify-space-between">
+                <div class="display-flex">
+                    
+      
+                        
+    <div>
+      <span tabindex="-1" id="ember219" class="artdeco-hoverable-trigger artdeco-hoverable-trigger--content-placed-top ember-view">
+        <button title="Open Emoji Keyboard" aria-label="Open Emoji Keyboard" aria-expanded="false" aria-controls="artdeco-hoverable-comments_overlay_emoji__emoji-hoverable__content" id="ember220" class="comments-comment-box__emoji-picker-trigger emoji-hoverable-trigger artdeco-button artdeco-button--circle artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view" data-reaction-summary__emoji-hoverable="" type="button">        <svg role="none" aria-hidden="true" class="artdeco-button__icon " xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-supported-dps="24x24" data-test-icon="emoji-medium">
+<!---->    
+    <use href="#emoji-medium" width="24" height="24"></use>
+</svg>
+
+
+<span class="artdeco-button__text">
+    Open Emoji Keyboard
+</span></button>
+          
+      </span>
+
+        <div id="comments_overlay_emoji__emoji-hoverable__content" class="ember-view"><div id="ember222" class="ember-view"></div></div>
+    </div>
+  
+                    
+  
+                    <div class="comments-comment-box__detour-container">
+                        <button aria-label="Add a photo" id="ember64" class="comments-comment-box__detour-icons artdeco-button artdeco-button--circle artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view" type="button">        <svg role="none" aria-hidden="true" class="artdeco-button__icon " xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-supported-dps="24x24" data-test-icon="image-medium">
+<!---->    
+    <use href="#image-medium" width="24" height="24"></use>
+</svg>
+
+
+<span class="artdeco-button__text">
+    
+</span></button>
+                    </div>
+                </div>
+                <div class="display-flex align-items-center">
+<!----><!---->                </div>
+              </div>
+            </div>
+          </div>
+<!----><!---->        </form>
+      </div>
+  
+    <!---->
+</div>
+
+<!---->
+<!---->
+                <div class="comments-sort-order-toggle mr2 ml3 mb2">
+  <div id="ember65" class="comments-sort-order-toggle__dropdown artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-left ember-view">
+    <button aria-expanded="false" id="ember66" class="comments-sort-order-toggle__trigger artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view" type="button" tabindex="0">
+      <span class="visually-hidden">
+        Current selected sort order is Most relevant
+      </span>
+      <span aria-hidden="true" class="display-flex align-items-center t-black--light t-bold">
+        Most relevant
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      </span>
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember67" class="dropdown-options comments-sort-order-toggle__content artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-left artdeco-dropdown__content--placement-bottom ember-view"><!----></div>
+  </div>
+</div>
+              <div id="ember68" class="comments-comments-list
+    comments-comments-list--cr">
+<!----><!---->
+    <div class="comments-comment-list__container
+         comments-infinite-comment-list__container">
+        
+    <div class="scaffold-finite-scroll
+    scaffold-finite-scroll--finite
+    ">
+  <!---->
+  
+      <div class="scaffold-finite-scroll__content">
+        
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457100012263755776)" id="ember69" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Jim DeLeon’s  graphic link" target="_self" href="https://www.linkedin.com/in/jimdeleon" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" loading="lazy" height="32" alt="View Jim DeLeon’s  graphic link" id="ember70" class="EntityPhoto-circle-1-ghost-person ivm-view-attr__ghost-entity   evi-image lazy-image ghost-person ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Jim DeLeon   • 3rd+ Senior Director, Enterprise Business at Coursera" target="_self" href="https://www.linkedin.com/in/jimdeleon" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Jim DeLeon<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__verified-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="verified-small">
+<!---->    
+    <use href="#verified-small" width="16" height="16"></use>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Senior Director, Enterprise Business at Coursera
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            2h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember71" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember72" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Jim DeLeon’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember73" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember74" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Love seeing this!  Huge congrats Jenna! 🎉🔥.  You’re going to make such a positive impact on your team!<!----></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember75" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember76" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Jim DeLeon’s comment" id="ember77" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember78" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <span class="comments-comment-social-bar__social-counts-separator--cr"></span>
+        <button class="comments-comment-social-bar__reactions-count--cr 
+            hoverable-link-text" aria-label="2 Reactions on Jim DeLeon’s comment" type="button">
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small reactions-icon--stacked data-test-reactions-icon-type-LIKE data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/8ekq8gho1ruaf8i7f86vd1ftt" alt="like" data-test-reactions-icon-type="LIKE" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  <span aria-hidden="true" class="v-align-middle pl1">
+            2
+          </span>
+        </button></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Jim DeLeon’s comment" id="ember79" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember80" class="ember-view"><div id="ember81" class="ember-view"><!----></div></div>
+          
+  <div id="ember82" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457096492349198336)" id="ember83" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Aaron Fawzy’s hiring graphic link" target="_self" href="https://www.linkedin.com/in/aaronfawzy" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="https://media.licdn.com/dms/image/v2/D4E35AQEa5AMfNNU2qQ/profile-framedphoto-shrink_100_100/B4EZ3gBP89GkAk-/0/1777579917685?e=1778526000&amp;v=beta&amp;t=djIFbDVIgBJ21Y94OwZyBJxh-O1D9WvkwZiqGkZK2L4" loading="lazy" height="32" alt="View Aaron Fawzy’s hiring graphic link" id="ember84" class="ivm-view-attr__img--centered EntityPhoto-circle-1   evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Aaron Fawzy   • 3rd+ GTM Leadership @ Glean | Enterprise AI" target="_self" href="https://www.linkedin.com/in/aaronfawzy" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Aaron Fawzy<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              GTM Leadership @ Glean | Enterprise AI
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            2h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember85" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember86" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Aaron Fawzy’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember87" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember88" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Best of the best!!! Congrats to you,<span class="white-space-pre"> </span><span><a tabindex="0" href="/in/jennaleejones95/" id="ember89" class="ember-view"><!---->Jenna<!----></a></span><!---->, but even more of a congrats to those on your new team  😊 get to learn from one of the best!!!<!----></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember90" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember91" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Aaron Fawzy’s comment" id="ember92" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember93" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <span class="comments-comment-social-bar__social-counts-separator--cr"></span>
+        <button class="comments-comment-social-bar__reactions-count--cr 
+            hoverable-link-text" aria-label="1 Reaction on Aaron Fawzy’s comment" type="button">
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  <span aria-hidden="true" class="v-align-middle pl1">
+            1
+          </span>
+        </button></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Aaron Fawzy’s comment" id="ember94" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember95" class="ember-view"><div id="ember96" class="ember-view"><!----></div></div>
+          
+  <div id="ember97" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457094423970193408)" id="ember98" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Tyler Norrish’s  graphic link" target="_self" href="https://www.linkedin.com/in/tylernorrish" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="https://media.licdn.com/dms/image/v2/C5603AQEAj3wQ_Y1Adw/profile-displayphoto-shrink_100_100/profile-displayphoto-shrink_100_100/0/1660879764741?e=1779321600&amp;v=beta&amp;t=jRe9MQfPHZ57ioOGpAWdB8V_l-ZP2h94CtTKLMHyKT4" loading="lazy" height="32" alt="View Tyler Norrish’s  graphic link" id="ember99" class="ivm-view-attr__img--centered EntityPhoto-circle-1   evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Tyler Norrish   • 3rd+ Building SoCal @ Glean" target="_self" href="https://www.linkedin.com/in/tylernorrish" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Tyler Norrish<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Building SoCal @ Glean
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            2h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember100" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember101" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Tyler Norrish’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember102" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember103" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Love to see it Jenna, congrats!<!----></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember104" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember105" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Tyler Norrish’s comment" id="ember106" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember107" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <span class="comments-comment-social-bar__social-counts-separator--cr"></span>
+        <button class="comments-comment-social-bar__reactions-count--cr 
+            hoverable-link-text" aria-label="1 Reaction on Tyler Norrish’s comment" type="button">
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  <span aria-hidden="true" class="v-align-middle pl1">
+            1
+          </span>
+        </button></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Tyler Norrish’s comment" id="ember108" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember109" class="ember-view"><div id="ember110" class="ember-view"><!----></div></div>
+          
+  <div id="ember111" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457095434046447616)" id="ember112" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Marisa Breall’s  graphic link" target="_self" href="https://www.linkedin.com/in/marisa-breall-04692814" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="https://media.licdn.com/dms/image/v2/D4E03AQFRg2mobAZiEg/profile-displayphoto-scale_100_100/B4EZxOOtQiK8Ac-/0/1770839005017?e=1779321600&amp;v=beta&amp;t=KSuaOcyoHMT6vvD60qNqrle4VkF4toZyZnDMt7JIHRQ" loading="lazy" height="32" alt="View Marisa Breall’s  graphic link" id="ember113" class="ivm-view-attr__img--centered EntityPhoto-circle-1   evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Marisa Breall   • 3rd+ Enterprise GTM at Cursor" target="_self" href="https://www.linkedin.com/in/marisa-breall-04692814" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Marisa Breall<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Enterprise GTM at Cursor
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            2h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember114" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember115" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Marisa Breall’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember116" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember117" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Congrats, Jenna! So well deserved!!<!----></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember118" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember119" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Marisa Breall’s comment" id="ember120" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember121" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <span class="comments-comment-social-bar__social-counts-separator--cr"></span>
+        <button class="comments-comment-social-bar__reactions-count--cr 
+            hoverable-link-text" aria-label="1 Reaction on Marisa Breall’s comment" type="button">
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  <span aria-hidden="true" class="v-align-middle pl1">
+            1
+          </span>
+        </button></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Marisa Breall’s comment" id="ember122" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember123" class="ember-view"><div id="ember124" class="ember-view"><!----></div></div>
+          
+  <div id="ember125" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457095936822038528)" id="ember126" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Nicole Singer’s  graphic link" target="_self" href="https://www.linkedin.com/in/nicolezucker" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="https://media.licdn.com/dms/image/v2/C4E03AQHz82dJXUCYdw/profile-displayphoto-shrink_100_100/profile-displayphoto-shrink_100_100/0/1581275438927?e=1779321600&amp;v=beta&amp;t=57kqqYz1-pYgne-j2c6cUdUsOtwWCnhvth50hZx9-Xg" loading="lazy" height="32" alt="View Nicole Singer’s  graphic link" id="ember127" class="ivm-view-attr__img--centered EntityPhoto-circle-1   evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Nicole Singer   • 3rd+ Helping Teams Drive More Revenue @ LinkedIn" target="_self" href="https://www.linkedin.com/in/nicolezucker" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Nicole Singer<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__verified-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="verified-small">
+<!---->    
+    <use href="#verified-small" width="16" height="16"></use>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Helping Teams Drive More Revenue @ LinkedIn
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            2h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember128" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember129" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Nicole Singer’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember130" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember131" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Congrats Jenna!!<span class="white-space-pre"> </span></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember132" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember133" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Nicole Singer’s comment" id="ember134" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember135" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <span class="comments-comment-social-bar__social-counts-separator--cr"></span>
+        <button class="comments-comment-social-bar__reactions-count--cr 
+            hoverable-link-text" aria-label="1 Reaction on Nicole Singer’s comment" type="button">
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  <span aria-hidden="true" class="v-align-middle pl1">
+            1
+          </span>
+        </button></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Nicole Singer’s comment" id="ember136" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember137" class="ember-view"><div id="ember138" class="ember-view"><!----></div></div>
+          
+  <div id="ember139" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457095300449587200)" id="ember140" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Stephanie N.’s  graphic link" target="_self" href="https://www.linkedin.com/in/stephanie-m-nagy" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" loading="lazy" height="32" alt="View Stephanie N.’s  graphic link" id="ember141" class="EntityPhoto-circle-1-ghost-person ivm-view-attr__ghost-entity   evi-image lazy-image ghost-person ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Stephanie N.   • 3rd+ Customer Outcomes at Glean" target="_self" href="https://www.linkedin.com/in/stephanie-m-nagy" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Stephanie N.<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Customer Outcomes at Glean
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            2h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember142" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember143" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Stephanie N.’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember144" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember145" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Amazing! Congratulations,<span class="white-space-pre"> </span><span><a tabindex="0" href="/in/jennaleejones95/" id="ember146" class="ember-view"><!---->Jenna Jones<!----></a></span><!---->!!  👏<span class="white-space-pre"> </span></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember147" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember148" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Stephanie N.’s comment" id="ember149" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember150" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <span class="comments-comment-social-bar__social-counts-separator--cr"></span>
+        <button class="comments-comment-social-bar__reactions-count--cr 
+            hoverable-link-text" aria-label="1 Reaction on Stephanie N.’s comment" type="button">
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  <span aria-hidden="true" class="v-align-middle pl1">
+            1
+          </span>
+        </button></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Stephanie N.’s comment" id="ember151" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember152" class="ember-view"><div id="ember153" class="ember-view"><!----></div></div>
+          
+  <div id="ember154" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457094929727787008)" id="ember155" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Katya Alfaro-Serassio’s  graphic link" target="_self" href="https://www.linkedin.com/in/alfarokatya" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" loading="lazy" height="32" alt="View Katya Alfaro-Serassio’s  graphic link" id="ember156" class="EntityPhoto-circle-1-ghost-person ivm-view-attr__ghost-entity   evi-image lazy-image ghost-person ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Katya Alfaro-Serassio   • 3rd+ Head of Partner AI Deployments @ Glean || Workplace AI 💻 ||" target="_self" href="https://www.linkedin.com/in/alfarokatya" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Katya Alfaro-Serassio<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Head of Partner AI Deployments @ Glean || Workplace AI 💻 ||
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            2h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember157" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember158" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Katya Alfaro-Serassio’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember159" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember160" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Yessssss amazing news<span class="white-space-pre"> </span><span><a tabindex="0" href="/in/jennaleejones95/" id="ember161" class="ember-view"><!---->Jenna Jones<!----></a></span><span class="white-space-pre"> </span>and so well deserved!!  👏<span class="white-space-pre"> </span></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember162" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember163" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Katya Alfaro-Serassio’s comment" id="ember164" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember165" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <span class="comments-comment-social-bar__social-counts-separator--cr"></span>
+        <button class="comments-comment-social-bar__reactions-count--cr 
+            hoverable-link-text" aria-label="1 Reaction on Katya Alfaro-Serassio’s comment" type="button">
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  <span aria-hidden="true" class="v-align-middle pl1">
+            1
+          </span>
+        </button></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Katya Alfaro-Serassio’s comment" id="ember166" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember167" class="ember-view"><div id="ember168" class="ember-view"><!----></div></div>
+          
+  <div id="ember169" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457099727541805056)" id="ember170" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Noah Wadhwani’s  graphic link" target="_self" href="https://www.linkedin.com/in/noahwadhwani" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="https://media.licdn.com/dms/image/v2/D5603AQG7X_qPZcPg8g/profile-displayphoto-scale_100_100/B56ZxOLrqkGsAc-/0/1770838212039?e=1779321600&amp;v=beta&amp;t=knZrTG-Y88KcWp_fvMI7l4gtNzaNce1kFoALk9gaf14" loading="lazy" height="32" alt="View Noah Wadhwani’s  graphic link" id="ember171" class="ivm-view-attr__img--centered EntityPhoto-circle-1   evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Noah Wadhwani   • 3rd+ Helping companies automate coding!" target="_self" href="https://www.linkedin.com/in/noahwadhwani" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Noah Wadhwani<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Helping companies automate coding!
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            2h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember172" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember173" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Noah Wadhwani’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember174" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember175" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->So well deserved. Congrats Jenna!<!----></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember176" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember177" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Noah Wadhwani’s comment" id="ember178" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember179" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <span class="comments-comment-social-bar__social-counts-separator--cr"></span>
+        <button class="comments-comment-social-bar__reactions-count--cr 
+            hoverable-link-text" aria-label="1 Reaction on Noah Wadhwani’s comment" type="button">
+    <img class="reactions-icon comments-comment-social-bar__count-icon reactions-icon__consumption--small data-test-reactions-icon-type-EMPATHY data-test-reactions-icon-theme-light" src="https://static.licdn.com/aero-v1/sc/h/cpho5fghnpme8epox8rdcds22" alt="love" data-test-reactions-icon-type="EMPATHY" data-test-reactions-icon-theme="light" data-test-reactions-icon-style="consumption" data-test-reactions-icon-size="small">
+  <span aria-hidden="true" class="v-align-middle pl1">
+            1
+          </span>
+        </button></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Noah Wadhwani’s comment" id="ember180" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember181" class="ember-view"><div id="ember182" class="ember-view"><!----></div></div>
+          
+  <div id="ember183" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457116412445192192)" id="ember184" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View George Anthony’s  graphic link" target="_self" href="https://www.linkedin.com/in/-george-anthony-" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="https://media.licdn.com/dms/image/v2/D4D03AQETGiYvkLOkdQ/profile-displayphoto-scale_100_100/B4DZf69cz1GYA0-/0/1752262104324?e=1779321600&amp;v=beta&amp;t=lFo2XJbWwRkXjLAhsznfG4M4BTcvRVCkB5V2ipBWavA" loading="lazy" height="32" alt="View George Anthony’s  graphic link" id="ember185" class="ivm-view-attr__img--centered EntityPhoto-circle-1   evi-image lazy-image ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: George Anthony   • 3rd+ Head of New Business @ Cambridge Spark 🤖 | Senior GTM Leader building and scaling enterprise sales teams" target="_self" href="https://www.linkedin.com/in/-george-anthony-" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->George Anthony<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Head of New Business @ Cambridge Spark 🤖 | Senior GTM Leader building and scaling enterprise sales teams
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            1h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember186" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember187" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for George Anthony’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember188" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember189" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Congratulations,<span class="white-space-pre"> </span><span><a tabindex="0" href="/in/jennaleejones95/" id="ember190" class="ember-view"><!---->Jenna<!----></a></span><!---->! Absolutely flying 🦸‍♀️ Wishing every success in the new role.<!----></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember191" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember192" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to George Anthony’s comment" id="ember193" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember194" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <!----></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to George Anthony’s comment" id="ember195" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember196" class="ember-view"><div id="ember197" class="ember-view"><!----></div></div>
+          
+  <div id="ember198" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+          <div>
+  
+              
+    <article class="comments-comment-entity
+        
+        
+        
+        
+        " data-id="urn:li:comment:(activity:7457093724314083328,7457109325757460480)" id="ember199" tabindex="-1">
+        
+    <div class="comments-comment-meta__container
+        comments-comment-meta__container--parent">
+      <div class="comments-comment-meta__actor">
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__image-link" aria-label="View Alexandra Mehas Dorani’s  graphic link" target="_self" href="https://www.linkedin.com/in/alexandra-mehas-dorani-379b0748" data-test-app-aware-link="">
+          
+    <div class="ivm-image-view-model   ">
+        
+    <div class="ivm-view-attr__img-wrapper
+        
+        ">
+<!---->
+<!---->          <img width="32" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" loading="lazy" height="32" alt="View Alexandra Mehas Dorani’s  graphic link" id="ember200" class="EntityPhoto-circle-1-ghost-person ivm-view-attr__ghost-entity   evi-image lazy-image ghost-person ember-view">
+    </div>
+  
+          </div>
+  
+        </a>
+
+        <a class="BcCwxaHikpyepwRwtVGKNyXGurXnwmOyGVc  comments-comment-meta__description-container tap-target overflow-hidden" aria-label="View: Alexandra Mehas Dorani   • 3rd+ Enterprise Account Executive @ Glean | AI for the Enterprise" target="_self" href="https://www.linkedin.com/in/alexandra-mehas-dorani-379b0748" data-test-app-aware-link="">
+          <h3 class="comments-comment-meta__description">
+            <span class="comments-comment-meta__description-title">
+              <!---->Alexandra Mehas Dorani<!---->
+            </span><span class="comments-comment-meta__data">
+                <span class="white-space-pre"> </span><!----><!----><svg role="none" aria-hidden="true" class="text-view-model__linkedin-bug-premium-v2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" data-supported-dps="14x14" data-test-icon="linkedin-bug-premium-v2-xxsmall">
+<!---->    <svg display="var(--hue-web-svg-display-light)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo" x="0" y="0" width="14" height="14"></image>
+    </svg>
+    <svg display="var(--hue-web-svg-display-dark)">
+      <image href="https://static.licdn.com/aero-v1/sc/h/e41cj52mke6g9s3xjsvu8yrbz" x="0" y="0" width="14" height="14"></image>
+    </svg>
+</svg>
+<span class="white-space-pre"> </span>• 3rd+<!---->
+              </span><!----></h3><div class="comments-comment-meta__description-subtitle">
+              Enterprise Account Executive @ Glean | AI for the Enterprise
+            </div></a>
+      </div>
+        <div class="comments-comment-meta__info">
+<!---->          <time class="comments-comment-meta__data">
+            1h
+          </time>
+
+            <div class="comment-options-trigger comments-comment-meta__options">
+  <div id="ember201" class="artdeco-dropdown artdeco-dropdown--placement-bottom artdeco-dropdown--justification-right ember-view">
+    <button aria-expanded="false" id="ember202" class="artdeco-dropdown__trigger artdeco-dropdown__trigger--placement-bottom ember-view artdeco-button artdeco-button--1 artdeco-button--circle artdeco-button--tertiary artdeco-button--muted" type="button" tabindex="0">
+        <svg role="img" aria-hidden="false" aria-label="Open options for Alexandra Mehas Dorani’s comment" class="comment-options-dropdown__trigger-icon t-black--light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="overflow-web-ios-small">
+<!---->    
+    <use href="#overflow-web-ios-small" width="16" height="16"></use>
+</svg>
+
+    
+<!----></button>
+    <div tabindex="-1" aria-hidden="true" id="ember203" class="artdeco-dropdown__content artdeco-dropdown--is-dropdown-element artdeco-dropdown__content--justification-right artdeco-dropdown__content--placement-bottom ember-view dropdown-options absolute"><!----></div>
+  </div>
+</div>
+        </div>
+    </div>
+  
+
+        
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+          <section class="comments-comment-entity__content">
+              
+    <div id="translation-container-ember204" class="break-words">
+      
+                  
+    <div class="feed-shared-inline-show-more-text
+        
+        
+        
+        
+        
+        
+         comments-comment-item__inline-show-more-text
+                      
+                      
+                      
+                      " tabindex="-1">
+      
+                    <span class="comments-comment-item__main-content feed-shared-main-content--comment t-14 t-black t-normal" dir="ltr">
+                      <div dir="ltr" class="update-components-text relative">
+    <span dir="ltr"><!---->Huge congrats, Jenna!!<span class="white-space-pre"> </span></span>
+</div>
+                    </span>
+                  <!----><!---->    </div>
+  
+<!----><!---->              
+    </div>
+  
+<!---->          </section>
+        
+    </div>
+  </div>
+
+        
+    <div id="ember205" class="comment-social-activity
+    ">
+      
+  
+    <div>
+      <div id="ember206" class="ember-view"><!----></div>
+    </div>
+  
+          
+  <div class="comments-thread-entity  ">
+      <div class="comments-thread-spacing__default"></div>
+    <div class="comments-thread-item">
+      
+            <div class="comments-comment-social-bar--cr">
+    <div class="comments-comment-social-bar__action-group--cr">
+      
+    <span class="reactions-react-button comments-comment-social-bar__reaction-action-button--cr">
+<!---->      <button aria-pressed="false" aria-label="React Like to Alexandra Mehas Dorani’s comment" id="ember207" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view social-actions-button react-button__trigger
+          "><!---->
+<span class="artdeco-button__text">
+    
+        <div class="flex-wrap justify-center
+            artdeco-button__text align-items-center">
+<!---->
+            <span aria-hidden="true" class="artdeco-button__text react-button__text social-action-button__text
+                ">
+              Like
+            </span>
+        </div>
+      
+</span></button>
+
+      <button aria-label="Open reactions menu" aria-expanded="false" tabindex="0" id="ember208" class="artdeco-button artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view reactions-menu__trigger" data-finite-scroll-hotkey="l"><!---->
+<span class="artdeco-button__text">
+    
+        <svg role="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="caret-small">
+<!---->    
+    <use href="#caret-small" width="16" height="16"></use>
+</svg>
+
+      
+</span></button>
+    </span>
+  <!----></div>
+
+      <div class="comments-comment-social-bar__vertical-divider"></div>
+
+      <div class="comments-comment-social-bar__action-group--cr">
+          <button aria-label="Reply to Alexandra Mehas Dorani’s comment" id="ember209" class="artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comment-social-bar__reply-action-button--cr button reply"><!---->
+<span class="artdeco-button__text">
+    
+<!---->  <span aria-hidden="true">
+    Reply
+  </span>
+
+</span></button>
+<!----></div>
+
+<!----></div>
+
+<!---->
+          
+    </div>
+  </div>
+
+
+<!---->
+<!---->
+<!----><!----><!---->
+    </div>
+  
+        <div id="ember210" class="ember-view"><div id="ember211" class="ember-view"><!----></div></div>
+          
+  <div id="ember212" class="ember-view"><!----></div>
+
+<!----><!----><!---->          </article>
+  
+          
+</div>
+
+      
+      </div>
+    
+
+<!---->
+    <div>
+  
+        
+<!---->    
+    
+</div>
+
+</div>
+  
+    </div>
+          <div class="comments-comment-list__load-more-container">
+            <button aria-label="Load more comments" id="ember213" class="artdeco-button artdeco-button--circle artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view comments-comments-list__load-more-comments-arrows">        <svg role="none" aria-hidden="true" class="artdeco-button__icon " xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" data-supported-dps="16x16" data-test-icon="maximize-small">
+<!---->    
+    <use href="#maximize-small" width="16" height="16"></use>
+</svg>
+
+
+<span class="artdeco-button__text">
+    
+</span></button>
+            <button id="ember214" class="comments-comments-list__load-more-comments-button--cr artdeco-button artdeco-button--muted artdeco-button--1 artdeco-button--tertiary ember-view"><!---->
+<span class="artdeco-button__text">
+    Load more comments
+</span></button>
+          </div>
+    </div>
+          </div>
+    
+    </div>
+  
+  
+
+<!---->
+<!---->
+<!---->
+          
+              </div>
+          
+      </div>
+  
+        </div>
+      </div>
+<!---->    </div>
