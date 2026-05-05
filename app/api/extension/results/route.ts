@@ -170,8 +170,8 @@ export async function POST(req: Request) {
             }
         }
 
+        // upsert always returns 'saved' (both creates and merges); 'updated' no longer emitted
         savedCount = results.filter(r => r.status === 'fulfilled' && r.value === 'saved').length;
-        updatedCount = results.filter(r => r.status === 'fulfilled' && r.value === 'updated').length;
     }
 
     // Collect one sample post for client-side debugging
