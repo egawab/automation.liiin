@@ -1,14 +1,20 @@
 /**
- * Nexora Network Interceptor v2.2  — NULL-SAFE + EXPANDED RSC KEYS
+ * Nexora Network Interceptor v2.3  — RSC FULL-METADATA FIX (SEARCH_B)
  * ─────────────────────────────────────────────────────────────────────────────
- * v2.2 SEARCH_B Fix:
- *  - parseCount() returns null for missing input (not 0).
- *  - rawTextScan() initialises likes=null, so posts with no metric key emit
- *    {likes:null} — never {likes:0}. Core-engine re-qual path handles null.
- *  - Added RSC metric keys: aggregatedReactionCount, totalReactions,
- *    reactionCount, socialProofText pattern ("1,247 reactions").
- *  - _finalized set deferred: a URL is locked AFTER data is emitted.
- *    A second RSC chunk with better data can upgrade an existing pending entry.
+ * v2.3 SEARCH_B Output Layer Fix:
+ *  - rawTextScan() window expanded: 800 chars before URN, 1500 after.
+ *    RSC streams often place the URN and payload (author/text/metrics)
+ *    far apart; the old ±400/800 window missed most metadata.
+ *  - RSC-specific author patterns added:
+ *      "title":{..."text":"<name>"} and "actorName":"<name>"
+ *  - RSC-specific text patterns added:
+ *      "summary":{..."text":"<content>"} / "commentary":{..."text":"..."}
+ *      picks LONGEST matching "text" field (not first).
+ *  - structuredScan() now resolves RSC entityResult paths:
+ *      entityResult.title.text      → author
+ *      entityResult.summary.text    → post text
+ *      entityResult.socialProofText → reaction count fallback
+ *  - All v2.2 improvements preserved (null-safe, _finalized deferral, etc.)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
@@ -79,7 +85,7 @@
   }
 
   // ── Pass 1+2: Raw text scan ────────────────────────────────────────────────
-  // v2.2: likes/comments/reposts start as null — only set when a regex matches.
+  // v2.3: window expanded + RSC-aware author/text extraction.
   function rawTextScan(body) {
     const results = new Map();
 
@@ -87,14 +93,15 @@
       const url = buildUrl(type, id);
       if (_finalized.has(url)) return;
 
-      const start = Math.max(0, matchIndex - 400);
-      const end   = Math.min(body.length, matchIndex + 800);
+      // v2.3: expanded window — RSC streams place URN and metadata far apart
+      const start = Math.max(0, matchIndex - 800);
+      const end   = Math.min(body.length, matchIndex + 1500);
       const win   = body.slice(start, end);
 
       let likes = null, comments = null, reposts = null;
       let text = '', author = 'Unknown';
 
-      // Expanded metric keys (v2.2 adds aggregatedReactionCount, totalReactions, reactionCount)
+      // ── Metrics ─────────────────────────────────────────────────────────
       const lm = win.match(/"(?:numLikes|totalReactionCount|likeCount|reactionCount|reaction_count|numReactions|totalLikeCount|aggregatedReactionCount|totalReactions)"\s*:\s*(\d+)/);
       if (lm) likes = parseInt(lm[1], 10);
 
@@ -108,7 +115,7 @@
       }
       // socialProofText: e.g. "socialProofText":"1,247 reactions"
       if (likes == null) {
-        const lm4 = win.match(/socialProofText[^"]*"([^"]*?)"/);
+        const lm4 = win.match(/"socialProofText"\s*:\s*"([^"]*)"/);
         if (lm4) {
           const spMatch = lm4[1].match(/([\d,]+)\s*reactions?/i);
           if (spMatch) likes = parseInt(spMatch[1].replace(/,/g, ''), 10) || null;
@@ -126,11 +133,50 @@
       const sm = win.match(/"(?:numShares|repostCount|shareCount|sharesCount)"\s*:\s*(\d+)/);
       if (sm) reposts = parseInt(sm[1], 10);
 
-      const tm = win.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      if (tm) text = tm[1].replace(/\\n/g, ' ').substring(0, 600);
+      // ── Text extraction — RSC-aware, picks longest match ─────────────────
+      // P1: "summary":{"textDirection":"...","text":"<post content>"}
+      const summaryM = win.match(/"summary"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/);
+      if (summaryM) text = summaryM[1].replace(/\\n/g, ' ').substring(0, 600);
 
-      const nm = win.match(/"(?:firstName|fullName|localizedName)"\s*:\s*"([^"]{1,60})"/);
-      if (nm) author = nm[1];
+      // P2: "commentary":{"text":"..."} or {"textDirection":"...","text":"..."}
+      if (!text) {
+        const commM = win.match(/"commentary"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/);
+        if (commM) text = commM[1].replace(/\\n/g, ' ').substring(0, 600);
+      }
+
+      // P3: "description":{"text":"..."}
+      if (!text) {
+        const descM = win.match(/"description"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/);
+        if (descM) text = descM[1].replace(/\\n/g, ' ').substring(0, 600);
+      }
+
+      // P4: longest bare "text":"..." (original fallback — no short values)
+      if (!text) {
+        const reText = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+        let tm;
+        while ((tm = reText.exec(win)) !== null) {
+          const c = tm[1].replace(/\\n/g, ' ').substring(0, 600);
+          if (c.length >= 20 && c.length > text.length) text = c;
+        }
+      }
+
+      // ── Author extraction — RSC-aware ────────────────────────────────────
+      // P1: RSC "title":{"textDirection":"...","text":"Author Name"}
+      const rscTitle = win.match(/"title"\s*:\s*\{[^{}]*?"text"\s*:\s*"([^"]{2,80})"/);
+      if (rscTitle) {
+        const c = rscTitle[1].trim();
+        if (!/^\d/.test(c) && !c.includes('http')) author = c;
+      }
+      // P2: "actorName":"Name" (RSC inline)
+      if (author === 'Unknown') {
+        const actorM = win.match(/"actorName"\s*:\s*"([^"]{2,80})"/);
+        if (actorM) author = actorM[1].trim();
+      }
+      // P3: classic Voyager fields
+      if (author === 'Unknown') {
+        const nm = win.match(/"(?:firstName|fullName|localizedName)"\s*:\s*"([^"]{1,60})"/);
+        if (nm) author = nm[1];
+      }
 
       const existing = results.get(url);
       if (existing) {
@@ -141,7 +187,7 @@
         if (author !== 'Unknown') existing.author = author;
       } else {
         results.set(url, { url, likes, comments, reposts, text, author, source: 'network' });
-        console.log(`[Nexora][RSC] URN: ${id} likes=${likes == null ? 'NULL' : likes}. Win:`, win.replace(/\n/g, ' ').slice(0, 200));
+        console.log(`[Nexora][RSC v2.3] URN: ${id} likes=${likes == null ? 'NULL' : likes} author="${author}" textLen=${text.length}`);
       }
     }
 
@@ -209,7 +255,7 @@
         const url = buildUrl(mm[1], mm[2]);
         if (_finalized.has(url)) continue;
 
-        // v2.2: parseCount returns null for missing paths
+        // v2.3: parseCount returns null for missing paths (Voyager + RSC)
         const likes = parseCount(
           dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numLikes') ??
           dig(node, 'socialCounts', 'numLikes') ??
@@ -218,41 +264,71 @@
           dig(node, 'socialActivityCounts', 'numLikes') ??
           dig(node, 'aggregatedReactionCount') ??
           dig(node, 'totalReactions') ??
-          dig(node, 'numLikes') ?? null
+          dig(node, 'numLikes') ??
+          // v2.3 RSC paths
+          dig(node, 'entityResult', 'socialActivity', 'numLikes') ??
+          dig(node, 'entityResult', 'socialActivity', 'totalSocialActivityCounts', 'numLikes') ?? null
         );
+
+        // v2.3: RSC socialProofText fallback ("1,247 reactions")
+        let likesFromProof = null;
+        if (likes == null) {
+          const spRaw = String(
+            dig(node, 'socialProofText') ??
+            dig(node, 'entityResult', 'socialProofText') ?? ''
+          );
+          const spM = spRaw.match(/([\d,]+)\s*reactions?/i);
+          if (spM) likesFromProof = parseInt(spM[1].replace(/,/g, ''), 10) || null;
+        }
+
         const comments = parseCount(
           dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numComments') ??
           dig(node, 'socialCounts', 'numComments') ??
           dig(node, 'socialActivity', 'numComments') ??
-          dig(node, 'numComments') ?? null
+          dig(node, 'numComments') ??
+          dig(node, 'entityResult', 'socialActivity', 'numComments') ?? null
         );
         const reposts = parseCount(
           dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numShares') ??
           dig(node, 'socialCounts', 'numShares') ??
           dig(node, 'socialActivity', 'numShares') ??
-          dig(node, 'numShares') ?? null
+          dig(node, 'numShares') ??
+          dig(node, 'entityResult', 'socialActivity', 'numShares') ?? null
         );
+
+        // v2.3: text — Voyager paths first, then RSC entityResult paths
         const text = String(
           dig(node, 'commentary', 'text', 'text') ??
           dig(node, 'updateMetadata', 'shareCommentary', 'text') ??
-          dig(node, 'content', 'article', 'title') ?? ''
+          dig(node, 'content', 'article', 'title') ??
+          dig(node, 'entityResult', 'summary', 'text') ??
+          dig(node, 'entityResult', 'description', 'text') ??
+          dig(node, 'summary', 'text') ??
+          dig(node, 'description', 'text') ?? ''
         ).substring(0, 600);
+
+        // v2.3: author — Voyager paths first, then RSC entityResult.title.text
         const author = String(
           dig(node, 'actor', 'name', 'text') ??
-          dig(node, 'miniProfile', 'firstName') ?? 'Unknown'
+          dig(node, 'miniProfile', 'firstName') ??
+          dig(node, 'entityResult', 'title', 'text') ??
+          dig(node, 'title', 'text') ??
+          dig(node, 'actorName') ?? 'Unknown'
         ).substring(0, 80);
+
         const postedAtMs = parseCount(dig(node, 'createdAt') ?? null);
+        const resolvedLikes = nullMax(likes, likesFromProof);
 
         if (existingMap.has(url)) {
           const ex = existingMap.get(url);
-          ex.likes    = nullMax(ex.likes, likes);
+          ex.likes    = nullMax(ex.likes, resolvedLikes);
           ex.comments = nullMax(ex.comments, comments);
           ex.reposts  = nullMax(ex.reposts, reposts);
           if (text.length > (ex.text || '').length) ex.text = text;
           if (author !== 'Unknown') ex.author = author;
           if (postedAtMs != null && postedAtMs > 0) ex.postedAtMs = postedAtMs;
         } else {
-          existingMap.set(url, { url, likes, comments, reposts, text, author, postedAtMs, source: 'network' });
+          existingMap.set(url, { url, likes: resolvedLikes, comments, reposts, text, author, postedAtMs, source: 'network' });
         }
       } catch (e) {}
     }
