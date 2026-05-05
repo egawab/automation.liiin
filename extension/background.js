@@ -1243,7 +1243,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         wasDashboardActive: false,
         pendingCommentInsufficientRetry: null
       }, () => {
-        setTimeout(() => checkJobs(), 50);
+        // Wait 1500ms before first poll — gives the dashboard's /api/settings DB write
+        // (systemActive=true) time to propagate to Vercel before we hit /api/extension/jobs.
+        // 50ms was too short and caused immediate 'Idle. active=false' exit.
+        setTimeout(() => checkJobs(), 1500);
       });
     };
     if (message.dashboardUrl && message.userId) {
@@ -1273,7 +1276,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         wasDashboardActive: false,
         pendingCommentInsufficientRetry: null
       }, () => {
-        setTimeout(() => checkJobs(), 50);
+        // Wait 1500ms before first poll — gives the dashboard's /api/settings DB write
+        // (systemActive=true) time to propagate to Vercel before we hit /api/extension/jobs.
+        // 50ms was too short and caused immediate 'Idle. active=false' exit.
+        setTimeout(() => checkJobs(), 1500);
       });
     };
 
