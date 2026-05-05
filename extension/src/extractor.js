@@ -304,18 +304,50 @@
       : null;
 
     const engagement = extractEngagement(card);
+    const postText   = extractText(card);
+    const author     = extractAuthor(card);
+
+    // ── Derive a stable traceId from the activity/ugcPost ID in the URL ──────
+    let traceId = 'no-url';
+    if (postUrl) {
+      const tm = postUrl.match(/(?:activity|ugcPost|share):(\d{10,25})/);
+      traceId = tm ? tm[1] : postUrl.split('/').filter(Boolean).pop() || 'unknown';
+    }
+
+    // ── L1 Forensic log ──────────────────────────────────────────────────────
+    // Init global stats tracker if first post on page
+    if (!window.__pipelineStats) {
+      window.__pipelineStats = { total: 0, domFail: 0, networkFail: 0, transportFail: 0, hydrated: 0 };
+    }
+    window.__pipelineStats.total++;
+    const l1Complete = [postText, author !== 'Unknown' ? author : '', engagement.likes, engagement.comments]
+      .filter(v => v !== null && v !== undefined && v !== '').length;
+    const l1Score = l1Complete / 4;
+    if (l1Score < 0.5) window.__pipelineStats.domFail++;
+
+    console.log('[L1-EXTRACTOR]', {
+      traceId,
+      url:              postUrl,
+      text:             postText ? postText.slice(0, 80) + '…' : '',
+      author,
+      likes:            engagement.likes,
+      comments:         engagement.comments,
+      completenessScore: l1Score,
+      status:           (!postText || author === 'Unknown') ? 'BROKEN_DOM_EXTRACTION' : 'OK',
+    });
 
     const result = {
       post_url:          postUrl,
-      post_text:         extractText(card),
-      likes_count:       engagement.likes,       // null = unknown, 0 = confirmed zero
-      comments_count:    engagement.comments,    // null = unknown
-      shares_count:      engagement.shares,      // null = unknown
-      author:            extractAuthor(card),
+      post_text:         postText,
+      likes_count:       engagement.likes,
+      comments_count:    engagement.comments,
+      shares_count:      engagement.shares,
+      author,
       timestamp:         extractTimestamp(card),
       media_type:        detectMediaType(card),
       extraction_source: 'dom',
       layout_id:         layoutId,
+      _traceId:          traceId,
       _raw: {
         likesSource: engagement._source,
         hasUrl:      !!postUrl,

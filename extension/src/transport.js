@@ -168,6 +168,28 @@
     }
 
     _sentPostsMeta.set(key, { hasEngagement, hasText });
+
+    // ── L3 Forensic log — final payload before queuing for send ───────────
+    {
+      const traceId = post._traceId || key.split(':').pop() || '?';
+      const l3HasText = !!(post.post_text && post.post_text.length > 20);
+      const l3HasAuth = post.author && post.author !== 'Unknown';
+      if (!l3HasText || !l3HasAuth) {
+        if (window.__pipelineStats) window.__pipelineStats.transportFail++;
+      }
+      console.log('[L3-TRANSPORT]', {
+        traceId,
+        post_url:  (post.post_url || '').slice(-50),
+        text:      post.post_text ? post.post_text.slice(0, 60) + '…' : '',
+        author:    post.author || '',
+        likes:     post.likes_count,
+        comments:  post.comments_count,
+        source:    post.extraction_source,
+        isUpgrade: !!post._isUpgrade,
+        status:    (!l3HasText || !l3HasAuth) ? 'PAYLOAD_CORRUPTION' : 'READY_FOR_STORAGE',
+      });
+    }
+
     _buffer.push(post);
 
     const batchSize = cfg().BATCH_SIZE || 10;

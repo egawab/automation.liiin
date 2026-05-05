@@ -351,20 +351,45 @@
 
     const posts = [];
     map.forEach((post, url) => {
+      // derive stable traceId from URL
+      const tm = url.match(/(?:activity|ugcPost|share):(\d{10,25})/);
+      const traceId = tm ? tm[1] : url.split('/').filter(Boolean).pop() || url.slice(-20);
+
+      const hasText   = !!(post.text   && post.text.length > 20);
+      const hasAuthor = !!(post.author && post.author !== 'Unknown');
+      const hasLikes  = post.likes != null;
+
+      // ── L2 Forensic log ─────────────────────────────────────────────────
+      if (!window.__pipelineStats) {
+        window.__pipelineStats = { total: 0, domFail: 0, networkFail: 0, transportFail: 0, hydrated: 0 };
+      }
+      if (!hasText && !hasAuthor) window.__pipelineStats.networkFail++;
+
+      console.log('[L2-INTERCEPTOR]', {
+        traceId,
+        url: url.slice(-60),
+        hasText,
+        hasAuthor,
+        hasLikes,
+        text:    post.text   ? post.text.slice(0, 80) + '…' : '',
+        author:  post.author || '',
+        likes:   post.likes,
+        isUpgrade: !!post._upgrade,
+        status:  (!hasText && !hasAuthor) ? 'NETWORK_MISS' : 'NETWORK_PARTIAL_OR_OK',
+      });
+
       if (_finalized.has(url)) {
         // v2.4 SEARCH_B fix: allow upgrade whenever we now have BETTER data.
-        // Previously only upgraded if likes > 0 — this blocked text/author upgrades
-        // that arrive in a later RSC chunk after the URL was already finalized.
         const hasRealText   = post.text   && post.text.length > 20;
         const hasRealAuthor = post.author && post.author !== 'Unknown';
-        const hasLikes      = post.likes  != null && post.likes >= 0;
-        if (hasRealText || hasRealAuthor || hasLikes) {
-          posts.push({ ...post, _upgrade: true });
+        const hasLikesVal   = post.likes  != null && post.likes >= 0;
+        if (hasRealText || hasRealAuthor || hasLikesVal) {
+          posts.push({ ...post, _upgrade: true, _traceId: traceId });
         }
         return;
       }
       _finalized.add(url); // lock AFTER deciding to emit
-      posts.push(post);
+      posts.push({ ...post, _traceId: traceId });
     });
 
     if (posts.length > 0) {

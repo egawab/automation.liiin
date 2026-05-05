@@ -187,6 +187,28 @@
       // Send immediately — no filter, no threshold
       TR().buffer(post);
 
+      // ── L4 Diagnosis (DOM path) ──────────────────────────────────────
+      {
+        const traceId   = post._traceId || urlKey.split(':').pop() || '?';
+        const l1HasText = !!(post.post_text && post.post_text.length > 20);
+        const l1HasAuth = post.author !== 'Unknown';
+        const l2HasText = !!(netData && netData.text && netData.text.length > 20);
+        const l3HasText = l1HasText || l2HasText; // merged result
+        const l3HasAuth = l1HasAuth || !!(netData && netData.author && netData.author !== 'Unknown');
+
+        let diagnosis;
+        if (!l1HasText && !l2HasText)  diagnosis = 'DOM_AND_NETWORK_FAILURE';
+        else if (l1HasText && !l2HasText) diagnosis = 'NETWORK_EXTRACTION_MISS';
+        else if (l2HasText && !l3HasText) diagnosis = 'TRANSPORT_DROPOUT';
+        else if (!l3HasText || !l3HasAuth) diagnosis = 'HYDRATION_FAILURE';
+        else { diagnosis = 'FULLY_HEALTHY'; window.__pipelineStats && window.__pipelineStats.hydrated++; }
+
+        console.log('[L4-DIAGNOSIS]', traceId, diagnosis, {
+          dom_text: l1HasText, dom_author: l1HasAuth,
+          net_text: l2HasText, final_text: l3HasText, final_author: l3HasAuth,
+        });
+      }
+
       if (_totalFound >= CFG().MAX_POSTS_PER_RUN) {
         L().info(MODULE, `Max posts/run (${CFG().MAX_POSTS_PER_RUN}) reached.`);
         finish('max_posts');
@@ -240,6 +262,22 @@
 
         TR().buffer(syntheticPost);
 
+        // ── L4 Diagnosis (network-only / upgrade path) ────────────────────────
+        {
+          const traceId   = np._traceId || urlKey.split(':').pop() || '?';
+          const hasText   = !!(syntheticPost.post_text && syntheticPost.post_text.length > 20);
+          const hasAuthor = syntheticPost.author !== 'Unknown';
+          let diagnosis;
+          if (!hasText && !hasAuthor) diagnosis = 'DOM_AND_NETWORK_FAILURE';
+          else if (!hasText || !hasAuthor) diagnosis = 'HYDRATION_FAILURE';
+          else { diagnosis = 'FULLY_HEALTHY'; window.__pipelineStats && window.__pipelineStats.hydrated++; }
+
+          console.log('[L4-DIAGNOSIS]', traceId, diagnosis, {
+            source: 'network', hasText, hasAuthor,
+            likes: syntheticPost.likes_count, isUpgrade: alreadySentByDom,
+          });
+        }
+
         if (!alreadySentByDom && _totalFound >= CFG().MAX_POSTS_PER_RUN) {
           _networkBuffer.length = 0;
           finish('max_posts');
@@ -285,6 +323,21 @@
 
     // Final flush of any remaining buffered posts
     try { await TR().flush(); } catch (e) {}
+
+    // ── L5 Global Pipeline Summary ─────────────────────────────────────────
+    try {
+      const s = window.__pipelineStats || { total: 0, domFail: 0, networkFail: 0, transportFail: 0, hydrated: 0 };
+      const pct = (n) => s.total > 0 ? ((n / s.total) * 100).toFixed(1) + '%' : 'N/A';
+      console.log('%c[L5-PIPELINE-SUMMARY]', 'background:#1a1a2e;color:#e94560;font-weight:bold;padding:2px 6px', {
+        totalTracked:        s.total,
+        domFailure:          `${s.domFail}  (${pct(s.domFail)})`,
+        networkFailure:      `${s.networkFail}  (${pct(s.networkFail)})`,
+        transportFailure:    `${s.transportFail}  (${pct(s.transportFail)})`,
+        fullyHydrated:       `${s.hydrated}  (${pct(s.hydrated)})`,
+        dominantFailureLayer: s.domFail >= s.networkFail ? 'DOM' : 'NETWORK',
+        runReason:           reason,
+      });
+    } catch (e) {}
 
     const qualified = TR().getSentCount();
     L().info(MODULE, `Run complete. reason=${reason} found=${_totalFound} sent=${qualified}`);
