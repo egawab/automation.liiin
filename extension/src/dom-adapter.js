@@ -96,6 +96,81 @@
     return n;
   }
 
+  // ── Strategy 0: Dynamic Score-Based Discovery ────────────────────────────
+  function calculateScore(node) {
+    if (!node || node.nodeType !== 1) return 0;
+    let score = 0;
+    
+    if (node.querySelector('time')) score += 3;
+    if (node.querySelector('a[href*="/in/"], a[href*="/company/"]')) score += 3;
+    
+    const textLen = (node.textContent || '').replace(/\s+/g, ' ').trim().length;
+    if (textLen > 40) score += 2;
+    
+    const likeSignals = cfg().LIKE_SIGNALS || ['reaction', 'like'];
+    const commentSignals = cfg().COMMENT_SIGNALS || ['comment'];
+    let hasEngagement = false;
+    node.querySelectorAll('button[aria-label], span[aria-label]').forEach(el => {
+      const lbl = (el.getAttribute('aria-label') || '').toLowerCase();
+      if (likeSignals.some(s => lbl.includes(s)) || commentSignals.some(s => lbl.includes(s))) {
+        hasEngagement = true;
+      }
+    });
+    if (hasEngagement) score += 2;
+    
+    const pCount = node.querySelectorAll('p, span[dir="ltr"], span[dir="rtl"]').length;
+    if (pCount > 2) score += 1;
+    
+    return score;
+  }
+
+  function strategyScoreBased() {
+    const candidates = [];
+    const container = getFeedContainer();
+    
+    const nodes = container.querySelectorAll('li, div');
+    for (const node of nodes) {
+      if (STOP_TAGS.has(node.tagName)) continue;
+      // Skip obviously tiny non-card elements
+      if (node.scrollHeight < 60 && node.offsetHeight < 60) continue;
+      
+      const score = calculateScore(node);
+      if (score >= 5) candidates.push({ node, score });
+    }
+    
+    // Sort by score descending
+    candidates.sort((a, b) => b.score - a.score);
+    
+    const found = [];
+    const seen = new Set();
+    
+    // Adaptive threshold: start at 7, drop to 5 if too few found
+    let threshold = 7;
+    if (candidates.filter(c => c.score >= 7).length < 2) {
+      threshold = 5;
+    }
+    
+    for (const c of candidates) {
+      if (c.score < threshold) continue;
+      
+      let isOverlap = false;
+      for (const existing of found) {
+        if (existing.contains(c.node) || c.node.contains(existing)) {
+          isOverlap = true;
+          break;
+        }
+      }
+      
+      if (!isOverlap && !seen.has(c.node)) {
+        seen.add(c.node);
+        found.push(c.node);
+      }
+    }
+    
+    L && L.debug(M, `S0 scoreBased (threshold ${threshold}): ${found.length}`);
+    return found;
+  }
+
   // ── Strategy 1: Direct attribute container query ───────────────────────────
   function strategyContainerAttr() {
     const found = [];
@@ -249,8 +324,13 @@
     const LAYOUTS = (window.__NexoraLayoutDetector || {}).LAYOUTS || {};
     const dedupMap = new Map(); // card element → true
 
-    // Always run S1 + S2
-    [...strategyContainerAttr(), ...strategyUrnAttr()].forEach(c => dedupMap.set(c, true));
+    // S0: Dynamic Scoring Engine (Primary Strategy)
+    strategyScoreBased().forEach(c => dedupMap.set(c, true));
+
+    // S1 + S2 (Fallback semantic strategies)
+    if (dedupMap.size < 2) {
+      [...strategyContainerAttr(), ...strategyUrnAttr()].forEach(c => dedupMap.set(c, true));
+    }
 
     // S3 for Layout B (no data-urn) or UNKNOWN
     if (layout === LAYOUTS.SEARCH_B || layout === LAYOUTS.UNKNOWN || dedupMap.size === 0) {
