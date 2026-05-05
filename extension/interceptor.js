@@ -1,278 +1,350 @@
 /**
- * interceptor.js — LinkedIn Network Interception Layer v2
- * Runs in the page's MAIN world (injected via <script> tag from content.js).
+ * Nexora Network Interceptor v3.0 — FULL-BODY SCAN (SEARCH_B Rebuild)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * v3.0 Architecture:
+ *  - FULL-BODY scan replaces windowed ±800/1500 char scan.
+ *    RSC streams place URN and metadata in separate chunks; a local window
+ *    around each URN miss cross-chunk metadata entirely. Full-body scan
+ *    builds a complete URN→metadata map from the entire response body.
  *
- * ARCHITECTURE: Dual-pass extraction
- * Pass 1 (Raw Text Regex): Scan the raw response body as a string with a single
- *   regex to find ALL activity URNs. This is O(n) and catches every post type
- *   (feed, repost, video, carousel, article) regardless of JSON nesting depth.
+ *  - Two-pass design per response body:
+ *      Pass A: Extract ALL metric/text/author key→value pairs globally.
+ *      Pass B: Find ALL URNs; map each URN to the global metadata.
  *
- * Pass 2 (Windowed Metric Extraction): For each URN found, extract a ~800-char
- *   text window around it and regex-scan it for numLikes/numComments/count
- *   values. No recursive tree walking, no JSON object allocation per node.
+ *  - Removed _finalized Set. That gate blocked legitimate data upgrades.
+ *    Deduplication is handled by the engine's enrichment store.
  *
- * Pass 3 (Structured JSON Bonus): Also do a targeted structured parse on the
- *   full JSON for known high-confidence paths. Merges with Pass 1 results.
+ *  - Scans <code> elements (SEARCH_B pre-load data) via MutationObserver.
+ *
+ *  - Patches both fetch and XHR in MAIN world.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
   'use strict';
 
-  if (window.__LI_INTERCEPTOR_ACTIVE__) return;
-  window.__LI_INTERCEPTOR_ACTIVE__ = true;
+  if (window.__NEXORA_INTERCEPTOR_V3__) return;
+  window.__NEXORA_INTERCEPTOR_V3__ = true;
 
-  // ── URL filter ──────────────────────────────────────────────────────────────
+  // ── URL filter ─────────────────────────────────────────────────────────────
   const INTERCEPT_PATTERNS = [
-    '/voyager/api/feed',
-    '/voyager/api/search',
-    '/voyager/api/graphql',
-    '/graphql?',
-    'graphql?queryId',
-    'com.linkedin.voyager.feed',
-    'feedUpdates',
-    'search/hits',
-    'dash/posts',
-    'dash/feed',
-    'socialActions',
-    // Account B (newer LinkedIn variant) uses these endpoints:
-    'dash/updates',
-    'dash/feedUpdates',
-    'fsd_update',
-    'fsd_feedUpdate',
-    'com.linkedin.voyager.dash.feed',
-    'com.linkedin.voyager.dash.search',
+    '/flagship-web/rsc-action/',
+    'contentSearchResults',
+    'searchHomeRequestAction',
+    '/voyager/api/',
+    '/graphql?', 'graphql?queryId',
+    'feedUpdates', 'search/hits', 'searchHits', 'fsd_update',
+    'numLikes', 'totalReactionCount', 'urn:li:activity',
+    'aggregatedReactionCount', 'reactionCount', 'socialProofText',
   ];
+
   function shouldIntercept(url) {
     if (!url) return false;
     const u = String(url);
+    if (!u.includes('linkedin.com') && !u.startsWith('/')) return false;
+    if (u.includes('/static/') || u.endsWith('.js') || u.endsWith('.css') ||
+        u.endsWith('.png') || u.endsWith('.jpg') || u.endsWith('.woff2') ||
+        u.endsWith('.woff')) return false;
     return INTERCEPT_PATTERNS.some(p => u.includes(p));
   }
 
-  // ── Persistent global dedup — never post the same URN twice ─────────────────
-  // Module-level (not cleared per response) so duplicates across multiple API
-  // calls are also filtered out.
-  const _globalSeen = new Set();
+  // ── URN patterns ───────────────────────────────────────────────────────────
+  const URN_RE_GLOBAL  = /urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
+  const FSD_RE_GLOBAL  = /urn:li:fsd_(?:update|entityResult)[:(]urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
 
-  // ── URN patterns ────────────────────────────────────────────────────────────
-  // P1: direct activity/ugcPost/share URNs (Account A / classic LinkedIn)
-  const URN_GLOBAL_RE = /urn:li:(activity|ugcPost|share):(\d+)/gi;
-  const URN_SINGLE_RE = /urn:li:(activity|ugcPost|share):(\d+)/i;
-  // P2: fsd_update wrapper URNs (Account B / newer LinkedIn dash API)
-  //   Format: urn:li:fsd_update:(urn:li:activity:1234567890123,FEED_DETAIL,...)
-  //   or:     urn:li:fsd_update:urn:li:activity:1234567890123
-  const FSD_GLOBAL_RE = /urn:li:fsd_update:[:(]urn:li:(activity|ugcPost|share):(\d+)/gi;
-  const FSD_SINGLE_RE = /urn:li:fsd_update:[:(]urn:li:(activity|ugcPost|share):(\d+)/i;
-
-  function urnToUrl(type, id) {
-    const t = type.toLowerCase();
-    if (t === 'ugcpost') return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${id}/`;
-    if (t === 'share')   return `https://www.linkedin.com/feed/update/urn:li:share:${id}/`;
-    return `https://www.linkedin.com/feed/update/urn:li:activity:${id}/`;
+  function buildUrl(type, id) {
+    const t = (type || '').toLowerCase();
+    if (t === 'ugcpost') return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${id}`;
+    if (t === 'share')   return `https://www.linkedin.com/feed/update/urn:li:share:${id}`;
+    return `https://www.linkedin.com/feed/update/urn:li:activity:${id}`;
   }
 
-  // ── Number parser — handles "1.2K", "1,247", "3M", plain ints ──────────────
   function parseCount(v) {
-    if (v == null) return 0;
-    if (typeof v === 'number') return Math.floor(v);
+    if (v == null) return null;
+    if (typeof v === 'number') return isNaN(v) ? null : Math.floor(v);
     const s = String(v).replace(/,/g, '').trim().toUpperCase();
-    if (s.endsWith('K')) return Math.round(parseFloat(s) * 1000);
-    if (s.endsWith('M')) return Math.round(parseFloat(s) * 1_000_000);
-    return Math.floor(parseFloat(s)) || 0;
+    if (!s) return null;
+    if (s.endsWith('K')) { const n = Math.round(parseFloat(s) * 1000); return isNaN(n) ? null : n; }
+    if (s.endsWith('M')) { const n = Math.round(parseFloat(s) * 1e6);  return isNaN(n) ? null : n; }
+    const n = Math.floor(parseFloat(s));
+    return isNaN(n) ? null : n;
   }
 
-  // ── Safe deep getter ─────────────────────────────────────────────────────────
-  function dig(obj, ...keys) {
-    for (const k of keys) { if (obj == null) return undefined; obj = obj[k]; }
-    return obj;
+  function nullMax(a, b) {
+    if (a == null && b == null) return null;
+    if (a == null) return b;
+    if (b == null) return a;
+    return Math.max(a, b);
   }
 
-  // ── PASS 1+2: Raw text scan ──────────────────────────────────────────────────
-  function rawTextScan(body) {
-    const results = new Map();
-
-    const processHit = (type, id, matchIndex) => {
-      const url = urnToUrl(type, id);
-      if (_globalSeen.has(url)) return;
-      const start = Math.max(0, matchIndex - 400);
-      const end   = Math.min(body.length, matchIndex + 800);
-      const win   = body.slice(start, end);
-      let likes = 0, comments = 0, reposts = 0, text = '', author = 'Unknown';
-      const likesM  = win.match(/"(?:numLikes|totalReactionCount|likeCount|reactionCount)"\s*:\s*(\d+)/);
-      if (likesM)  likes    = parseInt(likesM[1], 10);
-      const commM   = win.match(/"(?:numComments|commentCount|totalCommentCount)"\s*:\s*(\d+)/);
-      if (commM)   comments = parseInt(commM[1], 10);
-      const shareM  = win.match(/"(?:numShares|repostCount|shareCount)"\s*:\s*(\d+)/);
-      if (shareM)  reposts  = parseInt(shareM[1], 10);
-      const textM   = win.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      if (textM)   text     = textM[1].replace(/\\n/g, ' ').replace(/\\u[\dA-Fa-f]{4}/g, '').substring(0, 600);
-      const nameM   = win.match(/"(?:firstName|fullName|localizedName)"\s*:\s*"([^"]{1,60})"/);
-      if (nameM)   author   = nameM[1];
-      const existing = results.get(url);
-      // Merge: keep highest likes value across multiple window hits for same URN
-      if (existing) {
-        existing.likes    = Math.max(existing.likes, likes);
-        existing.comments = Math.max(existing.comments, comments);
-        existing.reposts  = Math.max(existing.reposts, reposts);
-        if (text.length > existing.text.length) existing.text = text;
-      } else {
-        results.set(url, { url, urn: `urn:li:${type}:${id}`, likes, comments, reposts, text, author, postedAtMs: 0, source: 'network' });
-      }
+  // ── PASS A: Extract global metadata from entire body ─────────────────────
+  // Scans the FULL body for all key→value pairs once, building a metadata
+  // object. This is O(n) on body length and avoids the cross-chunk miss.
+  function extractGlobalMeta(body) {
+    const meta = {
+      likes:    null,
+      comments: null,
+      reposts:  null,
+      texts:    [],       // all text candidates — we pick longest
+      authors:  [],       // all author candidates
     };
 
-    // Pass 1: classic activity/ugcPost/share URNs (Account A)
-    let m;
-    URN_GLOBAL_RE.lastIndex = 0;
-    while ((m = URN_GLOBAL_RE.exec(body)) !== null) processHit(m[1], m[2], m.index);
-
-    // Pass 2: fsd_update wrapper URNs (Account B / newer LinkedIn dash API)
-    FSD_GLOBAL_RE.lastIndex = 0;
-    while ((m = FSD_GLOBAL_RE.exec(body)) !== null) processHit(m[1], m[2], m.index);
-
-    if (results.size > 0) console.log(`[LI-Interceptor] rawTextScan: ${results.size} URNs (P1+fsd_update)`);
-    return results;
-  }
-
-  // ── PASS 3: Structured JSON extraction (bonus — catches metric paths that ────
-  // live at different nodes from the URN in the tree)
-  function structuredScan(body, existingMap) {
-    let json;
-    try { json = JSON.parse(body); } catch (e) { return; }
-
-    // LinkedIn wraps results in 'included', 'elements', 'data', or root arrays
-    const pools = [];
-    if (Array.isArray(json)) pools.push(...json);
-    if (json && typeof json === 'object') {
-      ['included', 'elements', 'data', 'results', 'hits', 'items'].forEach(k => {
-        if (Array.isArray(json[k])) pools.push(...json[k]);
-      });
-      if (json.data && typeof json.data === 'object') {
-        Object.values(json.data).forEach(v => { if (Array.isArray(v)) pools.push(...v); });
+    // ── Engagement metrics ───────────────────────────────────────────────
+    // Likes: try many known key names, take the MAX found
+    const likeKeys = [
+      'numLikes','totalReactionCount','likeCount','reactionCount',
+      'reaction_count','numReactions','totalLikeCount',
+      'aggregatedReactionCount','totalReactions','aggregatedTotalReactions',
+    ];
+    for (const k of likeKeys) {
+      const re = new RegExp(`"${k}"\\s*:\\s*(\\d+)`, 'g');
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const n = parseInt(m[1], 10);
+        if (!isNaN(n)) meta.likes = meta.likes == null ? n : Math.max(meta.likes, n);
       }
     }
 
-    for (const node of pools) {
-      if (!node || typeof node !== 'object') continue;
-      try {
-        // Find URN in this node
-        const urnRaw =
-          node.updateUrn || node.entityUrn || node.dashEntityUrn ||
-          node.urn || node.preDashEntityUrn ||
-          // Account B fsd_update paths
-          dig(node, 'updateV2', 'entityUrn') ||
-          dig(node, 'updateV2', 'dashEntityUrn') ||
-          dig(node, 'update', 'entityUrn') ||
-          dig(node, 'entityResult', 'entityUrn') ||
-          dig(node, 'socialContent', 'entityUrn') || '';
-
-        // Try extracting from fsd_update wrapper first (Account B), then classic URN
-        const urnStr = String(urnRaw);
-        let mm = FSD_SINGLE_RE.exec(urnStr) || URN_SINGLE_RE.exec(urnStr);
-        if (!mm) continue;
-        const url = urnToUrl(mm[1], mm[2]);
-
-        const likes = parseCount(
-          dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numLikes') ??
-          dig(node, 'socialCounts', 'numLikes') ??
-          dig(node, 'reactionSummary', 'count') ??
-          dig(node, 'threadSocialActivityCounts', 'numLikes') ??
-          dig(node, 'numLikes') ?? dig(node, 'likeCount') ?? 0
-        );
-        const comments = parseCount(
-          dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numComments') ??
-          dig(node, 'socialCounts', 'numComments') ??
-          dig(node, 'commentSummary', 'count') ??
-          dig(node, 'numComments') ?? dig(node, 'commentCount') ?? 0
-        );
-        const reposts = parseCount(
-          dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numShares') ??
-          dig(node, 'socialCounts', 'numShares') ??
-          dig(node, 'numShares') ?? 0
-        );
-        const text = String(
-          dig(node, 'commentary', 'text', 'text') ??
-          dig(node, 'updateMetadata', 'shareCommentary', 'text') ??
-          dig(node, 'content', 'article', 'title') ??
-          dig(node, 'subject', 'text') ?? dig(node, 'text', 'text') ?? ''
-        ).substring(0, 600);
-        const author = String(
-          dig(node, 'actor', 'name', 'text') ??
-          dig(node, 'author', 'name', 'text') ??
-          dig(node, 'miniProfile', 'firstName') ?? 'Unknown'
-        ).substring(0, 80);
-        const postedAtMs = parseCount(dig(node, 'createdAt') ?? dig(node, 'publishedAt') ?? 0);
-
-        if (existingMap.has(url)) {
-          // Upgrade raw-text result with structured data (usually more accurate)
-          const ex = existingMap.get(url);
-          ex.likes    = Math.max(ex.likes, likes);
-          ex.comments = Math.max(ex.comments, comments);
-          ex.reposts  = Math.max(ex.reposts, reposts);
-          if (text.length > ex.text.length) ex.text = text;
-          if (author !== 'Unknown') ex.author = author;
-          if (postedAtMs > 0) ex.postedAtMs = postedAtMs;
-        } else if (!_globalSeen.has(url)) {
-          existingMap.set(url, { url, urn: String(urnRaw), likes, comments, reposts, text, author, postedAtMs, source: 'network' });
+    // socialProofText fallback ("1,247 reactions")
+    if (meta.likes == null) {
+      const spRe = /"socialProofText"\s*:\s*"([^"]*)"/g;
+      let m;
+      while ((m = spRe.exec(body)) !== null) {
+        const cnt = m[1].match(/([\d,]+)\s*reactions?/i);
+        if (cnt) {
+          const n = parseInt(cnt[1].replace(/,/g, ''), 10);
+          if (!isNaN(n)) meta.likes = meta.likes == null ? n : Math.max(meta.likes, n);
         }
-      } catch (e) {}
+      }
     }
+
+    // Inline "N reactions" text anywhere in body
+    if (meta.likes == null) {
+      const inlineRe = /([\d,]+)\s+reactions?\b/gi;
+      let m;
+      while ((m = inlineRe.exec(body)) !== null) {
+        const n = parseInt(m[1].replace(/,/g, ''), 10);
+        if (!isNaN(n) && n > 0) meta.likes = meta.likes == null ? n : Math.max(meta.likes, n);
+      }
+    }
+
+    // Comments
+    const commentKeys = ['numComments','commentCount','totalCommentCount','commentsCount','totalSocialCommentCount'];
+    for (const k of commentKeys) {
+      const re = new RegExp(`"${k}"\\s*:\\s*(\\d+)`, 'g');
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const n = parseInt(m[1], 10);
+        if (!isNaN(n)) meta.comments = meta.comments == null ? n : Math.max(meta.comments, n);
+      }
+    }
+
+    // Reposts/shares
+    const shareKeys = ['numShares','repostCount','shareCount','sharesCount'];
+    for (const k of shareKeys) {
+      const re = new RegExp(`"${k}"\\s*:\\s*(\\d+)`, 'g');
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const n = parseInt(m[1], 10);
+        if (!isNaN(n)) meta.reposts = meta.reposts == null ? n : Math.max(meta.reposts, n);
+      }
+    }
+
+    // ── Text extraction ───────────────────────────────────────────────────
+    // Priority 1: "summary":{"text":"..."} — RSC SEARCH_B post content
+    {
+      const re = /"summary"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        meta.texts.push(m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"'));
+      }
+    }
+    // Priority 2: "commentary":{"text":"..."}
+    {
+      const re = /"commentary"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        meta.texts.push(m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"'));
+      }
+    }
+    // Priority 3: "description":{"text":"..."}
+    {
+      const re = /"description"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        meta.texts.push(m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"'));
+      }
+    }
+    // Priority 4: bare "text":"..." (catch-all)
+    {
+      const re = /"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const t = m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"');
+        if (t.length >= 20 && t.length < 5000) meta.texts.push(t);
+      }
+    }
+
+    // ── Author extraction ────────────────────────────────────────────────
+    // P1: RSC "title":{"text":"Name"} — SEARCH_B entityResult
+    {
+      const re = /"title"\s*:\s*\{[^{}]*?"text"\s*:\s*"([^"]{2,80})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const c = m[1].trim();
+        if (!/^\d/.test(c) && !c.includes('http') && !c.includes('linkedin')) {
+          meta.authors.push(c);
+        }
+      }
+    }
+    // P2: "actorName":"Name"
+    {
+      const re = /"actorName"\s*:\s*"([^"]{2,80})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) meta.authors.push(m[1].trim());
+    }
+    // P3: Voyager "firstName"/"fullName"/"localizedName"
+    {
+      const re = /"(?:firstName|fullName|localizedName)"\s*:\s*"([^"]{1,60})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) meta.authors.push(m[1].trim());
+    }
+    // P4: "name":{"text":"Name"} (actor.name.text)
+    {
+      const re = /"name"\s*:\s*\{[^{}]*?"text"\s*:\s*"([^"]{2,80})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const c = m[1].trim();
+        if (!/^\d/.test(c) && !c.includes('http')) meta.authors.push(c);
+      }
+    }
+
+    return meta;
   }
 
-  // ── Main response processor ──────────────────────────────────────────────────
-  function processResponseBody(body, sourceUrl) {
+  // ── PASS B: Find all URNs, assign global metadata ───────────────────────
+  function processBody(body, sourceUrl) {
     if (!body || body.length < 50) return;
 
-    // Pass 1+2: raw text regex scan — O(n), catches every post type
-    const map = rawTextScan(body);
+    // Extract global metadata once from full body
+    const meta = extractGlobalMeta(body);
 
-    // Pass 3: structured JSON scan — merges/upgrades Pass 1 results
-    if (body.length < 5_000_000) { // skip for absurdly large responses
-      structuredScan(body, map);
-    }
+    // Pick best text (longest)
+    const bestText = meta.texts.reduce((best, t) => t.length > best.length ? t : best, '');
+    // Pick best author (first non-empty, non-numeric)
+    const bestAuthor = meta.authors.find(a => a && a.length > 1 && !/^\d/.test(a)) || 'Unknown';
 
-    if (map.size === 0) return;
-
-    // Commit new URNs to global dedup set and send to content script
+    // Collect all unique URN IDs from body
+    const seen = new Set();
     const posts = [];
-    map.forEach((post, url) => {
-      if (_globalSeen.has(url)) return;
-      _globalSeen.add(url);
-      posts.push(post);
-    });
 
-    if (posts.length > 0) {
-      window.postMessage({ type: '__LI_INTERCEPTED_POSTS__', posts, sourceUrl }, '*');
-      console.log(`[LI-Interceptor] Captured ${posts.length} posts from ${sourceUrl.split('?')[0].split('/').slice(-2).join('/')}`);
+    function processMatch(type, id) {
+      const url = buildUrl(type, id);
+      if (seen.has(url)) return;
+      seen.add(url);
+
+      const post = {
+        url,
+        likes:    meta.likes,
+        comments: meta.comments,
+        reposts:  meta.reposts,
+        text:     bestText.substring(0, 5000),
+        author:   bestAuthor,
+        source:   'network',
+      };
+
+      posts.push(post);
+      console.log(`[Nexora][Interceptor v3.0] URN: ${id} likes=${meta.likes == null ? 'null' : meta.likes} author="${bestAuthor}" textLen=${bestText.length}`);
     }
+
+    URN_RE_GLOBAL.lastIndex = 0;
+    FSD_RE_GLOBAL.lastIndex = 0;
+
+    let m;
+    while ((m = URN_RE_GLOBAL.exec(body)) !== null) processMatch(m[1], m[2]);
+    while ((m = FSD_RE_GLOBAL.exec(body)) !== null) processMatch(m[1], m[2]);
+
+    if (posts.length === 0) return;
+
+    // Publish to window global (for engine's network listener)
+    window.__NexoraEmbeddedPosts = window.__NexoraEmbeddedPosts || [];
+    window.__NexoraEmbeddedPosts.push(...posts);
+    window.postMessage({ type: '__NEXORA_NETWORK_POSTS__', posts, sourceUrl }, '*');
+    console.log(`[Nexora][Interceptor v3.0] ${posts.length} posts from ${(sourceUrl || '').split('?')[0].slice(-60)}`);
   }
 
-  // ── Monkey-patch window.fetch ────────────────────────────────────────────────
+  // ── Scan <code> elements (SEARCH_B pre-load) ─────────────────────────────
+  const _scannedCodes = new WeakSet();
+
+  function scanEmbeddedData() {
+    let found = 0;
+    document.querySelectorAll('code').forEach(el => {
+      if (_scannedCodes.has(el)) return;
+      _scannedCodes.add(el);
+      try {
+        const text = el.textContent || '';
+        if (text.length > 80 && text.includes('urn:li:')) {
+          processBody(text, 'bpr:' + (el.id || 'inline'));
+          found++;
+        }
+      } catch (e) {}
+    });
+    if (found > 0) console.log(`[Nexora][Interceptor v3.0] Scanned ${found} <code> elements`);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(scanEmbeddedData, 200));
+  } else {
+    setTimeout(scanEmbeddedData, 200);
+  }
+
+  // Watch for dynamically injected <code> blocks
+  const _codeObserver = new MutationObserver(() => scanEmbeddedData());
+  if (document.body) {
+    _codeObserver.observe(document.body, { childList: true, subtree: true });
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      _codeObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    });
+  }
+
+  // ── Patch fetch ────────────────────────────────────────────────────────────
   const _origFetch = window.fetch.bind(window);
   window.fetch = function (...args) {
-    const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+    const url = typeof args[0] === 'string' ? args[0] : ((args[0] || {}).url || '');
     const prom = _origFetch(...args);
     if (shouldIntercept(url)) {
       prom.then(resp => {
-        try { resp.clone().text().then(body => processResponseBody(body, url)).catch(() => {}); } catch (e) {}
+        try {
+          resp.clone().text().then(b => {
+            if (b && b.length > 50) processBody(b, url);
+          }).catch(() => {});
+        } catch (e) {}
       }).catch(() => {});
     }
     return prom;
   };
 
-  // ── Monkey-patch XMLHttpRequest ──────────────────────────────────────────────
+  // ── Patch XHR ─────────────────────────────────────────────────────────────
   const _origOpen = XMLHttpRequest.prototype.open;
   const _origSend = XMLHttpRequest.prototype.send;
 
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    this._interceptUrl = String(url || '');
+    this._nexoraUrl = String(url || '');
     return _origOpen.apply(this, [method, url, ...rest]);
   };
+
   XMLHttpRequest.prototype.send = function (...args) {
-    if (this._interceptUrl && shouldIntercept(this._interceptUrl)) {
+    if (this._nexoraUrl && shouldIntercept(this._nexoraUrl)) {
       this.addEventListener('load', () => {
-        try { processResponseBody(this.responseText, this._interceptUrl); } catch (e) {}
+        try {
+          if (this.responseText && this.responseText.length > 50) {
+            processBody(this.responseText, this._nexoraUrl);
+          }
+        } catch (e) {}
       }, { once: true });
     }
     return _origSend.apply(this, args);
   };
 
-  console.log('[LI-Interceptor] v2 ✓ dual-pass fetch+XHR interception active on', location.href);
+  console.log('[Nexora][Interceptor v3.0] FULL-BODY SCAN active on', location.href.slice(0, 80));
 })();

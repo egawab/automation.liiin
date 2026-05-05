@@ -1,33 +1,35 @@
 /**
- * Nexora Network Interceptor v2.3  — RSC FULL-METADATA FIX (SEARCH_B)
+ * Nexora Network Interceptor v3.0 — FULL-BODY SCAN (SEARCH_B Rebuild)
  * ─────────────────────────────────────────────────────────────────────────────
- * v2.3 SEARCH_B Output Layer Fix:
- *  - rawTextScan() window expanded: 800 chars before URN, 1500 after.
- *    RSC streams often place the URN and payload (author/text/metrics)
- *    far apart; the old ±400/800 window missed most metadata.
- *  - RSC-specific author patterns added:
- *      "title":{..."text":"<name>"} and "actorName":"<name>"
- *  - RSC-specific text patterns added:
- *      "summary":{..."text":"<content>"} / "commentary":{..."text":"..."}
- *      picks LONGEST matching "text" field (not first).
- *  - structuredScan() now resolves RSC entityResult paths:
- *      entityResult.title.text      → author
- *      entityResult.summary.text    → post text
- *      entityResult.socialProofText → reaction count fallback
- *  - All v2.2 improvements preserved (null-safe, _finalized deferral, etc.)
+ * v3.0 Architecture:
+ *  - FULL-BODY scan replaces windowed ±800/1500 char scan.
+ *    RSC streams place URN and metadata in separate chunks; a local window
+ *    around each URN miss cross-chunk metadata entirely. Full-body scan
+ *    builds a complete URN→metadata map from the entire response body.
+ *
+ *  - Two-pass design per response body:
+ *      Pass A: Extract ALL metric/text/author key→value pairs globally.
+ *      Pass B: Find ALL URNs; map each URN to the global metadata.
+ *
+ *  - Removed _finalized Set. That gate blocked legitimate data upgrades.
+ *    Deduplication is handled by the engine's enrichment store.
+ *
+ *  - Scans <code> elements (SEARCH_B pre-load data) via MutationObserver.
+ *
+ *  - Patches both fetch and XHR in MAIN world.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
   'use strict';
 
-  if (window.__NEXORA_INTERCEPTOR_ACTIVE__) return;
-  window.__NEXORA_INTERCEPTOR_ACTIVE__ = true;
+  if (window.__NEXORA_INTERCEPTOR_V3__) return;
+  window.__NEXORA_INTERCEPTOR_V3__ = true;
 
+  // ── URL filter ─────────────────────────────────────────────────────────────
   const INTERCEPT_PATTERNS = [
     '/flagship-web/rsc-action/',
     'contentSearchResults',
     'searchHomeRequestAction',
-    'updateSearchHistory',
     '/voyager/api/',
     '/graphql?', 'graphql?queryId',
     'feedUpdates', 'search/hits', 'searchHits', 'fsd_update',
@@ -40,39 +42,33 @@
     const u = String(url);
     if (!u.includes('linkedin.com') && !u.startsWith('/')) return false;
     if (u.includes('/static/') || u.endsWith('.js') || u.endsWith('.css') ||
-        u.endsWith('.png') || u.endsWith('.jpg') || u.endsWith('.woff')) return false;
+        u.endsWith('.png') || u.endsWith('.jpg') || u.endsWith('.woff2') ||
+        u.endsWith('.woff')) return false;
     return INTERCEPT_PATTERNS.some(p => u.includes(p));
   }
 
-  // v2.2: Track URLs that have been emitted (locked) vs pending (upgradeable)
-  const _finalized = new Set();
-
-  const URN_RE     = /urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
-  const URN_SINGLE = /urn:li:(activity|ugcPost|share):(\d{10,25})/i;
-  // v2.3: also matches fsd_entityResult (SEARCH_B API format)
-  const FSD_RE     = /urn:li:fsd_(?:update|entityResult)[:(]urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
-  const FSD_SINGLE = /urn:li:fsd_(?:update|entityResult)[:(]urn:li:(activity|ugcPost|share):(\d{10,25})/i;
+  // ── URN patterns ───────────────────────────────────────────────────────────
+  const URN_RE_GLOBAL  = /urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
+  const FSD_RE_GLOBAL  = /urn:li:fsd_(?:update|entityResult)[:(]urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
 
   function buildUrl(type, id) {
-    const t = type.toLowerCase();
+    const t = (type || '').toLowerCase();
     if (t === 'ugcpost') return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${id}`;
     if (t === 'share')   return `https://www.linkedin.com/feed/update/urn:li:share:${id}`;
     return `https://www.linkedin.com/feed/update/urn:li:activity:${id}`;
   }
 
-  // v2.2: null-safe — returns null for missing/unresolvable input (not 0)
   function parseCount(v) {
     if (v == null) return null;
     if (typeof v === 'number') return isNaN(v) ? null : Math.floor(v);
     const s = String(v).replace(/,/g, '').trim().toUpperCase();
     if (!s) return null;
-    if (s.endsWith('K')) { const n = Math.round(parseFloat(s) * 1000);   return isNaN(n) ? null : n; }
-    if (s.endsWith('M')) { const n = Math.round(parseFloat(s) * 1e6);    return isNaN(n) ? null : n; }
+    if (s.endsWith('K')) { const n = Math.round(parseFloat(s) * 1000); return isNaN(n) ? null : n; }
+    if (s.endsWith('M')) { const n = Math.round(parseFloat(s) * 1e6);  return isNaN(n) ? null : n; }
     const n = Math.floor(parseFloat(s));
     return isNaN(n) ? null : n;
   }
 
-  // Null-safe max: null is treated as "unknown", not zero
   function nullMax(a, b) {
     if (a == null && b == null) return null;
     if (a == null) return b;
@@ -80,331 +76,207 @@
     return Math.max(a, b);
   }
 
-  function dig(obj, ...keys) {
-    for (const k of keys) { if (obj == null) return undefined; obj = obj[k]; }
-    return obj;
+  // ── PASS A: Extract global metadata from entire body ─────────────────────
+  // Scans the FULL body for all key→value pairs once, building a metadata
+  // object. This is O(n) on body length and avoids the cross-chunk miss.
+  function extractGlobalMeta(body) {
+    const meta = {
+      likes:    null,
+      comments: null,
+      reposts:  null,
+      texts:    [],       // all text candidates — we pick longest
+      authors:  [],       // all author candidates
+    };
+
+    // ── Engagement metrics ───────────────────────────────────────────────
+    // Likes: try many known key names, take the MAX found
+    const likeKeys = [
+      'numLikes','totalReactionCount','likeCount','reactionCount',
+      'reaction_count','numReactions','totalLikeCount',
+      'aggregatedReactionCount','totalReactions','aggregatedTotalReactions',
+    ];
+    for (const k of likeKeys) {
+      const re = new RegExp(`"${k}"\\s*:\\s*(\\d+)`, 'g');
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const n = parseInt(m[1], 10);
+        if (!isNaN(n)) meta.likes = meta.likes == null ? n : Math.max(meta.likes, n);
+      }
+    }
+
+    // socialProofText fallback ("1,247 reactions")
+    if (meta.likes == null) {
+      const spRe = /"socialProofText"\s*:\s*"([^"]*)"/g;
+      let m;
+      while ((m = spRe.exec(body)) !== null) {
+        const cnt = m[1].match(/([\d,]+)\s*reactions?/i);
+        if (cnt) {
+          const n = parseInt(cnt[1].replace(/,/g, ''), 10);
+          if (!isNaN(n)) meta.likes = meta.likes == null ? n : Math.max(meta.likes, n);
+        }
+      }
+    }
+
+    // Inline "N reactions" text anywhere in body
+    if (meta.likes == null) {
+      const inlineRe = /([\d,]+)\s+reactions?\b/gi;
+      let m;
+      while ((m = inlineRe.exec(body)) !== null) {
+        const n = parseInt(m[1].replace(/,/g, ''), 10);
+        if (!isNaN(n) && n > 0) meta.likes = meta.likes == null ? n : Math.max(meta.likes, n);
+      }
+    }
+
+    // Comments
+    const commentKeys = ['numComments','commentCount','totalCommentCount','commentsCount','totalSocialCommentCount'];
+    for (const k of commentKeys) {
+      const re = new RegExp(`"${k}"\\s*:\\s*(\\d+)`, 'g');
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const n = parseInt(m[1], 10);
+        if (!isNaN(n)) meta.comments = meta.comments == null ? n : Math.max(meta.comments, n);
+      }
+    }
+
+    // Reposts/shares
+    const shareKeys = ['numShares','repostCount','shareCount','sharesCount'];
+    for (const k of shareKeys) {
+      const re = new RegExp(`"${k}"\\s*:\\s*(\\d+)`, 'g');
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const n = parseInt(m[1], 10);
+        if (!isNaN(n)) meta.reposts = meta.reposts == null ? n : Math.max(meta.reposts, n);
+      }
+    }
+
+    // ── Text extraction ───────────────────────────────────────────────────
+    // Priority 1: "summary":{"text":"..."} — RSC SEARCH_B post content
+    {
+      const re = /"summary"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        meta.texts.push(m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"'));
+      }
+    }
+    // Priority 2: "commentary":{"text":"..."}
+    {
+      const re = /"commentary"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        meta.texts.push(m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"'));
+      }
+    }
+    // Priority 3: "description":{"text":"..."}
+    {
+      const re = /"description"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        meta.texts.push(m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"'));
+      }
+    }
+    // Priority 4: bare "text":"..." (catch-all)
+    {
+      const re = /"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const t = m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"');
+        if (t.length >= 20 && t.length < 5000) meta.texts.push(t);
+      }
+    }
+
+    // ── Author extraction ────────────────────────────────────────────────
+    // P1: RSC "title":{"text":"Name"} — SEARCH_B entityResult
+    {
+      const re = /"title"\s*:\s*\{[^{}]*?"text"\s*:\s*"([^"]{2,80})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const c = m[1].trim();
+        if (!/^\d/.test(c) && !c.includes('http') && !c.includes('linkedin')) {
+          meta.authors.push(c);
+        }
+      }
+    }
+    // P2: "actorName":"Name"
+    {
+      const re = /"actorName"\s*:\s*"([^"]{2,80})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) meta.authors.push(m[1].trim());
+    }
+    // P3: Voyager "firstName"/"fullName"/"localizedName"
+    {
+      const re = /"(?:firstName|fullName|localizedName)"\s*:\s*"([^"]{1,60})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) meta.authors.push(m[1].trim());
+    }
+    // P4: "name":{"text":"Name"} (actor.name.text)
+    {
+      const re = /"name"\s*:\s*\{[^{}]*?"text"\s*:\s*"([^"]{2,80})"/g;
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const c = m[1].trim();
+        if (!/^\d/.test(c) && !c.includes('http')) meta.authors.push(c);
+      }
+    }
+
+    return meta;
   }
 
-  // ── Pass 1+2: Raw text scan ────────────────────────────────────────────────
-  // v2.3: window expanded + RSC-aware author/text extraction.
-  function rawTextScan(body) {
-    const results = new Map();
-
-    function processHit(type, id, matchIndex) {
-      const url = buildUrl(type, id);
-      if (_finalized.has(url)) return;
-
-      // v2.3: expanded window — RSC streams place URN and metadata far apart
-      const start = Math.max(0, matchIndex - 800);
-      const end   = Math.min(body.length, matchIndex + 1500);
-      const win   = body.slice(start, end);
-
-      let likes = null, comments = null, reposts = null;
-      let text = '', author = 'Unknown';
-
-      // ── Metrics ─────────────────────────────────────────────────────────
-      const lm = win.match(/"(?:numLikes|totalReactionCount|likeCount|reactionCount|reaction_count|numReactions|totalLikeCount|aggregatedReactionCount|totalReactions)"\s*:\s*(\d+)/);
-      if (lm) likes = parseInt(lm[1], 10);
-
-      if (likes == null) {
-        const lm2 = win.match(/"count"\s*:\s*(\d+)[^}]*"type"\s*:\s*"LIKE"/);
-        if (lm2) likes = parseInt(lm2[1], 10);
-      }
-      if (likes == null) {
-        const lm3 = win.match(/aggregatedTotalReactions":\s*(\d+)/);
-        if (lm3) likes = parseInt(lm3[1], 10);
-      }
-      // socialProofText: e.g. "socialProofText":"1,247 reactions"
-      if (likes == null) {
-        const lm4 = win.match(/"socialProofText"\s*:\s*"([^"]*)"/);
-        if (lm4) {
-          const spMatch = lm4[1].match(/([\d,]+)\s*reactions?/i);
-          if (spMatch) likes = parseInt(spMatch[1].replace(/,/g, ''), 10) || null;
-        }
-      }
-      // Inline pattern: "247 reactions" anywhere in window
-      if (likes == null) {
-        const lm5 = win.match(/([\d,]+)\s+reactions?\b/i);
-        if (lm5) { const n = parseInt(lm5[1].replace(/,/g, ''), 10); likes = isNaN(n) ? null : n; }
-      }
-
-      const cm = win.match(/"(?:numComments|commentCount|totalCommentCount|commentsCount)"\s*:\s*(\d+)/);
-      if (cm) comments = parseInt(cm[1], 10);
-
-      const sm = win.match(/"(?:numShares|repostCount|shareCount|sharesCount)"\s*:\s*(\d+)/);
-      if (sm) reposts = parseInt(sm[1], 10);
-
-      // ── Text extraction — RSC-aware, picks longest match ─────────────────
-      // P1: "summary":{"textDirection":"...","text":"<post content>"}
-      const summaryM = win.match(/"summary"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/);
-      if (summaryM) text = summaryM[1].replace(/\\n/g, ' ').substring(0, 600);
-
-      // P2: "commentary":{"text":"..."} or {"textDirection":"...","text":"..."}
-      if (!text) {
-        const commM = win.match(/"commentary"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/);
-        if (commM) text = commM[1].replace(/\\n/g, ' ').substring(0, 600);
-      }
-
-      // P3: "description":{"text":"..."}
-      if (!text) {
-        const descM = win.match(/"description"\s*:\s*\{[^{}]*?"text"\s*:\s*"((?:[^"\\]|\\.){20,})"/);
-        if (descM) text = descM[1].replace(/\\n/g, ' ').substring(0, 600);
-      }
-
-      // P4: longest bare "text":"..." (original fallback — no short values)
-      if (!text) {
-        const reText = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
-        let tm;
-        while ((tm = reText.exec(win)) !== null) {
-          const c = tm[1].replace(/\\n/g, ' ').substring(0, 600);
-          if (c.length >= 20 && c.length > text.length) text = c;
-        }
-      }
-
-      // ── Author extraction — RSC-aware ────────────────────────────────────
-      // P1: RSC "title":{"textDirection":"...","text":"Author Name"}
-      const rscTitle = win.match(/"title"\s*:\s*\{[^{}]*?"text"\s*:\s*"([^"]{2,80})"/);
-      if (rscTitle) {
-        const c = rscTitle[1].trim();
-        if (!/^\d/.test(c) && !c.includes('http')) author = c;
-      }
-      // P2: "actorName":"Name" (RSC inline)
-      if (author === 'Unknown') {
-        const actorM = win.match(/"actorName"\s*:\s*"([^"]{2,80})"/);
-        if (actorM) author = actorM[1].trim();
-      }
-      // P3: classic Voyager fields
-      if (author === 'Unknown') {
-        const nm = win.match(/"(?:firstName|fullName|localizedName)"\s*:\s*"([^"]{1,60})"/);
-        if (nm) author = nm[1];
-      }
-
-      const existing = results.get(url);
-      if (existing) {
-        existing.likes    = nullMax(existing.likes, likes);
-        existing.comments = nullMax(existing.comments, comments);
-        existing.reposts  = nullMax(existing.reposts, reposts);
-        if (text.length > (existing.text || '').length) existing.text = text;
-        if (author !== 'Unknown') existing.author = author;
-      } else {
-        results.set(url, { url, likes, comments, reposts, text, author, source: 'network' });
-        console.log(`[Nexora][RSC v2.3] URN: ${id} likes=${likes == null ? 'NULL' : likes} author="${author}" textLen=${text.length}`);
-      }
-    }
-
-    URN_RE.lastIndex = 0;
-    let m;
-    while ((m = URN_RE.exec(body)) !== null) processHit(m[1], m[2], m.index);
-    FSD_RE.lastIndex = 0;
-    while ((m = FSD_RE.exec(body)) !== null) processHit(m[1], m[2], m.index);
-
-    return results;
-  }
-
-  // ── Pass 3: Structured JSON scan ──────────────────────────────────────────
-  function structuredScan(body, existingMap) {
-    const pools = [];
-    try {
-      const json = JSON.parse(body);
-      if (Array.isArray(json)) pools.push(...json);
-      if (json && typeof json === 'object') pools.push(json);
-    } catch (e) {
-      const lines = body.split('\n');
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const startIdx = line.indexOf('{') > -1 && line.indexOf('[') > -1
-            ? Math.min(line.indexOf('{'), line.indexOf('['))
-            : Math.max(line.indexOf('{'), line.indexOf('['));
-          if (startIdx >= 0) {
-            const json = JSON.parse(line.substring(startIdx));
-            if (Array.isArray(json)) pools.push(...json);
-            if (json && typeof json === 'object') pools.push(json);
-          }
-        } catch (err) {}
-      }
-    }
-    if (pools.length === 0) return;
-
-    const expandedPools = [];
-    function flattenInto(obj) {
-      if (!obj || typeof obj !== 'object') return;
-      expandedPools.push(obj);
-      // v2.3: walk all known wrapper keys (including deep SEARCH_B nesting)
-      ['included', 'elements', 'data', 'results', 'hits', 'items', 'item', 'clusters', 'cluster'].forEach(k => {
-        if (Array.isArray(obj[k])) obj[k].forEach(flattenInto);
-        else if (obj[k] && typeof obj[k] === 'object') flattenInto(obj[k]);
-      });
-      // Also expand top-level data sub-objects (searchDashClustersByAll, etc.)
-      if (obj.data && typeof obj.data === 'object') {
-        Object.values(obj.data).forEach(v => {
-          if (Array.isArray(v)) v.forEach(flattenInto);
-          else if (v && typeof v === 'object') flattenInto(v);
-        });
-      }
-    }
-    for (const json of pools) flattenInto(json);
-
-    for (const node of expandedPools) {
-      if (!node || typeof node !== 'object') continue;
-      try {
-        const urnRaw = String(
-          node.updateUrn || node.entityUrn || node.dashEntityUrn || node.urn ||
-          node.targetUrn || node.objectUrn ||
-          dig(node, 'updateV2', 'entityUrn') ||
-          dig(node, 'entityResult', 'entityUrn') ||
-          dig(node, 'template', 'updateV2', 'entityUrn') ||
-          dig(node, 'socialActivity', 'entityUrn') || ''
-        );
-
-        const mm = FSD_SINGLE.exec(urnRaw) || URN_SINGLE.exec(urnRaw);
-        if (!mm) continue;
-        const url = buildUrl(mm[1], mm[2]);
-        if (_finalized.has(url)) continue;
-
-        // v2.3: parseCount returns null for missing paths (Voyager + RSC)
-        const likes = parseCount(
-          dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numLikes') ??
-          dig(node, 'socialCounts', 'numLikes') ??
-          dig(node, 'reactionSummary', 'count') ??
-          dig(node, 'socialActivity', 'numLikes') ??
-          dig(node, 'socialActivityCounts', 'numLikes') ??
-          dig(node, 'aggregatedReactionCount') ??
-          dig(node, 'totalReactions') ??
-          dig(node, 'numLikes') ??
-          // v2.3 RSC paths
-          dig(node, 'entityResult', 'socialActivity', 'numLikes') ??
-          dig(node, 'entityResult', 'socialActivity', 'totalSocialActivityCounts', 'numLikes') ?? null
-        );
-
-        // v2.3: RSC socialProofText fallback ("1,247 reactions")
-        let likesFromProof = null;
-        if (likes == null) {
-          const spRaw = String(
-            dig(node, 'socialProofText') ??
-            dig(node, 'entityResult', 'socialProofText') ?? ''
-          );
-          const spM = spRaw.match(/([\d,]+)\s*reactions?/i);
-          if (spM) likesFromProof = parseInt(spM[1].replace(/,/g, ''), 10) || null;
-        }
-
-        const comments = parseCount(
-          dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numComments') ??
-          dig(node, 'socialCounts', 'numComments') ??
-          dig(node, 'socialActivity', 'numComments') ??
-          dig(node, 'numComments') ??
-          dig(node, 'entityResult', 'socialActivity', 'numComments') ?? null
-        );
-        const reposts = parseCount(
-          dig(node, 'socialDetail', 'totalSocialActivityCounts', 'numShares') ??
-          dig(node, 'socialCounts', 'numShares') ??
-          dig(node, 'socialActivity', 'numShares') ??
-          dig(node, 'numShares') ??
-          dig(node, 'entityResult', 'socialActivity', 'numShares') ?? null
-        );
-
-        // v2.3: text — Voyager paths first, then RSC entityResult paths
-        const text = String(
-          dig(node, 'commentary', 'text', 'text') ??
-          dig(node, 'updateMetadata', 'shareCommentary', 'text') ??
-          dig(node, 'content', 'article', 'title') ??
-          dig(node, 'entityResult', 'summary', 'text') ??
-          dig(node, 'entityResult', 'description', 'text') ??
-          dig(node, 'summary', 'text') ??
-          dig(node, 'description', 'text') ?? ''
-        ).substring(0, 600);
-
-        // v2.3: author — Voyager paths first, then RSC entityResult.title.text
-        const author = String(
-          dig(node, 'actor', 'name', 'text') ??
-          dig(node, 'miniProfile', 'firstName') ??
-          dig(node, 'entityResult', 'title', 'text') ??
-          dig(node, 'title', 'text') ??
-          dig(node, 'actorName') ?? 'Unknown'
-        ).substring(0, 80);
-
-        const postedAtMs = parseCount(dig(node, 'createdAt') ?? null);
-        const resolvedLikes = nullMax(likes, likesFromProof);
-
-        if (existingMap.has(url)) {
-          const ex = existingMap.get(url);
-          ex.likes    = nullMax(ex.likes, resolvedLikes);
-          ex.comments = nullMax(ex.comments, comments);
-          ex.reposts  = nullMax(ex.reposts, reposts);
-          if (text.length > (ex.text || '').length) ex.text = text;
-          if (author !== 'Unknown') ex.author = author;
-          if (postedAtMs != null && postedAtMs > 0) ex.postedAtMs = postedAtMs;
-        } else {
-          existingMap.set(url, { url, likes: resolvedLikes, comments, reposts, text, author, postedAtMs, source: 'network' });
-        }
-      } catch (e) {}
-    }
-  }
-
-  // ── Process a captured response body ─────────────────────────────────────
+  // ── PASS B: Find all URNs, assign global metadata ───────────────────────
   function processBody(body, sourceUrl) {
     if (!body || body.length < 50) return;
 
-    const map = rawTextScan(body);
-    if (body.length < 5_000_000) structuredScan(body, map);
-    if (map.size === 0) return;
+    // Extract global metadata once from full body
+    const meta = extractGlobalMeta(body);
 
+    // Pick best text (longest)
+    const bestText = meta.texts.reduce((best, t) => t.length > best.length ? t : best, '');
+    // Pick best author (first non-empty, non-numeric)
+    const bestAuthor = meta.authors.find(a => a && a.length > 1 && !/^\d/.test(a)) || 'Unknown';
+
+    // Collect all unique URN IDs from body
+    const seen = new Set();
     const posts = [];
-    map.forEach((post, url) => {
-      // derive stable traceId from URL
-      const tm = url.match(/(?:activity|ugcPost|share):(\d{10,25})/);
-      const traceId = tm ? tm[1] : url.split('/').filter(Boolean).pop() || url.slice(-20);
 
-      const hasText   = !!(post.text   && post.text.length > 20);
-      const hasAuthor = !!(post.author && post.author !== 'Unknown');
-      const hasLikes  = post.likes != null;
+    function processMatch(type, id) {
+      const url = buildUrl(type, id);
+      if (seen.has(url)) return;
+      seen.add(url);
 
-      // ── L2 Forensic log ─────────────────────────────────────────────────
-      if (!window.__pipelineStats) {
-        window.__pipelineStats = { total: 0, domFail: 0, networkFail: 0, transportFail: 0, hydrated: 0 };
-      }
-      if (!hasText && !hasAuthor) window.__pipelineStats.networkFail++;
+      const post = {
+        url,
+        likes:    meta.likes,
+        comments: meta.comments,
+        reposts:  meta.reposts,
+        text:     bestText.substring(0, 5000),
+        author:   bestAuthor,
+        source:   'network',
+      };
 
-      console.log('[L2-INTERCEPTOR]', {
-        traceId,
-        url: url.slice(-60),
-        hasText,
-        hasAuthor,
-        hasLikes,
-        text:    post.text   ? post.text.slice(0, 80) + '…' : '',
-        author:  post.author || '',
-        likes:   post.likes,
-        isUpgrade: !!post._upgrade,
-        status:  (!hasText && !hasAuthor) ? 'NETWORK_MISS' : 'NETWORK_PARTIAL_OR_OK',
-      });
-
-      if (_finalized.has(url)) {
-        // v2.4 SEARCH_B fix: allow upgrade whenever we now have BETTER data.
-        const hasRealText   = post.text   && post.text.length > 20;
-        const hasRealAuthor = post.author && post.author !== 'Unknown';
-        const hasLikesVal   = post.likes  != null && post.likes >= 0;
-        if (hasRealText || hasRealAuthor || hasLikesVal) {
-          posts.push({ ...post, _upgrade: true, _traceId: traceId });
-        }
-        return;
-      }
-      _finalized.add(url); // lock AFTER deciding to emit
-      posts.push({ ...post, _traceId: traceId });
-    });
-
-    if (posts.length > 0) {
-      window.__NexoraEmbeddedPosts = window.__NexoraEmbeddedPosts || [];
-      window.__NexoraEmbeddedPosts.push(...posts);
-      window.postMessage({ type: '__NEXORA_NETWORK_POSTS__', posts, sourceUrl }, '*');
-      console.log(`[Nexora][Interceptor v2.4] ${posts.length} posts from ${sourceUrl.split('?')[0].slice(-50)}`);
+      posts.push(post);
+      console.log(`[Nexora][Interceptor v3.0] URN: ${id} likes=${meta.likes == null ? 'null' : meta.likes} author="${bestAuthor}" textLen=${bestText.length}`);
     }
+
+    URN_RE_GLOBAL.lastIndex = 0;
+    FSD_RE_GLOBAL.lastIndex = 0;
+
+    let m;
+    while ((m = URN_RE_GLOBAL.exec(body)) !== null) processMatch(m[1], m[2]);
+    while ((m = FSD_RE_GLOBAL.exec(body)) !== null) processMatch(m[1], m[2]);
+
+    if (posts.length === 0) return;
+
+    // Publish to window global (for engine's network listener)
+    window.__NexoraEmbeddedPosts = window.__NexoraEmbeddedPosts || [];
+    window.__NexoraEmbeddedPosts.push(...posts);
+    window.postMessage({ type: '__NEXORA_NETWORK_POSTS__', posts, sourceUrl }, '*');
+    console.log(`[Nexora][Interceptor v3.0] ${posts.length} posts from ${(sourceUrl || '').split('?')[0].slice(-60)}`);
   }
 
-  // ── Scan LinkedIn's embedded <code> elements (SEARCH_B pre-load) ─────────
+  // ── Scan <code> elements (SEARCH_B pre-load) ─────────────────────────────
   const _scannedCodes = new WeakSet();
 
   function scanEmbeddedData() {
-    let newFound = 0;
+    let found = 0;
     document.querySelectorAll('code').forEach(el => {
       if (_scannedCodes.has(el)) return;
       _scannedCodes.add(el);
@@ -412,11 +284,11 @@
         const text = el.textContent || '';
         if (text.length > 80 && text.includes('urn:li:')) {
           processBody(text, 'bpr:' + (el.id || 'inline'));
-          newFound++;
+          found++;
         }
       } catch (e) {}
     });
-    if (newFound > 0) console.log(`[Nexora][Interceptor] Scanned ${newFound} embedded <code> elements`);
+    if (found > 0) console.log(`[Nexora][Interceptor v3.0] Scanned ${found} <code> elements`);
   }
 
   if (document.readyState === 'loading') {
@@ -425,22 +297,28 @@
     setTimeout(scanEmbeddedData, 200);
   }
 
+  // Watch for dynamically injected <code> blocks
   const _codeObserver = new MutationObserver(() => scanEmbeddedData());
-  document.addEventListener('DOMContentLoaded', () => {
-    _codeObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
-  });
+  if (document.body) {
+    _codeObserver.observe(document.body, { childList: true, subtree: true });
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      _codeObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    });
+  }
 
   // ── Patch fetch ────────────────────────────────────────────────────────────
   const _origFetch = window.fetch.bind(window);
   window.fetch = function (...args) {
     const url = typeof args[0] === 'string' ? args[0] : ((args[0] || {}).url || '');
-    if (url && (url.includes('linkedin.com') || url.startsWith('/'))) {
-      console.log('[Nexora][Fetch]', url.substring(0, 120));
-    }
     const prom = _origFetch(...args);
     if (shouldIntercept(url)) {
       prom.then(resp => {
-        try { resp.clone().text().then(b => processBody(b, url)).catch(() => {}); } catch (e) {}
+        try {
+          resp.clone().text().then(b => {
+            if (b && b.length > 50) processBody(b, url);
+          }).catch(() => {});
+        } catch (e) {}
       }).catch(() => {});
     }
     return prom;
@@ -454,14 +332,19 @@
     this._nexoraUrl = String(url || '');
     return _origOpen.apply(this, [method, url, ...rest]);
   };
+
   XMLHttpRequest.prototype.send = function (...args) {
     if (this._nexoraUrl && shouldIntercept(this._nexoraUrl)) {
       this.addEventListener('load', () => {
-        try { processBody(this.responseText, this._nexoraUrl); } catch (e) {}
+        try {
+          if (this.responseText && this.responseText.length > 50) {
+            processBody(this.responseText, this._nexoraUrl);
+          }
+        } catch (e) {}
       }, { once: true });
     }
     return _origSend.apply(this, args);
   };
 
-  console.log('[Nexora][Interceptor] v2.2 (null-safe) active on', location.href.slice(0, 60));
+  console.log('[Nexora][Interceptor v3.0] FULL-BODY SCAN active on', location.href.slice(0, 80));
 })();

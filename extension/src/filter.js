@@ -1,13 +1,19 @@
 /**
- * Nexora Filter v2.0  — PASS ALL (SEARCH_B Brute-Force Mode)
+ * Nexora Filter v4.0 — URL-Only Pipeline Gate (SEARCH_B Rebuild)
  * ─────────────────────────────────────────────────────────────────────────────
- * No filtering. Every post with a URL passes. No likes threshold.
- * No null-likes rejection. No below-threshold rejection.
+ * v4.0 Architecture Change:
  *
- * Rationale: SEARCH_B DOM cards rarely have likes in the DOM. Filtering by
- * likes causes nearly 100% rejection rate and 0 saved posts. The user wants
- * ALL posts collected — filtering is the dashboard's responsibility, not the
- * scraper's.
+ *  The v3.0 filter required author + timestamp + text (≥20 chars) INSIDE the
+ *  scraping pipeline. This was the #1 cause of data loss: posts were rejected
+ *  BEFORE network hydration had a chance to fill those fields.
+ *
+ *  v4.0 Rule: A post is valid if and only if it has a non-empty post_url.
+ *  Everything else (author, text, engagement) is stored as-is — even if null.
+ *
+ *  UI-level filtering (likes >= 10, author != Unknown, etc.) lives ONLY in
+ *  the SavedPostsPanel component, as required by the architecture spec.
+ *
+ *  The batch helpers and deduplication utilities are preserved unchanged.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
@@ -18,15 +24,27 @@
   const L = window.__NexoraLogger;
   const M = 'Filter';
 
-  // ── Qualification logic — PASS EVERYTHING with a URL ─────────────────────
+  // ── Pipeline Gate: URL presence only ─────────────────────────────────────
   function qualifies(post) {
-    if (!post.post_url) {
-      L && L.debug(M, `SKIP no_url: "${(post.post_text || '').slice(0, 40)}"`);
+    if (!post) {
+      L && L.debug(M, 'REJECTED: null post object');
+      return { pass: false, reason: 'null_post' };
+    }
+
+    const url = (post.post_url || '').trim();
+    if (!url) {
+      L && L.debug(M, 'REJECTED: Missing or empty post_url');
       return { pass: false, reason: 'no_url' };
     }
-    // PASS — no engagement threshold, no null rejection
-    L && L.debug(M, `PASS: ${post.post_url} (likes=${post.likes_count})`);
-    return { pass: true, reason: 'has_url' };
+
+    // Must look like a real LinkedIn post URL (not synthetic/discovered prefixes)
+    if (url.startsWith('discovered:') || url.startsWith('synthetic:') || url.startsWith('_nosurl_')) {
+      L && L.debug(M, `REJECTED: Non-real URL prefix: ${url.slice(0, 40)}`);
+      return { pass: false, reason: 'synthetic_url' };
+    }
+
+    // PASS — store unconditionally. All other fields (author, text, likes) may be null.
+    return { pass: true, reason: 'url_present' };
   }
 
   // ── Batch filter ──────────────────────────────────────────────────────────
@@ -35,7 +53,11 @@
     const rejected = [];
     for (const post of posts) {
       const result = qualifies(post);
-      if (result.pass) { passed.push(post); } else { rejected.push({ post, reason: result.reason }); }
+      if (result.pass) {
+        passed.push(post);
+      } else {
+        rejected.push({ post, reason: result.reason });
+      }
     }
     L && L.info(M, `Batch: ${passed.length} passed / ${rejected.length} rejected`);
     return { passed, rejected };
@@ -55,4 +77,5 @@
 
   window.__NexoraFilter = { qualifies, applyBatch, deduplicateByUrl };
 
+  console.log('[Nexora][Filter v4.0] URL-only pipeline gate ready.');
 })();

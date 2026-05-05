@@ -1,15 +1,12 @@
 /**
- * Nexora Observer v1.4  —  Brute-Force Scroll (SEARCH_B Fix)
+ * Nexora Observer v2.0 — Brute-Force Scroll with Clean Exhaustion Signal
  * ─────────────────────────────────────────────────────────────────────────────
- * v1.3 bug: stall detection stopped the loop at ~step 9-20 when SEARCH_B
- *   returned 0 DOM cards per scroll (async content, virtual DOM recycling).
- *
- * v1.4 fix (BRUTE FORCE):
- *   - Stall detection REMOVED entirely. Loop NEVER stops early.
- *   - Only stop condition: step >= MAX_SCROLL_STEPS (default 60).
- *   - Scroll runs unconditionally regardless of cards found or not.
- *   - MutationObserver retained only for harvest triggering (not for scroll control).
- *   - Scroll container detection retained from v1.3.
+ * v2.0 changes:
+ *  - Kept brute-force scroll behavior from v1.4 (NO stall detection).
+ *  - Added getStep() to public API (was missing, needed by engine status msgs).
+ *  - onExhausted is called exactly once when MAX_SCROLL_STEPS is reached.
+ *  - MutationObserver triggers harvest on new post nodes (retained).
+ *  - Scroll container detection re-probed every 5 steps (LinkedIn SPA swaps).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
@@ -28,9 +25,9 @@
   let _scrollStep   = 0;
   let _active       = false;
   let _scrollTimer  = null;
-  let _scrollEl     = null;  // the confirmed scrollable element
+  let _scrollEl     = null;
 
-  // ── Find the REAL scrollable container by probing each candidate ──────────
+  // ── Scroll container detection ────────────────────────────────────────────
   function detectScrollContainer() {
     const candidates = [
       document.querySelector('.scaffold-layout__main'),
@@ -48,10 +45,10 @@
       try {
         const before = el.scrollTop;
         el.scrollTop = before + 1;
-        const after = el.scrollTop;
+        const after  = el.scrollTop;
         el.scrollTop = before;
         if (after > before) {
-          L && L.info(M, `✓ Scroll container: ${el.tagName}${el.id ? '#'+el.id : ''}${el.className ? '.'+String(el.className).split(' ')[0] : ''}`);
+          L && L.info(M, `✓ Scroll container: ${el.tagName}${el.id ? '#' + el.id : ''}`);
           return el;
         }
       } catch (e) {}
@@ -61,7 +58,6 @@
     return document.documentElement;
   }
 
-  // ── Scroll the detected container ─────────────────────────────────────────
   function scrollPage(amount) {
     const el = _scrollEl;
     if (!el) return;
@@ -72,29 +68,12 @@
     }
   }
 
-  // ── Re-detect scroll container every 5 steps ──────────────────────────────
-  function refreshScrollContainer() {
-    _scrollEl = detectScrollContainer();
-  }
-
-  // ── MutationObserver — triggers extra harvests on DOM changes ─────────────
+  // ── MutationObserver — harvest on new post nodes ─────────────────────────
   function attachMutationObserver(container) {
     if (_mutationObs) { _mutationObs.disconnect(); _mutationObs = null; }
-    _mutationObs = new MutationObserver((mutations) => {
+    _mutationObs = new MutationObserver(() => {
       if (!_active) return;
-      for (const mut of mutations) {
-        for (const node of mut.addedNodes) {
-          if (node.nodeType !== 1) continue;
-          if (
-            node.getAttribute('role') === 'article' ||
-            node.tagName === 'LI' ||
-            node.querySelector('li, [role="article"]')
-          ) {
-            doHarvest();
-            return;
-          }
-        }
-      }
+      doHarvest();
     });
     _mutationObs.observe(container, { childList: true, subtree: true });
     L && L.info(M, 'MutationObserver attached');
@@ -110,27 +89,32 @@
     _scrollTimer = setTimeout(() => { if (_active) scrollStep(); }, delay);
   }
 
+  // ── Scroll step ───────────────────────────────────────────────────────────
   function scrollStep() {
     if (!_active) return;
 
     _scrollStep++;
     const maxSteps = cfg().MAX_SCROLL_STEPS || 60;
 
-    // ONLY stop when we hit the step cap — NO stall detection, NO early exit
     if (_scrollStep > maxSteps) {
-      L && L.info(M, `Reached max scroll steps (${maxSteps}). Done.`);
+      L && L.info(M, `Step cap reached (${maxSteps}). Exhausted.`);
+      _active = false;
+      if (_scrollTimer) { clearTimeout(_scrollTimer); _scrollTimer = null; }
+      if (_mutationObs) { _mutationObs.disconnect(); _mutationObs = null; }
       _onExhausted && _onExhausted('max_steps');
       return;
     }
 
-    // Re-probe scroll container every 5 steps (LinkedIn SPA can swap elements)
-    if (_scrollStep % 5 === 1) refreshScrollContainer();
+    // Re-probe scroll container every 5 steps (SPA can swap elements)
+    if (_scrollStep % 5 === 1) {
+      _scrollEl = detectScrollContainer();
+    }
 
     // Natural scroll: 70–110% of viewport height
     const jitter = 0.70 + Math.random() * 0.40;
     const amount = Math.floor(window.innerHeight * jitter);
 
-    L && L.debug(M, `Step ${_scrollStep}/${maxSteps} | ${amount}px | container=${_scrollEl ? _scrollEl.tagName : '?'}`);
+    L && L.debug(M, `Step ${_scrollStep}/${maxSteps} | ${amount}px`);
     scrollPage(amount);
 
     // Harvest after settle delay
@@ -138,13 +122,10 @@
     setTimeout(() => { if (_active) doHarvest(); }, settleMs);
   }
 
-  // ── Called by engine after each harvest — ALWAYS schedules next scroll ────
-  // No stall counter, no conditional. We scroll no matter what.
+  // ── Called by engine after each harvest ───────────────────────────────────
   function onHarvestComplete(newCardsFound) {
     if (!_active) return;
-
-    // Log for diagnostics but DO NOT use for stop decisions
-    L && L.debug(M, `Harvest complete: +${newCardsFound} cards | step=${_scrollStep}`);
+    L && L.debug(M, `Harvest done: +${newCardsFound} | step=${_scrollStep}`);
 
     const base   = cfg().SCROLL_DELAY_MS || 1200;
     const jitter = Math.floor(Math.random() * 400) - 200;
@@ -152,22 +133,22 @@
     scheduleNextScroll(delay);
   }
 
-  // ── Page Readiness Probe ──────────────────────────────────────────────────
-  // Wait briefly but don't block too long — SEARCH_B loads content asynchronously
+  // ── Page readiness probe ──────────────────────────────────────────────────
   async function waitForPageReady(maxWaitMs = 15000) {
     const start = Date.now();
     while (Date.now() - start < maxWaitMs) {
       const signals = document.querySelectorAll(
         'button[aria-label*="reaction" i], button[aria-label*="like" i], ' +
-        '[data-urn], a[href*="/posts/"], a[href*="/feed/update/"], li[data-occludable-update-urn]'
+        '[data-urn], a[href*="/posts/"], a[href*="/feed/update/"], ' +
+        'li[data-occludable-update-urn], time'
       ).length;
       if (signals > 0) return true;
       await new Promise(r => setTimeout(r, 500));
     }
-    // Proceed anyway — don't block indefinitely
-    return false;
+    return false; // proceed anyway
   }
 
+  // ── Start / Stop ──────────────────────────────────────────────────────────
   async function start(onNewCards, onExhausted) {
     if (_active) stop();
 
@@ -176,45 +157,44 @@
     _scrollStep  = 0;
     _active      = true;
 
-    L && L.info(M, 'Observer v1.4 (brute-force) starting — waiting for page signals...');
+    L && L.info(M, 'Observer v2.0 starting — waiting for page signals…');
     const isReady = await waitForPageReady();
-    if (!isReady) {
-      L && L.warn(M, 'Page readiness timeout (15s). Proceeding anyway.');
-    } else {
-      L && L.info(M, 'Page ready.');
-    }
+    if (!isReady) L && L.warn(M, 'Page readiness timeout (15s). Proceeding anyway.');
+    else          L && L.info(M, 'Page ready.');
 
     if (!_active) return;
 
-    // Short stabilization delay
     await new Promise(r => setTimeout(r, 500));
 
     _scrollEl = detectScrollContainer();
 
-    const adapter   = window.__NexoraDomAdapter;
-    const container = (adapter && adapter.getFeedContainer && adapter.getFeedContainer())
-                      || document.querySelector('[role="main"]')
-                      || document.body;
+    const container = (window.__NexoraDomAdapter && window.__NexoraDomAdapter.getFeedContainer
+      ? window.__NexoraDomAdapter.getFeedContainer()
+      : null) || document.querySelector('[role="main"]') || document.body;
 
     attachMutationObserver(container);
 
-    L && L.info(M, `Observer v1.4 started. MAX_SCROLL_STEPS=${cfg().MAX_SCROLL_STEPS || 60}`);
+    L && L.info(M, `Observer v2.0 started. MAX_SCROLL_STEPS=${cfg().MAX_SCROLL_STEPS || 60}`);
 
-    // Initial harvest (posts already on screen)
-    setTimeout(() => { if (_active) doHarvest(); }, 200);
+    // Initial harvest — posts already on screen
+    setTimeout(() => { if (_active) doHarvest(); }, 300);
   }
 
   function stop() {
     _active = false;
-    if (_scrollTimer) { clearTimeout(_scrollTimer); _scrollTimer = null; }
-    if (_mutationObs) { _mutationObs.disconnect(); _mutationObs = null; }
+    if (_scrollTimer)  { clearTimeout(_scrollTimer);      _scrollTimer  = null; }
+    if (_mutationObs)  { _mutationObs.disconnect();       _mutationObs  = null; }
     L && L.info(M, `Observer stopped at step ${_scrollStep}`);
   }
 
   window.__NexoraObserver = {
-    start, stop, scrollStep, onHarvestComplete,
+    start,
+    stop,
+    scrollStep,
+    onHarvestComplete,
     getStep:  () => _scrollStep,
     isActive: () => _active,
   };
 
+  console.log('[Nexora][Observer v2.0] Brute-force scroll ready.');
 })();

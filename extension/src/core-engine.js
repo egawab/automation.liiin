@@ -1,59 +1,62 @@
 /**
- * Nexora Core Engine v2.0  —  Brute-Force Search-Only Mode
+ * Nexora Core Engine v4.0 — Two-Phase Collect-Then-Flush (SEARCH_B Rebuild)
  * ─────────────────────────────────────────────────────────────────────────────
- * v1.x had: pending maps, null-likes gating, stall counters, network buffer
- * re-queuing that blocked posts from being sent. Result: ~2 posts, stops at 9.
+ * v4.0 Architecture: Two-Phase Design
  *
- * v2.0 philosophy: DUMB AND AGGRESSIVE.
- *  - Every card found → immediately buffered for transport. No filtering.
- *  - Every network post → immediately buffered. No null-likes gating.
- *  - Observer runs ALL 60 steps. No stall-based early exit.
- *  - finish() only called when observer exhausts (max steps).
+ * PHASE 1 — COLLECTION (scroll steps 1–60):
+ *   Maintain a central _enrichmentStore: Map<normalizedUrl, PostRecord>.
+ *   On each harvest:
+ *     1. Discover DOM cards → extract URL → add to store if new.
+ *     2. Apply DOM extraction (text, author, engagement) to fill fields.
+ *     3. Merge network data from _networkBuffer for matching URLs.
+ *     4. Add network-only posts (no DOM card) directly to store.
+ *   NOTHING is sent to Transport during this phase.
  *
- * Load order (injected by background.js):
- *   src/config.js → src/logger.js → src/layout-detector.js →
- *   src/dom-adapter.js → src/extractor.js → src/filter.js →
- *   src/transport.js → src/observer.js → src/core-engine.js
+ * PHASE 2 — FLUSH (after observer calls onExhausted):
+ *   1. Wait a final settle window (2s) for any last network messages.
+ *   2. Iterate _enrichmentStore.
+ *   3. For each record: validate URL → buffer in Transport → flush.
+ *   4. Network-only posts also flushed.
+ *
+ * Key guarantees:
+ *   - A post seen at scroll step 3 gets network data from step 47.
+ *   - No post is ever dropped for missing author/text/likes.
+ *   - All 500+ posts (per run cap) are stored.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
   'use strict';
 
-  // ── Guard: prevent double-injection ───────────────────────────────────────
-  if (window.__NexoraEngine) {
-    console.log('[Nexora][Engine] Already active — skipping re-init.');
-    return;
-  }
+  if (window.__NexoraEngine) return;
 
-  // ── Module references ─────────────────────────────────────────────────────
   const CFG  = () => window.__NexoraConfig         || {};
   const L    = () => window.__NexoraLogger         || { info(){}, warn(){}, error(){}, debug(){}, setDebug(){} };
-  const LD   = () => window.__NexoraLayoutDetector || { detect(){ return 'UNKNOWN'; }, LAYOUTS: {} };
-  const DA   = () => window.__NexoraDomAdapter     || { discoverCards(){ return []; }, extractCanonicalUrl(){ return null; } };
+  const DA   = () => window.__NexoraDomAdapter     || { discoverCards(){ return []; }, extractCanonicalUrl(){ return null; }, getFeedContainer(){ return document.body; } };
   const EX   = () => window.__NexoraExtractor      || { extractFromCard(){ return {}; }, mergeWithNetworkData(a){ return a; } };
+  const FL   = () => window.__NexoraFilter         || { qualifies(p){ return { pass: !!p.post_url }; } };
   const TR   = () => window.__NexoraTransport      || { buffer(){}, flush(){}, configure(){}, reset(){}, getSentCount(){ return 0; } };
   const OBS  = () => window.__NexoraObserver       || { start(){}, stop(){}, onHarvestComplete(){} };
 
   const MODULE = 'Engine';
 
-  // ── Engine state ──────────────────────────────────────────────────────────
+  // ── State ────────────────────────────────────────────────────────────────
   let _running        = false;
   let _keyword        = '';
   let _dashboardUrl   = '';
   let _userId         = '';
   let _profileId      = 'Unknown';
-  let _seenCardEls    = new WeakSet();
-  let _seenUrls       = new Set();
-  let _totalFound     = 0;
   let _heartbeatTimer = null;
-  let _networkBuffer  = [];   // posts received from interceptor
-  let _harvestCount   = 0;
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // Phase 1 state
+  let _seenCardEls    = new WeakSet(); // DOM elements already processed
+  let _enrichmentStore= new Map();     // normalizedUrl → PostRecord (central truth)
+  let _networkBuffer  = [];            // incoming network posts not yet merged
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
   function safeSend(msg) {
     try {
       chrome.runtime.sendMessage(msg, () => {
-        if (chrome.runtime.lastError) { /* popup may be closed */ }
+        if (chrome.runtime.lastError) { /* ignore */ }
       });
     } catch (e) {}
   }
@@ -74,85 +77,94 @@
     if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
   }
 
-  // ── Inject network interceptor into MAIN world ─────────────────────────────
-  function injectInterceptor() {
-    if (document.getElementById('nexora-interceptor-v2')) return;
-    try {
-      const s = document.createElement('script');
-      s.id  = 'nexora-interceptor-v2';
-      s.src = chrome.runtime.getURL('src/interceptor.js');
-      s.onload  = () => L().info(MODULE, 'Network interceptor injected (MAIN world)');
-      s.onerror = () => L().warn(MODULE, 'Interceptor injection failed — network data unavailable');
-      (document.head || document.documentElement).appendChild(s);
-    } catch (e) {
-      L().warn(MODULE, 'Could not inject interceptor', e.message);
-    }
-  }
-
-  // ── Network buffer listener ────────────────────────────────────────────────
-  function attachNetworkListener() {
-    if (window.__nexoraNetworkListenerAttached) return;
-    window.__nexoraNetworkListenerAttached = true;
-    window.addEventListener('message', (evt) => {
-      if (!evt.data || evt.data.type !== '__NEXORA_NETWORK_POSTS__') return;
-      const posts = evt.data.posts;
-      if (Array.isArray(posts)) {
-        _networkBuffer.push(...posts);
-        L().debug(MODULE, `Network buffer +${posts.length} (total=${_networkBuffer.length})`);
-        // Trigger an immediate harvest whenever new network data arrives
-        if (_running) setTimeout(() => harvest(), 100);
-      }
-    });
-  }
-
-  // ── Detect LinkedIn profile identity ─────────────────────────────────────
-  function detectProfileId() {
-    try {
-      const meLink = document.querySelector('a[href*="/in/"][aria-label*="me" i], a[data-test-app-aware-link][href*="/in/"]');
-      if (meLink) {
-        const href = meLink.getAttribute('href') || '';
-        const m = href.match(/\/in\/([^/?#]+)/i);
-        if (m) {
-          _profileId = m[1];
-          safeSend({ action: 'IDENTITY_DETECTED', linkedInProfileId: _profileId });
-          L().info(MODULE, `Profile ID: ${_profileId}`);
-        }
-      }
-    } catch (e) {}
-  }
-
-  // ── Normalize URLs to a common URN format ───────────────────────────────
-  // Converts both DOM /posts/ slug URLs and network /feed/update/ URN URLs to
-  // a single canonical form: https://www.linkedin.com/feed/update/urn:li:<type>:<id>
-  // SEARCH_B posts arrive from DOM as /posts/name-activity-ID-slug/ and from
-  // network as /feed/update/urn:li:activity:ID — these MUST map to the same key.
+  // ── URL normalization ─────────────────────────────────────────────────────
   function normalizePostUrl(url) {
     if (!url) return '';
-    // Pattern 1: already has URN embedded (network interceptor URLs, canonical feed URLs)
     const m1 = url.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
     if (m1) return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
-    // Pattern 2: /posts/ slug format — ugcPost takes priority over activity
     const m2 = url.match(/ugcPost-(\d{10,25})/i);
     if (m2) return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${m2[1]}`;
     const m3 = url.match(/activity-(\d{10,25})/i);
     if (m3) return `https://www.linkedin.com/feed/update/urn:li:activity:${m3[1]}`;
-    // Fallback: strip tracking params
     return url.split('?')[0].replace(/\/$/, '');
   }
 
-  // ── Core harvest — called after every scroll step ─────────────────────────
-  // BRUTE FORCE: collect EVERYTHING. No filtering. No gating. No pending maps.
+  // ── Enrichment store operations ───────────────────────────────────────────
+  // Non-destructive merge: never overwrite a non-empty field with empty/null.
+  function mergeIntoStore(urlKey, incoming) {
+    if (!urlKey) return;
+
+    const existing = _enrichmentStore.get(urlKey);
+    if (!existing) {
+      _enrichmentStore.set(urlKey, { ...incoming });
+      return;
+    }
+
+    // Text: keep longer
+    const inText = incoming.post_text || incoming.text || '';
+    const exText = existing.post_text || '';
+    if (inText.length > exText.length) existing.post_text = inText;
+
+    // Author: keep existing unless it's empty/Unknown
+    const inAuth = incoming.author || '';
+    const exAuth = existing.author || '';
+    const exHasAuth = exAuth && exAuth !== 'Unknown' && exAuth !== '';
+    const inHasAuth = inAuth && inAuth !== 'Unknown' && inAuth !== '';
+    if (!exHasAuth && inHasAuth) existing.author = inAuth;
+
+    // Engagement: take best (non-null)
+    const inLikes    = incoming.likes_count    != null ? incoming.likes_count    : incoming.likes;
+    const inComments = incoming.comments_count != null ? incoming.comments_count : incoming.comments;
+    const inReposts  = incoming.shares_count   != null ? incoming.shares_count   : incoming.reposts;
+
+    if (existing.likes_count    == null && inLikes    != null) existing.likes_count    = inLikes;
+    if (existing.comments_count == null && inComments != null) existing.comments_count = inComments;
+    if (existing.shares_count   == null && inReposts  != null) existing.shares_count   = inReposts;
+
+    // Timestamp
+    if (!existing.timestamp && incoming.timestamp) existing.timestamp = incoming.timestamp;
+  }
+
+  // Convert a raw network post (from interceptor) to our internal schema
+  function networkPostToRecord(np, layout) {
+    return {
+      post_url:          normalizePostUrl(np.url),
+      post_text:         np.text     || '',
+      likes_count:       np.likes    != null ? np.likes    : null,
+      comments_count:    np.comments != null ? np.comments : null,
+      shares_count:      np.reposts  != null ? np.reposts  : null,
+      author:            np.author   || '',
+      timestamp:         np.postedAtMs ? new Date(np.postedAtMs).toISOString() : null,
+      media_type:        'text',
+      extraction_source: 'network',
+      layout_id:         layout,
+      keyword:           _keyword,
+      session_id:        L().sessionId,
+      _traceId:          np._traceId || '',
+    };
+  }
+
+  // ── Network buffer drain: merge all buffered network posts into store ────
+  function drainNetworkBuffer() {
+    const layout = 'UNKNOWN';
+    for (const np of _networkBuffer) {
+      const urlKey = normalizePostUrl(np.url);
+      if (!urlKey) continue;
+      const record = networkPostToRecord(np, layout);
+      mergeIntoStore(urlKey, record);
+    }
+    _networkBuffer = [];
+  }
+
+  // ── PHASE 1: Per-scroll harvest ───────────────────────────────────────────
   function harvest() {
     if (!_running) return;
 
     heartbeat('harvesting');
-    _harvestCount++;
 
-    const layout = LD().detect();
+    const layout = 'SEARCH_B'; // always search results in this mode
     const cards  = DA().discoverCards(layout);
-    let newThisRound = 0;
 
-    // ── DOM harvest ───────────────────────────────────────────────────────
     for (const card of cards) {
       if (_seenCardEls.has(card)) continue;
       _seenCardEls.add(card);
@@ -165,160 +177,135 @@
         continue;
       }
 
-      // Attach metadata
       post.keyword    = _keyword;
-      post.session_id = L().sessionId;
+      post.session_id = (L().sessionId || '');
 
-      // Skip if no URL at all (can't identify the post)
       if (!post.post_url) continue;
 
-      // Dedup by URL
-      const urlKey = normalizePostUrl(post.post_url);
-      if (_seenUrls.has(urlKey)) continue;
-      _seenUrls.add(urlKey);
+      const urlKey   = normalizePostUrl(post.post_url);
+      post.post_url  = urlKey;
 
-      // 🔴 GLOBAL PIPELINE CONSISTENCY RULE: ONE CANONICAL ACTIVITY ID
-      // Update the post URL to the normalized URN so the backend gets a unified entity.
-      post.post_url = urlKey;
-
-      // Try to enrich with network data if available
-      const netData = drainNetworkDataForUrl(post.post_url);
-      if (netData) post = EX().mergeWithNetworkData(post, netData);
-
-      _totalFound++;
-      newThisRound++;
-
-      // Send immediately — no filter, no threshold
-      TR().buffer(post);
-
-      // ── L4 Diagnosis (DOM path) ──────────────────────────────────────
-      {
-        const traceId   = post._traceId || urlKey.split(':').pop() || '?';
-        const l1HasText = !!(post.post_text && post.post_text.length > 20);
-        const l1HasAuth = post.author !== 'Unknown';
-        const l2HasText = !!(netData && netData.text && netData.text.length > 20);
-        const l3HasText = l1HasText || l2HasText; // merged result
-        const l3HasAuth = l1HasAuth || !!(netData && netData.author && netData.author !== 'Unknown');
-
-        let diagnosis;
-        if (!l1HasText && !l2HasText)  diagnosis = 'DOM_AND_NETWORK_FAILURE';
-        else if (l1HasText && !l2HasText) diagnosis = 'NETWORK_EXTRACTION_MISS';
-        else if (l2HasText && !l3HasText) diagnosis = 'TRANSPORT_DROPOUT';
-        else if (!l3HasText || !l3HasAuth) diagnosis = 'HYDRATION_FAILURE';
-        else { diagnosis = 'FULLY_HEALTHY'; window.__pipelineStats && window.__pipelineStats.hydrated++; }
-
-        console.log('[L4-DIAGNOSIS]', traceId, diagnosis, {
-          dom_text: l1HasText, dom_author: l1HasAuth,
-          net_text: l2HasText, final_text: l3HasText, final_author: l3HasAuth,
-        });
-      }
-
-      if (_totalFound >= CFG().MAX_POSTS_PER_RUN) {
-        L().info(MODULE, `Max posts/run (${CFG().MAX_POSTS_PER_RUN}) reached.`);
-        finish('max_posts');
-        return;
-      }
+      // Add to enrichment store (non-destructive merge)
+      mergeIntoStore(urlKey, post);
     }
 
-    // ── Network-only posts / DOM-upgrade packets ──────────────────────────
-    // For each network post:
-    //   - If URL not yet seen → new post, emit and count it.
-    //   - If URL already sent by DOM (with empty fields) → send upgrade packet
-    //     so the backend's update path can merge in text/author/likes.
-    //     Do NOT increment _totalFound for upgrades (already counted).
-    {
-      const remaining = [];
-      for (const np of _networkBuffer) {
-        const urlKey = normalizePostUrl(np.url);
+    // Drain any pending network posts into the store
+    drainNetworkBuffer();
 
-        // No URL → discard (can't save without URL)
-        if (!urlKey) continue;
-
-        const alreadySentByDom = _seenUrls.has(urlKey);
-        _seenUrls.add(urlKey);
-
-        // Only skip a network post if it was already DOM-seen AND has nothing useful
-        const hasRealText   = np.text   && np.text.length > 20;
-        const hasRealAuthor = np.author && np.author !== 'Unknown';
-        const hasMetrics    = np.likes  != null || np.comments != null;
-        if (alreadySentByDom && !hasRealText && !hasRealAuthor && !hasMetrics) continue;
-
-        const syntheticPost = {
-          post_url:          urlKey,          // always use normalized URL
-          post_text:         np.text      || '',
-          likes_count:       np.likes     != null ? np.likes     : null,
-          comments_count:    np.comments  != null ? np.comments  : null,
-          shares_count:      np.reposts   != null ? np.reposts   : null,
-          author:            np.author    || 'Unknown',
-          timestamp:         np.postedAtMs ? new Date(np.postedAtMs).toISOString() : null,
-          media_type:        'text',
-          extraction_source: 'network',
-          layout_id:         layout,
-          keyword:           _keyword,
-          session_id:        L().sessionId,
-          _isUpgrade:        alreadySentByDom,
-          _traceId:          np._traceId || urlKey.split(':').pop() || '?',
-        };
-
-        if (!alreadySentByDom) {
-          _totalFound++;
-          newThisRound++;
-        }
-
-        TR().buffer(syntheticPost);
-
-        // ── L4 Diagnosis (network-only / upgrade path) ────────────────────────
-        {
-          const traceId   = np._traceId || urlKey.split(':').pop() || '?';
-          const hasText   = !!(syntheticPost.post_text && syntheticPost.post_text.length > 20);
-          const hasAuthor = syntheticPost.author !== 'Unknown';
-          let diagnosis;
-          if (!hasText && !hasAuthor) diagnosis = 'DOM_AND_NETWORK_FAILURE';
-          else if (!hasText || !hasAuthor) diagnosis = 'HYDRATION_FAILURE';
-          else { diagnosis = 'FULLY_HEALTHY'; window.__pipelineStats && window.__pipelineStats.hydrated++; }
-
-          console.log('[L4-DIAGNOSIS]', traceId, diagnosis, {
-            source: 'network', hasText, hasAuthor,
-            likes: syntheticPost.likes_count, isUpgrade: alreadySentByDom,
-          });
-        }
-
-        if (!alreadySentByDom && _totalFound >= CFG().MAX_POSTS_PER_RUN) {
-          _networkBuffer.length = 0;
-          finish('max_posts');
-          return;
-        }
-      }
-      _networkBuffer.length = 0;
-      _networkBuffer.push(...remaining);
-    }
-
-    // Diagnostic log every step
-    status(`🔍 "${_keyword}" — Step ${OBS().getStep()} | Found: ${_totalFound} | DOM cards: ${cards.length} | Layout: ${layout}`);
-
-    // Tell observer this harvest is done — it will schedule the next scroll
-    OBS().onHarvestComplete(newThisRound);
+    const storeSize = _enrichmentStore.size;
+    status(`🔍 "${_keyword}" — Step ${OBS().getStep()} | Store: ${storeSize} posts | DOM hits: ${cards.length}`);
+    OBS().onHarvestComplete(cards.length);
   }
 
-  // ── Drain network data for a URL (consume entry) ──────────────────────────
-  function drainNetworkDataForUrl(url) {
-    if (!url || _networkBuffer.length === 0) return null;
-    const clean = normalizePostUrl(url);
-    const idx = _networkBuffer.findIndex(p => {
-      const pu = normalizePostUrl(p.url);
-      return pu === clean;
+  // ── Interceptor: network listener ────────────────────────────────────────
+  function attachNetworkListener() {
+    if (window.__nexoraNetworkListenerAttached) return;
+    window.__nexoraNetworkListenerAttached = true;
+
+    window.addEventListener('message', (evt) => {
+      if (!evt.data || evt.data.type !== '__NEXORA_NETWORK_POSTS__') return;
+      const posts = evt.data.posts;
+      if (!Array.isArray(posts)) return;
+
+      // Push to buffer; if running, drain immediately
+      _networkBuffer.push(...posts);
+      L().debug(MODULE, `Network buffer +${posts.length}, total=${_networkBuffer.length}`);
+
+      if (_running) {
+        // Drain into store immediately rather than waiting for next harvest
+        drainNetworkBuffer();
+      }
     });
-    if (idx === -1) return null;
-    return _networkBuffer.splice(idx, 1)[0]; // always consume
   }
 
-  // ── Feed exhausted (called by observer after max steps) ────────────────────
+  // ── Interceptor injection ─────────────────────────────────────────────────
+  function injectInterceptor() {
+    if (document.getElementById('nexora-interceptor-v3')) return;
+    try {
+      const s    = document.createElement('script');
+      s.id       = 'nexora-interceptor-v3';
+      s.src      = chrome.runtime.getURL('src/interceptor.js');
+      s.onload   = () => L().info(MODULE, 'Network interceptor v3.0 injected (MAIN world)');
+      s.onerror  = () => L().warn(MODULE, 'Interceptor injection failed');
+      (document.head || document.documentElement).appendChild(s);
+    } catch (e) {}
+  }
+
+  // ── Profile ID detection ─────────────────────────────────────────────────
+  function detectProfileId() {
+    try {
+      const meLink = document.querySelector(
+        'a[href*="/in/"][aria-label*="me" i], a[data-test-app-aware-link][href*="/in/"]'
+      );
+      if (meLink) {
+        const href = meLink.getAttribute('href') || '';
+        const m    = href.match(/\/in\/([^/?#]+)/i);
+        if (m) {
+          _profileId = m[1];
+          safeSend({ action: 'IDENTITY_DETECTED', linkedInProfileId: _profileId });
+        }
+      }
+    } catch (e) {}
+  }
+
+  // ── PHASE 2: Final flush ─────────────────────────────────────────────────
+  async function flushAllPosts() {
+    L().info(MODULE, `Phase 2: Flushing ${_enrichmentStore.size} posts from enrichment store…`);
+
+    // Final settle: wait 2s for any last-arriving network messages
+    await new Promise(r => setTimeout(r, 2000));
+    drainNetworkBuffer(); // one last drain
+
+    const layout    = 'SEARCH_B';
+    let   sentCount = 0;
+
+    for (const [urlKey, record] of _enrichmentStore) {
+      // Minimal gate: URL must be non-empty and look real
+      const validation = FL().qualifies(record);
+      if (!validation.pass) {
+        L().debug(MODULE, `Skipped (${validation.reason}): ${urlKey.slice(-40)}`);
+        continue;
+      }
+
+      // Ensure all required fields are present (even if empty)
+      const finalPost = {
+        post_url:          record.post_url          || urlKey,
+        post_text:         record.post_text         || '',
+        likes_count:       record.likes_count       != null ? record.likes_count    : null,
+        comments_count:    record.comments_count    != null ? record.comments_count : null,
+        shares_count:      record.shares_count      != null ? record.shares_count   : null,
+        author:            record.author            || 'Unknown',
+        timestamp:         record.timestamp         || null,
+        media_type:        record.media_type        || 'text',
+        extraction_source: record.extraction_source || 'unknown',
+        layout_id:         record.layout_id         || layout,
+        keyword:           _keyword,
+        session_id:        record.session_id        || '',
+        _traceId:          record._traceId          || urlKey.split(':').pop() || '?',
+      };
+
+      TR().buffer(finalPost);
+      sentCount++;
+
+      if (sentCount >= (CFG().MAX_POSTS_PER_RUN || 500)) {
+        L().info(MODULE, `Hit MAX_POSTS_PER_RUN cap (${CFG().MAX_POSTS_PER_RUN || 500})`);
+        break;
+      }
+    }
+
+    L().info(MODULE, `Phase 2: Buffered ${sentCount} posts for transport`);
+
+    try { await TR().flush(); } catch (e) { L().warn(MODULE, 'flush error', e.message); }
+
+    return sentCount;
+  }
+
+  // ── Completion ───────────────────────────────────────────────────────────
   async function onExhausted(reason) {
-    L().info(MODULE, `Observer exhausted: ${reason}`);
-    finish('exhausted');
+    L().info(MODULE, `Observer exhausted: ${reason}. Entering Phase 2.`);
+    await finish(reason);
   }
 
-  // ── Finish run ─────────────────────────────────────────────────────────────
   async function finish(reason) {
     if (!_running) return;
     _running = false;
@@ -326,37 +313,22 @@
     stopHeartbeat();
     OBS().stop();
 
-    // Final flush of any remaining buffered posts
-    try { await TR().flush(); } catch (e) {}
+    status(`⏳ "${_keyword}" — Collecting final data…`);
 
-    // ── L5 Global Pipeline Summary ─────────────────────────────────────────
-    try {
-      const s = window.__pipelineStats || { total: 0, domFail: 0, networkFail: 0, transportFail: 0, hydrated: 0 };
-      const pct = (n) => s.total > 0 ? ((n / s.total) * 100).toFixed(1) + '%' : 'N/A';
-      console.log('%c[L5-PIPELINE-SUMMARY]', 'background:#1a1a2e;color:#e94560;font-weight:bold;padding:2px 6px', {
-        totalTracked:        s.total,
-        domFailure:          `${s.domFail}  (${pct(s.domFail)})`,
-        networkFailure:      `${s.networkFail}  (${pct(s.networkFail)})`,
-        transportFailure:    `${s.transportFail}  (${pct(s.transportFail)})`,
-        fullyHydrated:       `${s.hydrated}  (${pct(s.hydrated)})`,
-        dominantFailureLayer: s.domFail >= s.networkFail ? 'DOM' : 'NETWORK',
-        runReason:           reason,
-      });
-    } catch (e) {}
+    const sentCount = await flushAllPosts();
 
-    const qualified = TR().getSentCount();
-    L().info(MODULE, `Run complete. reason=${reason} found=${_totalFound} sent=${qualified}`);
-    status(`✅ "${_keyword}" done — ${qualified} posts sent (${_totalFound} scanned, ${OBS().getStep()} steps)`);
+    L().info(MODULE, `Run complete. reason=${reason} store=${_enrichmentStore.size} sent=${sentCount}`);
+    status(`✅ "${_keyword}" done — ${sentCount} posts stored`);
 
-    if (qualified === 0 && _totalFound === 0) {
+    if (sentCount === 0 && _enrichmentStore.size === 0) {
       safeSend({
-        action:           'JOB_FAILED',
-        searchOnlyMode:   true,
-        postsExtracted:   0,
-        qualifiedPosts:   0,
-        keyword:          _keyword,
+        action:            'JOB_FAILED',
+        searchOnlyMode:    true,
+        postsExtracted:    0,
+        qualifiedPosts:    0,
+        keyword:           _keyword,
         linkedInProfileId: _profileId,
-        reason:           'NO_CONTENT',
+        reason:            'NO_CONTENT',
       });
       return;
     }
@@ -364,68 +336,56 @@
     safeSend({
       action:            'JOB_COMPLETED',
       searchOnlyMode:    true,
-      postsExtracted:    _totalFound,
-      qualifiedPosts:    qualified,
+      postsExtracted:    _enrichmentStore.size,
+      qualifiedPosts:    sentCount,
       keyword:           _keyword,
       linkedInProfileId: _profileId,
       reason,
     });
   }
 
-  // ── Emergency sync (called by background.js watchdog) ─────────────────────
   async function emergencySync() {
-    L().warn(MODULE, 'Emergency sync triggered by watchdog');
+    L().info(MODULE, 'Emergency sync triggered');
     try { await TR().flush(); } catch (e) {}
   }
 
-  // ── Public start function ─────────────────────────────────────────────────
+  // ── Start ─────────────────────────────────────────────────────────────────
   async function start(keyword, settings, dashboardUrl, userId) {
     if (_running) {
-      L().warn(MODULE, 'Already running — ignoring duplicate start()');
+      L().warn(MODULE, 'Already running — ignoring duplicate start');
       return;
     }
 
-    _running        = true;
-    _keyword        = keyword      || '';
-    _dashboardUrl   = dashboardUrl || '';
-    _userId         = userId       || '';
-    _seenCardEls    = new WeakSet();
-    _seenUrls       = new Set();
-    _totalFound     = 0;
-    _networkBuffer  = [];
-    _harvestCount   = 0;
+    _running         = true;
+    _keyword         = keyword      || '';
+    _dashboardUrl    = dashboardUrl || '';
+    _userId          = userId       || '';
+    _seenCardEls     = new WeakSet();
+    _enrichmentStore = new Map();
+    _networkBuffer   = [];
 
-    // Force brute-force config — ignore any user settings that would restrict
+    // Force the correct settings for brute-force collection
     const forcedOverrides = {
-      MAX_SCROLL_STEPS:   60,   // Always run 60 steps
-      STALL_THRESHOLD:    999,  // Effectively disabled
-      LIKE_THRESHOLD:     0,    // Accept all posts
+      MAX_SCROLL_STEPS:      60,
+      STALL_THRESHOLD:       999,
+      LIKE_THRESHOLD:        0,
       INCLUDE_UNKNOWN_LIKES: true,
-      SCROLL_DELAY_MS:    1200,
-      SCROLL_SETTLE_MS:   800,
-      MAX_POSTS_PER_RUN:  500,
+      MAX_POSTS_PER_RUN:     500,
     };
 
-    // Apply any user settings first, then force our overrides on top
     if (settings && CFG().update) {
       const userOverrides = {};
-      if (settings.maxPosts    != null) userOverrides.MAX_POSTS_PER_RUN = Number(settings.maxPosts);
-      if (settings.debugMode   != null) userOverrides.DEBUG_MODE        = !!settings.debugMode;
+      if (settings.maxPosts != null) userOverrides.MAX_POSTS_PER_RUN = Number(settings.maxPosts);
       CFG().update(userOverrides);
     }
     CFG().update && CFG().update(forcedOverrides);
 
-    // Load from storage (may override above, but forcedOverrides re-applied after)
     if (CFG().load) await CFG().load();
-    // Re-apply critical brute-force overrides AFTER storage load
     CFG().update && CFG().update(forcedOverrides);
 
-    if (CFG().DEBUG_MODE) L().setDebug(true);
+    L().info(MODULE, `Engine v4.0 (Two-Phase) starting: keyword="${_keyword}"`);
+    status(`🚀 Starting collection for "${_keyword}"…`);
 
-    L().info(MODULE, `Engine v2.0 starting: keyword="${_keyword}" steps=${CFG().MAX_SCROLL_STEPS}`);
-    status(`🚀 Starting extraction for "${_keyword}"…`);
-
-    // Configure transport
     TR().configure({
       keyword:           _keyword,
       dashboardUrl:      _dashboardUrl,
@@ -435,25 +395,20 @@
     TR().reset();
 
     detectProfileId();
-
-    // Inject network interceptor + attach listener
     injectInterceptor();
     attachNetworkListener();
 
-    // Drain any pre-scanned embedded posts
+    // Absorb any pre-existing intercepted posts (from <code> pre-load scan)
     const preScanned = window.__NexoraEmbeddedPosts || [];
     if (preScanned.length > 0) {
       _networkBuffer.push(...preScanned);
       window.__NexoraEmbeddedPosts = [];
-      L().info(MODULE, `Loaded ${preScanned.length} pre-scanned embedded posts`);
+      L().info(MODULE, `Absorbed ${preScanned.length} pre-scanned posts`);
     }
 
-    // Detect layout — short timeout since SEARCH_B may not have data-urn yet
-    const layoutId = await LD().detectAsync(10000);
-    L().info(MODULE, `Layout detected: ${layoutId}`);
-    await new Promise(r => setTimeout(r, 800)); // short stabilization pause
+    // Wait briefly for page to settle, then start scrolling
+    await new Promise(r => setTimeout(r, 1200));
 
-    // Start observer (drives scroll + harvest callbacks)
     startHeartbeat();
     OBS().start(harvest, onExhausted);
   }
@@ -464,13 +419,11 @@
     stopHeartbeat();
     OBS().stop();
     TR().flush().catch(() => {});
-    L().info(MODULE, 'Stopped by external call');
   }
 
-  // ── Expose on window ──────────────────────────────────────────────────────
   window.__NexoraEngine = { start, stop, emergencySync };
 
-  // ── Cleanup hook for re-injection safety ──────────────────────────────────
+  // Integrate with any legacy cleanup hooks
   window.__linkedInExtractorCleanup = window.__linkedInExtractorCleanup || function () {};
   const _prevCleanup = window.__linkedInExtractorCleanup;
   window.__linkedInExtractorCleanup = function () {
@@ -480,6 +433,5 @@
 
   window.__emergencySync = emergencySync;
 
-  L().info(MODULE, 'Core Engine v2.0 ready (brute-force mode)');
-
+  console.log('[Nexora][Engine v4.0] Two-phase collect-then-flush ready.');
 })();

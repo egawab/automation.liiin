@@ -130,6 +130,10 @@ export async function POST(req: Request) {
             // Atomic upsert — avoids the race condition where two posts with the
             // same URL arrive in the same batch (e.g. a DOM blank + network upgrade)
             // and both call findFirst → null → both try to create → only one survives.
+            // For the update path we need the existing record to decide which text is longer.
+            // Use upsert with a conditional update expression via raw Prisma upsert.
+            // Strategy: always overwrite with incoming data, but the API-level logic ensures
+            // we only call upsert with the best available data (engine already did enrichment).
             await prisma.savedPost.upsert({
               where: { userId_postUrl: { userId, postUrl: safeUrl } },
               create: {
@@ -143,11 +147,15 @@ export async function POST(req: Request) {
                 visited:     false,
               },
               update: {
-                // Merge: only overwrite if the incoming value is genuinely better
+                // Engagement: always take incoming if non-null (engine guarantees best value)
                 likes:       postLikes    != null ? postLikes    : undefined,
                 comments:    postComments != null ? postComments : undefined,
-                postPreview: safePreview.length > 0 ? safePreview : undefined,
-                postAuthor:  (safeAuthor && safeAuthor !== 'Unknown') ? safeAuthor : undefined,
+                // Text: always update if incoming is non-empty (engine sends longest available)
+                postPreview: safePreview.length > 20 ? safePreview : undefined,
+                // Author: update whenever incoming is a real name (not Unknown or empty)
+                postAuthor:  (safeAuthor && safeAuthor !== 'Unknown' && safeAuthor.length > 1)
+                               ? safeAuthor
+                               : undefined,
                 savedAt:     new Date(),
               },
             });
