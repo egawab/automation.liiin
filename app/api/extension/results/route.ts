@@ -98,8 +98,12 @@ export async function POST(req: Request) {
     if (posts && posts.length > 0) {
         const results = await Promise.allSettled(posts.map(async (post) => {
             // Quality Gate: Relaxed to allow all real extracted posts through.
-            const postLikes    = post.likes    != null ? BigInt(Math.round(Number(post.likes)))    : null;
-            const postComments = post.comments != null ? BigInt(Math.round(Number(post.comments))) : null;
+            // Sanity cap: any value above 10M is an internal LinkedIn ID/counter, not a real count
+            const ENGAGEMENT_MAX = BigInt(10_000_000);
+            const rawLikes    = post.likes    != null ? BigInt(Math.round(Number(post.likes)))    : null;
+            const rawComments = post.comments != null ? BigInt(Math.round(Number(post.comments))) : null;
+            const postLikes    = rawLikes    != null && rawLikes    <= ENGAGEMENT_MAX ? rawLikes    : null;
+            const postComments = rawComments != null && rawComments <= ENGAGEMENT_MAX ? rawComments : null;
 
             // ── SANITIZE all string fields before they touch Prisma ──
             const safeUrl = sanitizeString(post.url).substring(0, 2000);
