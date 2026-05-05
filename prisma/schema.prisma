@@ -128,8 +128,8 @@ model SavedPost {
   postUrl     String
   postAuthor  String?
   postPreview String?
-  likes       Int      @default(0)
-  comments    Int      @default(0)
+  likes       Int?
+  comments    Int?
   keyword     String
   savedAt     DateTime @default(now())
   visited     Boolean  @default(false)

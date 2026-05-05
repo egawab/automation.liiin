@@ -39,19 +39,17 @@
 
     return {
       url:               post.post_url,
-      likes:             post.likes_count    || 0,
-      comments:          post.comments_count || 0,
-      shares:            post.shares_count   || 0,
+      likes:             post.likes_count    != null ? post.likes_count    : null,
+      comments:          post.comments_count != null ? post.comments_count : null,
+      shares:            post.shares_count   != null ? post.shares_count   : null,
       author:            post.author         || 'Unknown',
       preview:           (post.post_text || '').slice(0, 200),
       postText:          post.post_text      || '',
       timestamp:         post.timestamp      || null,
       mediaType:         post.media_type     || 'text',
       id,
-      engagementTier:    post.likes_count >= 100 ? 'high' : post.likes_count >= 10 ? 'mid' : 'low',
       commentable:       true,
       hasRealUrl:        true,
-      qualificationReason: `search_only_likes=${post.likes_count}`,
       _debug: {
         layoutId:         post.layout_id,
         extractionSource: post.extraction_source,

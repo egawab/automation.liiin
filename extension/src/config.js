@@ -15,7 +15,8 @@
 
     // ── Filter ───────────────────────────────────────────────────────────────
     LIKE_THRESHOLD: 10,          // Keep posts with likes_count >= this value
-    INCLUDE_UNKNOWN_LIKES: true, // Include posts where likes couldn't be read (rely on network data)
+    INCLUDE_UNKNOWN_LIKES: false, // null likes = REJECT — strict numeric filter only
+    PENDING_MAX_CYCLES: 5,       // Max harvest cycles to wait for async likes to arrive before final rejection
 
     // ── Extraction limits ─────────────────────────────────────────────────────
     MAX_POSTS_PER_RUN: 60,       // Hard cap on posts collected per keyword run

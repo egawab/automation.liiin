@@ -952,22 +952,16 @@ async function startScrapingCycle(keyword, settings, comments, dashboardUrl, use
   }
 }
 
-// ── Background Tab Sniper v3: FETCH-BASED (Zero Tabs) ────────────────────────
-// fetch() each post URL from the background service worker (no tabs opened).
-// Parses metrics from LinkedIn's embedded JSON in the page HTML.
-// ZERO renderer processes = ZERO browser freezes.
 async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedInProfileId, settings }) {
   if (!urls || urls.length === 0) return;
 
-  const minLikes    = Number(settings.minLikes)    || 10;
-  const minComments = Number(settings.minComments) || 0;
-  const targetMax   = Number(settings.targetMax)   || 15;
+  const targetMax   = Number(settings.targetMax)   || 150;
   const workList    = urls.slice(0, 150); // Hard cap: 150 URLs max (background fetches, no UI freeze)
 
-  console.log(`[Sniper] 🎯 FETCH mode: ${workList.length} URLs for "${keyword}" (minLikes=${minLikes})`);
+  console.log(`[Sniper] 🎯 FETCH mode: ${workList.length} URLs for "${keyword}"`);
   showPremiumToast('Sniper Active', `🎯 Fetching ${workList.length} posts for "${keyword}"...`, false);
 
-  const qualified = [];
+  const allPosts = [];
   const INT4_MAX = 2147483647;
   const safeInt = (v) => Math.min(Math.max(Math.round(Number(v) || 0), 0), INT4_MAX);
 
@@ -996,7 +990,7 @@ async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedI
       const n = parseInt(m[1], 10);
       if (n > best) best = n;
     }
-    return best;
+    return best > 0 ? best : null; // Return null if no engagement data found
   }
 
   function extractText(html) {
@@ -1039,31 +1033,28 @@ async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedI
       else if (/"mediaType"\s*:\s*"ARTICLE"/.test(html)) mediaType = 'article';
 
       console.log(`[Sniper] likes=${likes}, comments=${comments}`);
-      if (likes >= minLikes && comments >= minComments) {
-        const urnMatch = url.match(/urn:li:(activity|ugcPost|share):(\d+)/);
-        const id = urnMatch ? `${urnMatch[1]}_${urnMatch[2]}` : url.split('/').filter(Boolean).pop();
-        qualified.push({
-          url: url.endsWith('/') ? url : url + '/',
-          likes: safeInt(likes), comments: safeInt(comments), shares: 0,
-          author, preview: text.slice(0, 200), postText: text,
-          timestamp: new Date().toISOString(), mediaType, id,
-          engagementTier: 'high', commentable: true, hasRealUrl: true,
-          qualificationReason: `sniper_fetch_likes=${likes}`
-        });
-        console.log(`[Sniper] ✅ PASS #${qualified.length}: likes=${likes}`);
-        if (qualified.length >= targetMax) { console.log(`[Sniper] 🎯 Target reached.`); break; }
-      } else {
-        console.log(`[Sniper] ❌ FAIL: likes=${likes} (<${minLikes})`);
-      }
+      const urnMatch = url.match(/urn:li:(activity|ugcPost|share):(\d+)/);
+      const id = urnMatch ? `${urnMatch[1]}_${urnMatch[2]}` : url.split('/').filter(Boolean).pop();
+      allPosts.push({
+        url: url.endsWith('/') ? url : url + '/',
+        likes: likes != null ? safeInt(likes) : null,
+        comments: safeInt(comments),
+        shares: 0,
+        author, preview: text.slice(0, 200), postText: text,
+        timestamp: new Date().toISOString(), mediaType, id,
+        commentable: true, hasRealUrl: true,
+      });
+      console.log(`[Sniper] ✅ Collected #${allPosts.length}: likes=${likes}`);
+      if (allPosts.length >= targetMax) { console.log(`[Sniper] 🎯 Target reached.`); break; }
     } catch (e) {
       console.error(`[Sniper] Error on ${url}:`, e.message);
     }
     await sleep(600);
   }
 
-  console.log(`[Sniper] 🏁 ${qualified.length}/${workList.length} qualified.`);
-  if (qualified.length === 0) {
-    showPremiumToast('Sniper Done', `⚠️ 0 posts passed (${minLikes} likes) for "${keyword}".`, true);
+  console.log(`[Sniper] 🏁 ${allPosts.length}/${workList.length} collected.`);
+  if (allPosts.length === 0) {
+    showPremiumToast('Sniper Done', `⚠️ No posts fetched for "${keyword}".`, true);
     return;
   }
   try {
@@ -1071,12 +1062,12 @@ async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedI
     const resp2 = await fetch(`${dashboardUrl}/api/extension/results`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
-      body: JSON.stringify({ keyword, posts: qualified, linkedInProfileId, debugInfo: { source: 'sniper_fetch', checked: workList.length } })
+      body: JSON.stringify({ keyword, posts: allPosts, linkedInProfileId, debugInfo: { source: 'sniper_fetch', checked: workList.length } })
     });
     if (resp2.ok) {
       const r = await resp2.json().catch(() => ({}));
       console.log(`[Sniper] ✅ Synced. savedCount=${r.savedCount || 0}`);
-      showPremiumToast('Sniper Complete', `✅ Saved ${r.savedCount || qualified.length} posts for "${keyword}"!`, false);
+      showPremiumToast('Sniper Complete', `✅ Saved ${r.savedCount || allPosts.length} posts for "${keyword}"!`, false);
     } else { throw new Error(`HTTP ${resp2.status}`); }
   } catch (e) {
     console.error('[Sniper] ❌ Sync failed:', e.message);

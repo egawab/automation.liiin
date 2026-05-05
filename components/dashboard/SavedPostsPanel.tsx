@@ -11,8 +11,8 @@ interface SavedPost {
   postUrl: string;
   postAuthor: string | null;
   postPreview: string | null;
-  likes: number;
-  comments: number;
+  likes: number | null;
+  comments: number | null;
   keyword: string;
   savedAt: string;
   visited: boolean;
@@ -89,8 +89,9 @@ export function SavedPostsPanel() {
     markAsVisited(post.id);
   }
 
-  const uniqueKeywords = Array.from(new Set(posts.map(p => p.keyword)));
-  const filteredPosts = posts.filter(post => {
+  const visiblePosts = posts.filter(post => post.likes != null && post.likes >= 10);
+  const uniqueKeywords = Array.from(new Set(visiblePosts.map(p => p.keyword)));
+  const filteredPosts = visiblePosts.filter(post => {
     if (!searchTerm) return true;
     const search = searchTerm.toLowerCase();
     return (
@@ -100,8 +101,9 @@ export function SavedPostsPanel() {
     );
   });
 
-  const getEngagementRating = (likes: number, comments: number) => {
-    const score = (likes * 1) + (comments * 2);
+  const getEngagementRating = (likes: number | null, comments: number | null) => {
+    if (likes == null) return { label: 'Unknown', color: 'neutral' };
+    const score = (likes * 1) + ((comments ?? 0) * 2);
     if (score > 100) return { label: 'Viral', color: 'error' };
     if (score > 50) return { label: 'High', color: 'warning' };
     if (score > 20) return { label: 'Medium', color: 'info' };
@@ -127,13 +129,13 @@ export function SavedPostsPanel() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-surface-elevated rounded-lg p-5 border border-subtle">
           <div className="text-micro-bold uppercase tracking-wider text-secondary mb-1">Total Intercepts</div>
-          <div className="text-display-hero text-primary leading-none">{posts.length}</div>
+          <div className="text-display-hero text-primary leading-none">{visiblePosts.length}</div>
         </div>
         <div className="bg-surface-elevated rounded-lg p-5 border border-apple-blue/30 relative">
           <div className="text-micro-bold uppercase tracking-wider text-apple-blue mb-1 flex justify-between items-center">
             Fresh Leads <span className="w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse"></span>
           </div>
-          <div className="text-display-hero text-primary leading-none">{posts.filter(p => !p.visited).length}</div>
+          <div className="text-display-hero text-primary leading-none">{visiblePosts.filter(p => !p.visited).length}</div>
         </div>
         <div className="bg-surface-elevated rounded-lg p-5 border border-subtle">
           <div className="text-micro-bold uppercase tracking-wider text-secondary mb-1">Engaged</div>
@@ -258,10 +260,10 @@ export function SavedPostsPanel() {
                 {/* Metrics */}
                 <div className="px-5 py-3 bg-surface border-t border-b border-subtle flex items-center gap-5">
                   <div className="flex items-center gap-1.5 text-micro-bold text-primary">
-                    <ThumbsUp className="w-3.5 h-3.5 text-apple-blue" /> {post.likes.toLocaleString()}
+                    <ThumbsUp className="w-3.5 h-3.5 text-apple-blue" /> {post.likes != null ? post.likes.toLocaleString() : '—'}
                   </div>
                   <div className="flex items-center gap-1.5 text-micro-bold text-primary">
-                    <MessageCircle className="w-3.5 h-3.5 text-apple-blue" /> {post.comments.toLocaleString()}
+                    <MessageCircle className="w-3.5 h-3.5 text-apple-blue" /> {post.comments != null ? post.comments.toLocaleString() : '—'}
                   </div>
                   <div className="flex items-center gap-1.5 text-micro text-secondary ml-auto">
                     <BarChart2 className="w-3.5 h-3.5" /> High Insight

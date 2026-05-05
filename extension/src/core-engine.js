@@ -52,7 +52,6 @@
   let _seenCardEls   = new WeakSet();   // processed card DOM elements
   let _seenUrls      = new Set();       // dedup by URL across entire run
   let _totalFound    = 0;
-  let _totalFiltered = 0;
   let _heartbeatTimer= null;
   let _networkBuffer = [];              // posts from interceptor
   let _harvestCount  = 0;              // diagnostic: count harvests
@@ -120,6 +119,10 @@
   }
 
   // ── Find network data for a given URL ────────────────────────────────────
+  // v1.1: Only CONSUME (splice) the entry when it has real likes data.
+  // If likes is null, the entry is KEPT in the buffer so the pending-upgrade
+  // cycle can retry it on the next harvest — fixes the timing race where DOM
+  // harvest runs before the RSC response has populated the metric fields.
   function drainNetworkDataForUrl(url) {
     if (!url || _networkBuffer.length === 0) return null;
     const clean = url.split('?')[0].replace(/\/$/, '');
@@ -128,7 +131,12 @@
       return pu === clean;
     });
     if (idx === -1) return null;
-    const [found] = _networkBuffer.splice(idx, 1);
+    const found = _networkBuffer[idx];
+    // Only consume if the entry carries real metric data.
+    // Null-likes entries stay in the buffer for the pending upgrade cycle.
+    if (found.likes != null) {
+      _networkBuffer.splice(idx, 1);
+    }
     return found;
   }
 
@@ -213,15 +221,6 @@
       // multiple times which would inflate _totalFound and trigger premature stop.
       _seenCardEls.add(card);
 
-      // Filter
-      const { pass, reason } = FT().qualifies(post, CFG());
-      if (!pass) {
-        _totalFiltered++;
-        // Always log skip reason (not debug-only) — critical for diagnosing SEARCH_B
-        L().info(MODULE, `SKIP (${reason}): likes=${post.likes_count} url=${post.post_url ? post.post_url.slice(-40) : 'NULL'}`);
-        continue;
-      }
-
       // Visual highlight in debug mode
       if (CFG().HIGHLIGHT_POSTS) {
         L().highlight(card, '#10b981', `✓ ${post.likes_count}`);
@@ -231,61 +230,32 @@
       TR().buffer(post);
 
       // Hard cap
-      if (_totalFound - _totalFiltered >= CFG().MAX_POSTS_PER_RUN) {
+      if (_totalFound >= CFG().MAX_POSTS_PER_RUN) {
         L().info(MODULE, `Max posts/run reached (${CFG().MAX_POSTS_PER_RUN}). Finishing.`);
         finish('max_posts');
         return;
       }
     }
 
-    // Also flush any network-only posts whose cards were not in DOM
-    // (Layout B: cards may have been recycled but network data arrived)
+    // ── Network buffer flush ───────────────────────────────────────────────
     if (_networkBuffer.length > 0) {
       const networkOnly = _networkBuffer.splice(0, _networkBuffer.length);
+
       for (const np of networkOnly) {
         const urlKey = (np.url || '').split('?')[0].replace(/\/$/, '');
         if (!urlKey) continue;
 
-        if (_seenUrls.has(urlKey)) {
-          // ── Re-qualification path ─────────────────────────────────────────
-          // This URL was previously seen as a DOM card with likes=0 (race
-          // condition: harvest ran before the network interceptor fired).
-          // Now we have real engagement data — re-evaluate against the threshold.
-          // transport.js _sentUrls deduplicates, so buffering twice is safe.
-          if ((np.likes || 0) > 0) {
-            const requalPost = {
-              post_url:          np.url,
-              post_text:         np.text        || '',
-              likes_count:       np.likes       || 0,
-              comments_count:    np.comments    || 0,
-              shares_count:      np.reposts     || 0,
-              author:            np.author      || 'Unknown',
-              timestamp:         np.postedAtMs ? new Date(np.postedAtMs).toISOString() : null,
-              media_type:        'text',
-              extraction_source: 'network_requalify',
-              layout_id:         layout,
-              keyword:           _keyword,
-              session_id:        L().sessionId,
-            };
-            const { pass } = FT().qualifies(requalPost, CFG());
-            if (pass) {
-              TR().buffer(requalPost);
-              L().info(MODULE, `✅ RE-QUALIFIED: likes=${np.likes} url=${(np.url || '').slice(-40)}`);
-            }
-          }
-          continue; // always continue — URL already counted in _totalFound
-        }
-
-        // ── New URL path ──────────────────────────────────────────────────
+        // ── new URL only seen in network stream ─────────────────────
+        if (_seenUrls.has(urlKey)) continue;
         _seenUrls.add(urlKey);
 
         const syntheticPost = {
           post_url:          np.url,
-          post_text:         np.text        || '',
-          likes_count:       np.likes       || 0,
-          comments_count:    np.comments    || 0,
-          shares_count:      np.reposts     || 0,
-          author:            np.author      || 'Unknown',
+          post_text:         np.text     || '',
+          likes_count:       np.likes    != null ? np.likes    : null,
+          comments_count:    np.comments != null ? np.comments : null,
+          shares_count:      np.reposts  != null ? np.reposts  : null,
+          author:            np.author   || 'Unknown',
           timestamp:         np.postedAtMs ? new Date(np.postedAtMs).toISOString() : null,
           media_type:        'text',
           extraction_source: 'network',
@@ -297,12 +267,9 @@
         _totalFound++;
         newCardsThisRound++;
 
-        const { pass, reason } = FT().qualifies(syntheticPost, CFG());
-        if (!pass) { _totalFiltered++; continue; }
-
         TR().buffer(syntheticPost);
 
-        if (_totalFound - _totalFiltered >= CFG().MAX_POSTS_PER_RUN) {
+        if (_totalFound >= CFG().MAX_POSTS_PER_RUN) {
           finish('max_posts');
           return;
         }
@@ -344,33 +311,9 @@
         qualifiedPosts:  0,
         keyword:         _keyword,
         linkedInProfileId: _profileId,
-        reason:          'SEARCH_B_NO_CONTENT',
+        reason:          'NO_CONTENT',
       });
       return;
-    }
-
-    // ALWAYS dispatch all discovered URLs to the sniper for server-side qualification.
-    // This covers two cases:
-    //   (a) DOM-only posts with 0 likes that failed the local threshold — sniper fetches
-    //       real engagement data and saves qualifying posts.
-    //   (b) Posts already saved via transport — the API upserts them, so no duplicates.
-    const allUrls = Array.from(_seenUrls);
-    if (allUrls.length > 0) {
-      L().info(MODULE, `Dispatching ${allUrls.length} URLs to sniper (qualified=${qualified})`);
-      safeSend({
-        action:            'SNIPER_QUEUE',
-        urls:              allUrls,
-        keyword:           _keyword,
-        dashboardUrl:      _dashboardUrl,
-        userId:            _userId,
-        linkedInProfileId: _profileId,
-        settings: {
-          minLikes:  CFG().LIKE_THRESHOLD || 10,
-          minComments: 0,
-          targetMax: CFG().MAX_POSTS_PER_RUN || 15,
-          keyword:   _keyword,
-        },
-      });
     }
 
     safeSend({
@@ -404,7 +347,6 @@
     _seenCardEls   = new WeakSet();
     _seenUrls      = new Set();
     _totalFound    = 0;
-    _totalFiltered = 0;
     _networkBuffer = [];
 
     // Apply settings overrides to config

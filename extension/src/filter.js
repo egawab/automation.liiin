@@ -1,10 +1,11 @@
 /**
- * Nexora Filter v1.0
+ * Nexora Filter v1.2  — STRICT NUMERIC FILTER
  * ─────────────────────────────────────────────────────────────────────────────
  * Pure business logic. No DOM access. No side effects.
- * Applies qualification rules to extracted post objects.
  *
- * Primary rule: likes_count >= LIKE_THRESHOLD (default 10)
+ * Rule: pass = (likes_count != null) AND (likes_count >= LIKE_THRESHOLD)
+ *
+ * No exceptions. No fallbacks. No sniper passthrough. No unknown handling.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
@@ -17,8 +18,9 @@
 
   // ── Qualification logic ────────────────────────────────────────────────────
   function qualifies(post, config) {
-    const threshold          = (config && config.LIKE_THRESHOLD) || 10;
-    const includeUnknown     = (config && config.INCLUDE_UNKNOWN_LIKES) || false;
+    const threshold = (config && config.LIKE_THRESHOLD != null)
+      ? Number(config.LIKE_THRESHOLD)
+      : 10;
 
     // Must have a valid URL
     if (!post.post_url) {
@@ -26,24 +28,20 @@
       return { pass: false, reason: 'no_url' };
     }
 
-    // Likes unknown
-    if (post.likes_count === 0 && !includeUnknown) {
-      // If the extraction source is 'merged' or we have a non-zero comments count,
-      // treat 0 likes as genuinely 0 rather than extraction failure.
-      // Otherwise, it might be a rendering gap — skip conservatively.
-      if (post.extraction_source !== 'merged' && post.comments_count === 0) {
-        L && L.debug(M, `SKIP unknown_likes: ${post.post_url}`);
-        return { pass: false, reason: 'unknown_likes' };
-      }
+    // Null likes → REJECT (unknown engagement is not enough)
+    if (post.likes_count == null) {
+      L && L.debug(M, `SKIP null_likes: ${post.post_url}`);
+      return { pass: false, reason: 'null_likes' };
     }
 
-    // Primary filter: likes >= threshold
+    // Below threshold → REJECT
     if (post.likes_count < threshold) {
       L && L.debug(M, `SKIP below_threshold: likes=${post.likes_count} < ${threshold} → ${post.post_url}`);
       return { pass: false, reason: `below_threshold(${post.likes_count}<${threshold})` };
     }
 
-    L && L.debug(M, `PASS: likes=${post.likes_count} ≥ ${threshold} → ${post.post_url}`);
+    // PASS
+    L && L.debug(M, `PASS: likes=${post.likes_count} >= ${threshold} → ${post.post_url}`);
     return { pass: true, reason: 'qualified' };
   }
 
@@ -51,16 +49,10 @@
   function applyBatch(posts, config) {
     const passed   = [];
     const rejected = [];
-
     for (const post of posts) {
       const result = qualifies(post, config);
-      if (result.pass) {
-        passed.push(post);
-      } else {
-        rejected.push({ post, reason: result.reason });
-      }
+      if (result.pass) { passed.push(post); } else { rejected.push({ post, reason: result.reason }); }
     }
-
     L && L.info(M, `Batch: ${passed.length} passed / ${rejected.length} rejected (threshold=${(config || {}).LIKE_THRESHOLD || 10})`);
     return { passed, rejected };
   }
@@ -77,11 +69,6 @@
     return unique;
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-  window.__NexoraFilter = {
-    qualifies,
-    applyBatch,
-    deduplicateByUrl,
-  };
+  window.__NexoraFilter = { qualifies, applyBatch, deduplicateByUrl };
 
 })();
