@@ -98,16 +98,20 @@
       // Semantic data-test-id (Voyager)
       '[data-test-id="main-feed-activity-card__commentary"]',
       '[data-test-id*="commentary"]',
-      // Class-based (kept for reliability — class names are stable enough here)
+      // Class-based
       '.update-components-text',
       '[class*="commentary"]',
       '[class*="update-content"]',
       '[class*="feed-shared-text"]',
+      '.entity-result__summary',
+      '.entity-result__title',
       // Direction attribute (multilingual text)
       'span[dir="ltr"]',
       'span[dir="rtl"]',
       // Generic paragraphs
       'p',
+      // Last resort: any generic block that might contain text
+      '[class*="description"]'
     ];
 
     let best = '';
@@ -117,7 +121,7 @@
       for (const el of els) {
         if (isInsideComments(el)) continue;
         const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-        if (t.length > best.length && t.length >= 10 && t.length < 10000) {
+        if (t.length > best.length && t.length >= 2 && t.length < 10000) {
           best = t;
         }
       }
@@ -131,6 +135,8 @@
   function extractAuthor(card) {
     const selectors = [
       // Most specific first
+      '.entity-result__title-text a',
+      '.entity-result__title a',
       'a[href*="/in/"] strong',
       'a[href*="/in/"] b',
       'a[href*="/in/"] [aria-hidden="true"]',

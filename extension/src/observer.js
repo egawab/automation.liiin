@@ -118,9 +118,34 @@
     L && L.debug(M, `Step ${_scrollStep}/${maxSteps} | ${amount}px`);
     scrollPage(amount);
 
+    // If there is a 'Show more results' or 'Next' button, click it to prevent stall
+    clickPagination();
+
     // Harvest after settle delay
     const settleMs = cfg().SCROLL_SETTLE_MS || 800;
     setTimeout(() => { if (_active) doHarvest(); }, settleMs);
+  }
+
+  function clickPagination() {
+    try {
+      const nextBtn = document.querySelector('.artdeco-pagination__button--next');
+      if (nextBtn && !nextBtn.disabled && !nextBtn.classList.contains('disabled')) {
+        nextBtn.click();
+        L && L.info(M, 'Clicked Artdeco NEXT pagination button');
+        return true;
+      }
+      const exactTexts = ['show more results', 'see more results', 'load more', 'عرض المزيد', 'load more results'];
+      const btns = Array.from(document.querySelectorAll('button'));
+      for (const btn of btns) {
+        const t = (btn.innerText || '').toLowerCase().trim();
+        if (exactTexts.includes(t)) {
+          btn.click();
+          L && L.info(M, `Clicked explicit pagination button: "${t}"`);
+          return true;
+        }
+      }
+    } catch(e) {}
+    return false;
   }
 
   // ── Called by engine after each harvest ───────────────────────────────────
