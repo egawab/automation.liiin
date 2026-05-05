@@ -121,6 +121,18 @@
     } catch (e) {}
   }
 
+  // ── Normalize URLs to a common URN format ───────────────────────────────
+  // Converts both DOM /posts/ and network /feed/update/ URLs to a canonical format
+  function normalizePostUrl(url) {
+    if (!url) return '';
+    const m = url.match(/urn:li:(activity|ugcPost|share):(\d+)/) ||
+              url.match(/activity-(\d+)-/) ||
+              url.match(/ugcPost-(\d+)-/);
+    if (m && m[2]) return `https://www.linkedin.com/feed/update/urn:li:${m[1]}:${m[2]}`;
+    if (m && m[1]) return `https://www.linkedin.com/feed/update/urn:li:activity:${m[1]}`;
+    return url.split('?')[0].replace(/\/$/, '');
+  }
+
   // ── Core harvest — called after every scroll step ─────────────────────────
   // BRUTE FORCE: collect EVERYTHING. No filtering. No gating. No pending maps.
   function harvest() {
@@ -154,7 +166,7 @@
       if (!post.post_url) continue;
 
       // Dedup by URL
-      const urlKey = (post.post_url || '').split('?')[0].replace(/\/$/, '');
+      const urlKey = normalizePostUrl(post.post_url);
       if (_seenUrls.has(urlKey)) continue;
       _seenUrls.add(urlKey);
 
@@ -180,7 +192,7 @@
     {
       const remaining = [];
       for (const np of _networkBuffer) {
-        const urlKey = (np.url || '').split('?')[0].replace(/\/$/, '');
+        const urlKey = normalizePostUrl(np.url);
 
         // No URL → discard (can't save without URL)
         if (!urlKey) continue;
@@ -229,9 +241,9 @@
   // ── Drain network data for a URL (consume entry) ──────────────────────────
   function drainNetworkDataForUrl(url) {
     if (!url || _networkBuffer.length === 0) return null;
-    const clean = url.split('?')[0].replace(/\/$/, '');
+    const clean = normalizePostUrl(url);
     const idx = _networkBuffer.findIndex(p => {
-      const pu = (p.url || '').split('?')[0].replace(/\/$/, '');
+      const pu = normalizePostUrl(p.url);
       return pu === clean;
     });
     if (idx === -1) return null;

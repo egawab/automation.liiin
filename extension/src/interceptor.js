@@ -49,8 +49,9 @@
 
   const URN_RE     = /urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
   const URN_SINGLE = /urn:li:(activity|ugcPost|share):(\d{10,25})/i;
-  const FSD_RE     = /urn:li:fsd_update:[:(]urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
-  const FSD_SINGLE = /urn:li:fsd_update:[:(]urn:li:(activity|ugcPost|share):(\d{10,25})/i;
+  // v2.3: also matches fsd_entityResult (SEARCH_B API format)
+  const FSD_RE     = /urn:li:fsd_(?:update|entityResult)[:(]urn:li:(activity|ugcPost|share):(\d{10,25})/gi;
+  const FSD_SINGLE = /urn:li:fsd_(?:update|entityResult)[:(]urn:li:(activity|ugcPost|share):(\d{10,25})/i;
 
   function buildUrl(type, id) {
     const t = type.toLowerCase();
@@ -226,17 +227,23 @@
     if (pools.length === 0) return;
 
     const expandedPools = [];
-    for (const json of pools) {
-      expandedPools.push(json);
-      if (json && typeof json === 'object') {
-        ['included', 'elements', 'data', 'results', 'hits', 'items'].forEach(k => {
-          if (Array.isArray(json[k])) expandedPools.push(...json[k]);
+    function flattenInto(obj) {
+      if (!obj || typeof obj !== 'object') return;
+      expandedPools.push(obj);
+      // v2.3: walk all known wrapper keys (including deep SEARCH_B nesting)
+      ['included', 'elements', 'data', 'results', 'hits', 'items', 'item', 'clusters', 'cluster'].forEach(k => {
+        if (Array.isArray(obj[k])) obj[k].forEach(flattenInto);
+        else if (obj[k] && typeof obj[k] === 'object') flattenInto(obj[k]);
+      });
+      // Also expand top-level data sub-objects (searchDashClustersByAll, etc.)
+      if (obj.data && typeof obj.data === 'object') {
+        Object.values(obj.data).forEach(v => {
+          if (Array.isArray(v)) v.forEach(flattenInto);
+          else if (v && typeof v === 'object') flattenInto(v);
         });
-        if (json.data && typeof json.data === 'object') {
-          Object.values(json.data).forEach(v => { if (Array.isArray(v)) expandedPools.push(...v); });
-        }
       }
     }
+    for (const json of pools) flattenInto(json);
 
     for (const node of expandedPools) {
       if (!node || typeof node !== 'object') continue;

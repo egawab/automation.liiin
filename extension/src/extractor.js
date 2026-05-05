@@ -176,7 +176,19 @@
       }
     }
 
-    // Priority 5: inline text "247 reactions" pattern
+    // Priority 5: SEARCH_B "247 reactions • 18 comments" inline text
+    if (state.likes == null || state.comments == null) {
+      const proofText = card.querySelector('[class*="social-proof"], [class*="socialProof"]');
+      if (proofText) {
+        const t = proofText.textContent || '';
+        const rm = t.match(/([\d,.]+[KMk]?)\s*reactions?/i);
+        const cm2 = t.match(/([\d,.]+[KMk]?)\s*comments?/i);
+        if (rm && state.likes == null) { state.likes = parseCount(rm[1]); source = 'social-proof'; }
+        if (cm2 && state.comments == null) { state.comments = parseCount(cm2[1]); }
+      }
+    }
+
+    // Priority 6: inline text "247 reactions" pattern
     if (state.likes == null) {
       const rawText = (card.textContent || '').slice(0, 800);
       const m = rawText.match(/([\d,.]+[KMk]?)\s*(?:reactions?|likes?)/i);
@@ -212,6 +224,8 @@
   // ── Post text extraction ───────────────────────────────────────────────────
   function extractText(card) {
     const candidates = [
+      ...card.querySelectorAll('.update-components-text span, .feed-shared-update-v2__description span'),
+      ...card.querySelectorAll('[class*="commentary"] span, [class*="description"] span'),
       ...card.querySelectorAll('span[dir="ltr"], span[dir="rtl"]'),
       ...card.querySelectorAll('[data-test-id="main-feed-activity-card__commentary"]'),
       ...card.querySelectorAll('p'),
@@ -235,6 +249,10 @@
   function extractAuthor(card) {
     // Ordered from most-specific to broadest. Works for both SEARCH_A and SEARCH_B.
     const authSelectors = [
+      'a[href*="/in/"] strong',
+      'a[href*="/in/"] b',
+      '[class*="actor"] span',
+      '[class*="author"] span',
       'a[href*="/in/"] span[aria-hidden="true"]',
       'a[href*="/company/"] span[aria-hidden="true"]',
       // SEARCH_B: author name is often in aria-label of the profile link
