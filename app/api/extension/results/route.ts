@@ -112,7 +112,7 @@ export async function POST(req: Request) {
 
             // Normalize URL to canonical form — DOM /posts/ slug and network
             // /feed/update/urn:li:activity:ID must resolve to the same DB row.
-            function normalizeUrl(u) {
+            function normalizeUrl(u: string): string {
               if (!u) return u;
               const m1 = u.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
               if (m1) return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
