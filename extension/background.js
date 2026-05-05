@@ -962,7 +962,7 @@ async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedI
   const minLikes    = Number(settings.minLikes)    || 10;
   const minComments = Number(settings.minComments) || 0;
   const targetMax   = Number(settings.targetMax)   || 15;
-  const workList    = urls.slice(0, 40); // Hard cap: 40 URLs max
+  const workList    = urls.slice(0, 150); // Hard cap: 150 URLs max (background fetches, no UI freeze)
 
   console.log(`[Sniper] 🎯 FETCH mode: ${workList.length} URLs for "${keyword}" (minLikes=${minLikes})`);
   showPremiumToast('Sniper Active', `🎯 Fetching ${workList.length} posts for "${keyword}"...`, false);
@@ -982,6 +982,21 @@ async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedI
       if (best > 0) return best;
     }
     return 0;
+  }
+
+  function extractLikes(html) {
+    const directLikes = extractNum(html, 'numLikes', 'likeCount', 'totalReactionCount', 'reactionCount', 'reaction_count', 'numReactions', 'totalLikeCount');
+    if (directLikes > 0) return directLikes;
+    
+    // Fallbacks
+    let best = 0;
+    const reAgg = /aggregatedTotalReactions":\s*(\d+)/g;
+    let m;
+    while ((m = reAgg.exec(html)) !== null) {
+      const n = parseInt(m[1], 10);
+      if (n > best) best = n;
+    }
+    return best;
   }
 
   function extractText(html) {
@@ -1014,8 +1029,8 @@ async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedI
         console.warn(`[Sniper] ⏭️ Auth/empty page`); await sleep(400); continue;
       }
 
-      const likes    = extractNum(html, 'numLikes', 'likeCount');
-      const comments = extractNum(html, 'numComments', 'commentCount', 'totalSocialCommentCount');
+      const likes    = extractLikes(html);
+      const comments = extractNum(html, 'numComments', 'commentCount', 'totalSocialCommentCount', 'commentsCount');
       const text     = extractText(html);
       const author   = extractAuthor(html);
       let mediaType  = 'text';
