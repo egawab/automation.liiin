@@ -66,11 +66,14 @@
     return Math.max(a, b);
   }
 
-  // Comment-area guard selector (prevents picking up comment likes/counts)
+  // Comment-area guard selector (prevents picking up comment likes/counts).
+  // IMPORTANT: do NOT add 'article[data-test-id]' here — that matches the
+  // SEARCH_B post card itself and causes ALL text inside to be filtered out.
   const COMMENT_GUARD = [
     '[aria-label*="Write a comment" i]',
-    '[data-test-id*="comment"]',
-    'article[data-test-id]',  // individual comment articles
+    '[data-test-id*="comment-input"]',
+    '[data-test-id*="social-detail"]',
+    '.comments-comment-list',
   ].join(', ');
 
   function isInsideComments(el) {
@@ -230,16 +233,24 @@
 
   // ── Author extraction ──────────────────────────────────────────────────────
   function extractAuthor(card) {
-    for (const sel of [
+    // Ordered from most-specific to broadest. Works for both SEARCH_A and SEARCH_B.
+    const authSelectors = [
       'a[href*="/in/"] span[aria-hidden="true"]',
       'a[href*="/company/"] span[aria-hidden="true"]',
+      // SEARCH_B: author name is often in aria-label of the profile link
+      'a[href*="/in/"][aria-label]',
+      'a[href*="/company/"][aria-label]',
       '[data-member-id]',
       'a[href*="/in/"]',
       'a[href*="/company/"]',
-    ]) {
+    ];
+    for (const sel of authSelectors) {
       try {
         const el = card.querySelector(sel);
         if (!el) continue;
+        // Prefer aria-label (SEARCH_B often encodes name there)
+        const ariaLbl = (el.getAttribute('aria-label') || '').trim().split('\n')[0];
+        if (ariaLbl.length > 1 && ariaLbl.length < 100 && !/^\d/.test(ariaLbl)) return ariaLbl.slice(0, 80);
         const t = (el.innerText || el.textContent || '').trim().split('\n')[0];
         if (t.length > 1 && t.length < 100 && !/^\d/.test(t)) return t.slice(0, 80);
       } catch (e) {}

@@ -13,22 +13,21 @@
 
   const DEFAULTS = {
 
-    // ── Filter ───────────────────────────────────────────────────────────────
-    LIKE_THRESHOLD: 10,          // Keep posts with likes_count >= this value
-    INCLUDE_UNKNOWN_LIKES: false, // null likes = REJECT — strict numeric filter only
-    PENDING_MAX_CYCLES: 5,       // Max harvest cycles to wait for async likes to arrive before final rejection
+    // ── Filter — DISABLED (brute-force mode collects ALL posts) ───────────────
+    LIKE_THRESHOLD: 0,           // 0 = no threshold; accept all posts
+    INCLUDE_UNKNOWN_LIKES: true, // null likes = PASS (SEARCH_B rarely has DOM likes)
+    PENDING_MAX_CYCLES: 0,       // Disabled — no pending/deferred logic
 
     // ── Extraction limits ─────────────────────────────────────────────────────
     MAX_POSTS_PER_RUN: 500,      // Hard cap on posts collected per keyword run
-    MAX_SCROLL_STEPS: 150,       // Max scroll iterations before declaring exhausted (raised for deep SEARCH_B runs)
-    STALL_THRESHOLD: 20,         // Consecutive empty scrolls → feed exhausted (raised: SEARCH_B has async gaps)
+    MAX_SCROLL_STEPS: 60,        // Run exactly 60 scroll steps (brute force)
+    STALL_THRESHOLD: 999,        // Effectively disabled — never stop early for stall
 
     // ── Timing ────────────────────────────────────────────────────────────────
-    // Observer v1.1: timer-driven scroll — no debounce blocking
-    SCROLL_DELAY_MS: 1200,       // Fixed delay between scroll steps (±200ms jitter) — slightly faster
-    SCROLL_SETTLE_MS: 600,       // Wait after scroll before harvesting (raised: let network data arrive)
+    SCROLL_DELAY_MS: 1200,       // Fixed delay between scroll steps (±200ms jitter)
+    SCROLL_SETTLE_MS: 800,       // Wait after scroll before harvesting (longer = more time for async data)
     MIN_DELAY_MS: 600,           // Minimum floor (safety clamp)
-    MAX_DELAY_MS: 1500,          // Not used by observer v1.1 directly
+    MAX_DELAY_MS: 1500,          // Upper bound
     BATCH_FLUSH_INTERVAL_MS: 5000,
 
     // ── Transport ─────────────────────────────────────────────────────────────

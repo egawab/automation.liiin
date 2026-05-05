@@ -24,7 +24,7 @@
   const FAILURE_QUEUE_KEY = 'nexora_transport_failure_queue';
 
   let _buffer     = [];     // pending posts not yet sent
-  let _sentUrls   = new Set(); // in-session dedup
+  let _sentPostsMeta = new Map(); // in-session dedup with quality tracking
   let _jobMeta    = {};     // { keyword, dashboardUrl, userId, linkedInProfileId }
   let _flushTimer = null;
 
@@ -43,7 +43,7 @@
       comments:          post.comments_count != null ? post.comments_count : null,
       shares:            post.shares_count   != null ? post.shares_count   : null,
       author:            post.author         || 'Unknown',
-      preview:           (post.post_text || '').slice(0, 200),
+      preview:           (post.post_text || '').slice(0, 5000), // Dashboard expects full text here
       postText:          post.post_text      || '',
       timestamp:         post.timestamp      || null,
       mediaType:         post.media_type     || 'text',
@@ -135,8 +135,23 @@
     // The dashboard receives them and can filter/display as appropriate.
     let key = (post.post_url || '').split('?')[0].replace(/\/$/, '');
     if (!key) key = `_nosurl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    if (_sentUrls.has(key)) return false; // already sent this session
-    _sentUrls.add(key);
+    
+    const hasEngagement = post.likes_count != null || post.comments_count != null;
+    const hasText = post.post_text && post.post_text.length > 20;
+
+    const existing = _sentPostsMeta.get(key);
+    if (existing) {
+       // Only allow sending again if this is a substantial upgrade
+       if (!existing.hasEngagement && hasEngagement) {
+           L && L.debug(M, `Upgrading previously sent post (engagement data found): ${key}`);
+       } else if (!existing.hasText && hasText) {
+           L && L.debug(M, `Upgrading previously sent post (text data found): ${key}`);
+       } else {
+           return false; // ignore
+       }
+    }
+
+    _sentPostsMeta.set(key, { hasEngagement, hasText });
     _buffer.push(post);
 
     const batchSize = cfg().BATCH_SIZE || 10;
@@ -189,7 +204,7 @@
   // ── Public: reset for new run ─────────────────────────────────────────────
   function reset() {
     _buffer   = [];
-    _sentUrls = new Set();
+    _sentPostsMeta = new Map();
     if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
   }
 
@@ -199,7 +214,7 @@
     buffer,
     flush,
     reset,
-    getSentCount: () => _sentUrls.size,
+    getSentCount: () => _sentPostsMeta.size,
     getBufferSize: () => _buffer.length,
   };
 

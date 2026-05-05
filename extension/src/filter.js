@@ -1,11 +1,13 @@
 /**
- * Nexora Filter v1.2  — STRICT NUMERIC FILTER
+ * Nexora Filter v2.0  — PASS ALL (SEARCH_B Brute-Force Mode)
  * ─────────────────────────────────────────────────────────────────────────────
- * Pure business logic. No DOM access. No side effects.
+ * No filtering. Every post with a URL passes. No likes threshold.
+ * No null-likes rejection. No below-threshold rejection.
  *
- * Rule: pass = (likes_count != null) AND (likes_count >= LIKE_THRESHOLD)
- *
- * No exceptions. No fallbacks. No sniper passthrough. No unknown handling.
+ * Rationale: SEARCH_B DOM cards rarely have likes in the DOM. Filtering by
+ * likes causes nearly 100% rejection rate and 0 saved posts. The user wants
+ * ALL posts collected — filtering is the dashboard's responsibility, not the
+ * scraper's.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
@@ -16,44 +18,26 @@
   const L = window.__NexoraLogger;
   const M = 'Filter';
 
-  // ── Qualification logic ────────────────────────────────────────────────────
-  function qualifies(post, config) {
-    const threshold = (config && config.LIKE_THRESHOLD != null)
-      ? Number(config.LIKE_THRESHOLD)
-      : 10;
-
-    // Must have a valid URL
+  // ── Qualification logic — PASS EVERYTHING with a URL ─────────────────────
+  function qualifies(post) {
     if (!post.post_url) {
       L && L.debug(M, `SKIP no_url: "${(post.post_text || '').slice(0, 40)}"`);
       return { pass: false, reason: 'no_url' };
     }
-
-    // Null likes → REJECT (unknown engagement is not enough)
-    if (post.likes_count == null) {
-      L && L.debug(M, `SKIP null_likes: ${post.post_url}`);
-      return { pass: false, reason: 'null_likes' };
-    }
-
-    // Below threshold → REJECT
-    if (post.likes_count < threshold) {
-      L && L.debug(M, `SKIP below_threshold: likes=${post.likes_count} < ${threshold} → ${post.post_url}`);
-      return { pass: false, reason: `below_threshold(${post.likes_count}<${threshold})` };
-    }
-
-    // PASS
-    L && L.debug(M, `PASS: likes=${post.likes_count} >= ${threshold} → ${post.post_url}`);
-    return { pass: true, reason: 'qualified' };
+    // PASS — no engagement threshold, no null rejection
+    L && L.debug(M, `PASS: ${post.post_url} (likes=${post.likes_count})`);
+    return { pass: true, reason: 'has_url' };
   }
 
-  // ── Batch filter — returns { passed, rejected } ────────────────────────────
-  function applyBatch(posts, config) {
+  // ── Batch filter ──────────────────────────────────────────────────────────
+  function applyBatch(posts) {
     const passed   = [];
     const rejected = [];
     for (const post of posts) {
-      const result = qualifies(post, config);
+      const result = qualifies(post);
       if (result.pass) { passed.push(post); } else { rejected.push({ post, reason: result.reason }); }
     }
-    L && L.info(M, `Batch: ${passed.length} passed / ${rejected.length} rejected (threshold=${(config || {}).LIKE_THRESHOLD || 10})`);
+    L && L.info(M, `Batch: ${passed.length} passed / ${rejected.length} rejected`);
     return { passed, rejected };
   }
 

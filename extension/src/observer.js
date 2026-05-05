@@ -1,17 +1,15 @@
 /**
- * Nexora Observer v1.3  —  Tested Inner-Container Scroll
+ * Nexora Observer v1.4  —  Brute-Force Scroll (SEARCH_B Fix)
  * ─────────────────────────────────────────────────────────────────────────────
- * v1.2 bug: keyboard fallback fired because pageYOffset never moved.
- *   LinkedIn SEARCH_B has overflow:hidden on <html>/<body> — the feed sits
- *   inside an inner div with its own scrollTop. Checking window.pageYOffset
- *   to verify scroll progress was wrong.
+ * v1.3 bug: stall detection stopped the loop at ~step 9-20 when SEARCH_B
+ *   returned 0 DOM cards per scroll (async content, virtual DOM recycling).
  *
- * v1.3 fix:
- *   - Detects the REAL scroll container by actually incrementing scrollTop
- *     and checking if it changed (definitive test, no computed-style guessing)
- *   - Scrolls ONLY that container (no more simultaneous multi-target spam)
- *   - Keyboard fallback removed entirely
- *   - Smooth scroll replaced with instant (SPA pages often break smooth)
+ * v1.4 fix (BRUTE FORCE):
+ *   - Stall detection REMOVED entirely. Loop NEVER stops early.
+ *   - Only stop condition: step >= MAX_SCROLL_STEPS (default 60).
+ *   - Scroll runs unconditionally regardless of cards found or not.
+ *   - MutationObserver retained only for harvest triggering (not for scroll control).
+ *   - Scroll container detection retained from v1.3.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
@@ -28,22 +26,18 @@
   let _onNewCards   = null;
   let _onExhausted  = null;
   let _scrollStep   = 0;
-  let _stallCount   = 0;
   let _active       = false;
   let _scrollTimer  = null;
   let _scrollEl     = null;  // the confirmed scrollable element
 
   // ── Find the REAL scrollable container by probing each candidate ──────────
-  // Incrementally test scrollTop changes — definitive, no computed-style guessing
   function detectScrollContainer() {
     const candidates = [
-      // LinkedIn-specific class names (last resort but reliable when present)
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-finite-scroll__content'),
       document.querySelector('.search-results-container'),
       document.querySelector('[role="main"]'),
       document.querySelector('main'),
-      // Generic fallbacks
       document.scrollingElement,
       document.documentElement,
       document.body,
@@ -53,17 +47,16 @@
       if (!el || el === window) continue;
       try {
         const before = el.scrollTop;
-        el.scrollTop = before + 1;          // probe: try to scroll 1px
+        el.scrollTop = before + 1;
         const after = el.scrollTop;
-        el.scrollTop = before;              // restore immediately
+        el.scrollTop = before;
         if (after > before) {
-          L && L.info(M, `✓ Scroll container found: ${el.tagName}${el.id ? '#'+el.id : ''}${el.className ? '.'+String(el.className).split(' ')[0] : ''}`);
+          L && L.info(M, `✓ Scroll container: ${el.tagName}${el.id ? '#'+el.id : ''}${el.className ? '.'+String(el.className).split(' ')[0] : ''}`);
           return el;
         }
       } catch (e) {}
     }
 
-    // If nothing scrolled yet (page not loaded enough), default to documentElement
     L && L.warn(M, 'No scrollable container found — using documentElement');
     return document.documentElement;
   }
@@ -72,8 +65,6 @@
   function scrollPage(amount) {
     const el = _scrollEl;
     if (!el) return;
-
-    // Use instant behavior — LinkedIn SPA often breaks smooth scrollBy timing
     try {
       el.scrollTop += amount;
     } catch (e) {
@@ -81,12 +72,12 @@
     }
   }
 
-  // ── Re-detect scroll container on each step (LinkedIn SPA may swap elements)
+  // ── Re-detect scroll container every 5 steps ──────────────────────────────
   function refreshScrollContainer() {
     _scrollEl = detectScrollContainer();
   }
 
-  // ── MutationObserver — early trigger on real post additions only ───────────
+  // ── MutationObserver — triggers extra harvests on DOM changes ─────────────
   function attachMutationObserver(container) {
     if (_mutationObs) { _mutationObs.disconnect(); _mutationObs = null; }
     _mutationObs = new MutationObserver((mutations) => {
@@ -123,58 +114,57 @@
     if (!_active) return;
 
     _scrollStep++;
-    const maxSteps       = cfg().MAX_SCROLL_STEPS  || 150;
-    const stallThreshold = cfg().STALL_THRESHOLD   || 20;
+    const maxSteps = cfg().MAX_SCROLL_STEPS || 60;
 
+    // ONLY stop when we hit the step cap — NO stall detection, NO early exit
     if (_scrollStep > maxSteps) {
-      L && L.info(M, `Max scroll steps (${maxSteps}). Done.`);
+      L && L.info(M, `Reached max scroll steps (${maxSteps}). Done.`);
       _onExhausted && _onExhausted('max_steps');
-      return;
-    }
-    if (_stallCount >= stallThreshold) {
-      L && L.info(M, `Feed stalled (${_stallCount}). Done.`);
-      _onExhausted && _onExhausted('stall');
       return;
     }
 
     // Re-probe scroll container every 5 steps (LinkedIn SPA can swap elements)
     if (_scrollStep % 5 === 1) refreshScrollContainer();
 
-    // Natural scroll: 70–110% of viewport height with jitter
+    // Natural scroll: 70–110% of viewport height
     const jitter = 0.70 + Math.random() * 0.40;
     const amount = Math.floor(window.innerHeight * jitter);
 
-    L && L.debug(M, `Scroll step ${_scrollStep} | ${amount}px | stall=${_stallCount} | target=${_scrollEl ? _scrollEl.tagName : '?'}`);
+    L && L.debug(M, `Step ${_scrollStep}/${maxSteps} | ${amount}px | container=${_scrollEl ? _scrollEl.tagName : '?'}`);
     scrollPage(amount);
 
-    // Harvest after settle
-    const settleMs = cfg().SCROLL_SETTLE_MS || 500;
+    // Harvest after settle delay
+    const settleMs = cfg().SCROLL_SETTLE_MS || 800;
     setTimeout(() => { if (_active) doHarvest(); }, settleMs);
   }
 
+  // ── Called by engine after each harvest — ALWAYS schedules next scroll ────
+  // No stall counter, no conditional. We scroll no matter what.
   function onHarvestComplete(newCardsFound) {
     if (!_active) return;
 
-    if (newCardsFound > 0) {
-      _stallCount = 0;
-    } else {
-      _stallCount++;
-    }
+    // Log for diagnostics but DO NOT use for stop decisions
+    L && L.debug(M, `Harvest complete: +${newCardsFound} cards | step=${_scrollStep}`);
 
-    const base   = cfg().SCROLL_DELAY_MS || 1400;
+    const base   = cfg().SCROLL_DELAY_MS || 1200;
     const jitter = Math.floor(Math.random() * 400) - 200;
-    const delay  = Math.max(800, base + jitter);
+    const delay  = Math.max(600, base + jitter);
     scheduleNextScroll(delay);
   }
 
   // ── Page Readiness Probe ──────────────────────────────────────────────────
-  async function waitForPageReady(maxWaitMs = 25000) {
+  // Wait briefly but don't block too long — SEARCH_B loads content asynchronously
+  async function waitForPageReady(maxWaitMs = 15000) {
     const start = Date.now();
     while (Date.now() - start < maxWaitMs) {
-      const signals = document.querySelectorAll('button[aria-label*="reaction" i], button[aria-label*="like" i], [data-urn], a[href*="/posts/"], a[href*="/feed/update/"]').length;
+      const signals = document.querySelectorAll(
+        'button[aria-label*="reaction" i], button[aria-label*="like" i], ' +
+        '[data-urn], a[href*="/posts/"], a[href*="/feed/update/"], li[data-occludable-update-urn]'
+      ).length;
       if (signals > 0) return true;
       await new Promise(r => setTimeout(r, 500));
     }
+    // Proceed anyway — don't block indefinitely
     return false;
   }
 
@@ -184,20 +174,19 @@
     _onNewCards  = onNewCards;
     _onExhausted = onExhausted;
     _scrollStep  = 0;
-    _stallCount  = 0;
     _active      = true;
 
-    L && L.info(M, 'Waiting for page readiness signals...');
+    L && L.info(M, 'Observer v1.4 (brute-force) starting — waiting for page signals...');
     const isReady = await waitForPageReady();
     if (!isReady) {
-      L && L.warn(M, 'Page readiness timeout (25s). Proceeding anyway.');
+      L && L.warn(M, 'Page readiness timeout (15s). Proceeding anyway.');
     } else {
-      L && L.info(M, 'Page ready. Initializing observer.');
+      L && L.info(M, 'Page ready.');
     }
-    
-    if (!_active) return; // In case stop() was called during wait
 
-    // Stabilization delay
+    if (!_active) return;
+
+    // Short stabilization delay
     await new Promise(r => setTimeout(r, 500));
 
     _scrollEl = detectScrollContainer();
@@ -209,10 +198,10 @@
 
     attachMutationObserver(container);
 
-    L && L.info(M, 'Observer v1.3 started (inner-container scroll)');
+    L && L.info(M, `Observer v1.4 started. MAX_SCROLL_STEPS=${cfg().MAX_SCROLL_STEPS || 60}`);
 
     // Initial harvest (posts already on screen)
-    setTimeout(() => { if (_active) doHarvest(); }, 100);
+    setTimeout(() => { if (_active) doHarvest(); }, 200);
   }
 
   function stop() {

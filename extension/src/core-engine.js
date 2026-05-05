@@ -1,25 +1,19 @@
 /**
- * Nexora Core Engine v1.0  —  Search-Only Mode
+ * Nexora Core Engine v2.0  —  Brute-Force Search-Only Mode
  * ─────────────────────────────────────────────────────────────────────────────
- * Orchestrates all modules. Injected into the LinkedIn page by background.js
- * ONLY for SEARCH_ONLY mode. Comment-campaign mode still uses content.js.
+ * v1.x had: pending maps, null-likes gating, stall counters, network buffer
+ * re-queuing that blocked posts from being sent. Result: ~2 posts, stops at 9.
  *
- * Load order (injected by background.js as a files[] array):
+ * v2.0 philosophy: DUMB AND AGGRESSIVE.
+ *  - Every card found → immediately buffered for transport. No filtering.
+ *  - Every network post → immediately buffered. No null-likes gating.
+ *  - Observer runs ALL 60 steps. No stall-based early exit.
+ *  - finish() only called when observer exhausts (max steps).
+ *
+ * Load order (injected by background.js):
  *   src/config.js → src/logger.js → src/layout-detector.js →
  *   src/dom-adapter.js → src/extractor.js → src/filter.js →
  *   src/transport.js → src/observer.js → src/core-engine.js
- *
- * The network interceptor (src/interceptor.js) is injected into the MAIN
- * world separately via a <script> tag created here.
- *
- * Entry point called by background.js:
- *   window.__NexoraEngine.start(keyword, settings, dashboardUrl, userId)
- *
- * Sends to background.js:
- *   HEARTBEAT    — keep-alive every ~20s
- *   LIVE_STATUS  — human-readable status updates
- *   SYNC_RESULTS — batched qualified posts (via transport.js)
- *   JOB_COMPLETED / JOB_FAILED — terminal signals
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
@@ -31,30 +25,29 @@
     return;
   }
 
-  // ── Module references (loaded before this file) ───────────────────────────
-  const CFG  = () => window.__NexoraConfig        || {};
-  const L    = () => window.__NexoraLogger        || { info(){}, warn(){}, error(){}, debug(){}, setDebug(){} };
-  const LD   = () => window.__NexoraLayoutDetector|| { detect(){ return 'UNKNOWN'; }, LAYOUTS: {} };
-  const DA   = () => window.__NexoraDomAdapter    || { discoverCards(){ return []; }, extractCanonicalUrl(){ return null; } };
-  const EX   = () => window.__NexoraExtractor     || { extractFromCard(){ return {}; }, mergeWithNetworkData(a){ return a; } };
-  const FT   = () => window.__NexoraFilter        || { applyBatch(p){ return { passed: p, rejected: [] }; }, deduplicateByUrl(p){ return p; } };
-  const TR   = () => window.__NexoraTransport     || { buffer(){}, flush(){}, configure(){}, reset(){}, getSentCount(){ return 0; } };
-  const OBS  = () => window.__NexoraObserver      || { start(){}, stop(){}, onHarvestComplete(){} };
+  // ── Module references ─────────────────────────────────────────────────────
+  const CFG  = () => window.__NexoraConfig         || {};
+  const L    = () => window.__NexoraLogger         || { info(){}, warn(){}, error(){}, debug(){}, setDebug(){} };
+  const LD   = () => window.__NexoraLayoutDetector || { detect(){ return 'UNKNOWN'; }, LAYOUTS: {} };
+  const DA   = () => window.__NexoraDomAdapter     || { discoverCards(){ return []; }, extractCanonicalUrl(){ return null; } };
+  const EX   = () => window.__NexoraExtractor      || { extractFromCard(){ return {}; }, mergeWithNetworkData(a){ return a; } };
+  const TR   = () => window.__NexoraTransport      || { buffer(){}, flush(){}, configure(){}, reset(){}, getSentCount(){ return 0; } };
+  const OBS  = () => window.__NexoraObserver       || { start(){}, stop(){}, onHarvestComplete(){} };
 
   const MODULE = 'Engine';
 
   // ── Engine state ──────────────────────────────────────────────────────────
-  let _running       = false;
-  let _keyword       = '';
-  let _dashboardUrl  = '';
-  let _userId        = '';
-  let _profileId     = 'Unknown';
-  let _seenCardEls   = new WeakSet();   // processed card DOM elements
-  let _seenUrls      = new Set();       // dedup by URL across entire run
-  let _totalFound    = 0;
-  let _heartbeatTimer= null;
-  let _networkBuffer = [];              // posts from interceptor
-  let _harvestCount  = 0;              // diagnostic: count harvests
+  let _running        = false;
+  let _keyword        = '';
+  let _dashboardUrl   = '';
+  let _userId         = '';
+  let _profileId      = 'Unknown';
+  let _seenCardEls    = new WeakSet();
+  let _seenUrls       = new Set();
+  let _totalFound     = 0;
+  let _heartbeatTimer = null;
+  let _networkBuffer  = [];   // posts received from interceptor
+  let _harvestCount   = 0;
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function safeSend(msg) {
@@ -65,9 +58,7 @@
     } catch (e) {}
   }
 
-  function heartbeat(phase) {
-    safeSend({ action: 'HEARTBEAT', phase });
-  }
+  function heartbeat(phase) { safeSend({ action: 'HEARTBEAT', phase }); }
 
   function status(text) {
     L().info(MODULE, text);
@@ -108,36 +99,10 @@
       if (Array.isArray(posts)) {
         _networkBuffer.push(...posts);
         L().debug(MODULE, `Network buffer +${posts.length} (total=${_networkBuffer.length})`);
-        // SEARCH_B fix: immediately process network data — don't wait for the
-        // next scroll cycle. Network posts for SEARCH_B arrive asynchronously
-        // (after LinkedIn's API responds) and would otherwise be missed.
-        if (_running) {
-          setTimeout(() => harvest(), 150);
-        }
+        // Trigger an immediate harvest whenever new network data arrives
+        if (_running) setTimeout(() => harvest(), 100);
       }
     });
-  }
-
-  // ── Find network data for a given URL ────────────────────────────────────
-  // v1.1: Only CONSUME (splice) the entry when it has real likes data.
-  // If likes is null, the entry is KEPT in the buffer so the pending-upgrade
-  // cycle can retry it on the next harvest — fixes the timing race where DOM
-  // harvest runs before the RSC response has populated the metric fields.
-  function drainNetworkDataForUrl(url) {
-    if (!url || _networkBuffer.length === 0) return null;
-    const clean = url.split('?')[0].replace(/\/$/, '');
-    const idx = _networkBuffer.findIndex(p => {
-      const pu = (p.url || '').split('?')[0].replace(/\/$/, '');
-      return pu === clean;
-    });
-    if (idx === -1) return null;
-    const found = _networkBuffer[idx];
-    // Only consume if the entry carries real metric data.
-    // Null-likes entries stay in the buffer for the pending upgrade cycle.
-    if (found.likes != null) {
-      _networkBuffer.splice(idx, 1);
-    }
-    return found;
   }
 
   // ── Detect LinkedIn profile identity ─────────────────────────────────────
@@ -156,7 +121,8 @@
     } catch (e) {}
   }
 
-  // ── Core harvest function — called by observer on every DOM change ─────────
+  // ── Core harvest — called after every scroll step ─────────────────────────
+  // BRUTE FORCE: collect EVERYTHING. No filtering. No gating. No pending maps.
   function harvest() {
     if (!_running) return;
 
@@ -165,32 +131,13 @@
 
     const layout = LD().detect();
     const cards  = DA().discoverCards(layout);
-    let newCardsThisRound = 0;
+    let newThisRound = 0;
 
-    // ── SEARCH_B diagnostic: log DOM structure on first harvest ────────────
-    if (_harvestCount === 1) {
-      L().info(MODULE, `[Diag] layout=${layout} url=${location.href.slice(0,80)}`);
-      L().info(MODULE, `[Diag] cards found=${cards.length}`);
-      L().info(MODULE, `[Diag] scrollY=${window.pageYOffset} docH=${document.documentElement.scrollHeight} winH=${window.innerHeight}`);
-      L().info(MODULE, `[Diag] scrollingEl=${document.scrollingElement ? document.scrollingElement.tagName : 'none'}`);
-      if (cards.length > 0) {
-        const c = cards[0];
-        const url = DA().extractCanonicalUrl(c);
-        const firstLbl = (c.querySelector('[aria-label]') || {}).getAttribute && c.querySelector('[aria-label]').getAttribute('aria-label');
-        const anchorCount = c.querySelectorAll('a[href]').length;
-        L().info(MODULE, `[Diag] card[0] tag=${c.tagName} scrollH=${c.scrollHeight} anchors=${anchorCount} url=${url || 'NULL'} firstAriaLabel="${(firstLbl||'').slice(0,60)}"`);
-        // Also log all anchor hrefs in the card so we can see what URLs are present
-        const allHrefs = Array.from(c.querySelectorAll('a[href]')).map(a => a.getAttribute('href')).filter(Boolean).slice(0, 5);
-        L().info(MODULE, `[Diag] card[0] hrefs: ${JSON.stringify(allHrefs)}`);
-      }
-    }
-
+    // ── DOM harvest ───────────────────────────────────────────────────────
     for (const card of cards) {
-      // Skip already-processed cards
       if (_seenCardEls.has(card)) continue;
       _seenCardEls.add(card);
 
-      // Extract raw data
       let post;
       try {
         post = EX().extractFromCard(card, { layoutId: layout });
@@ -199,79 +146,55 @@
         continue;
       }
 
-      // Merge with network-intercepted data (better metrics)
-      if (post.post_url) {
-        const netData = drainNetworkDataForUrl(post.post_url);
-        if (netData) post = EX().mergeWithNetworkData(post, netData);
-      }
-
-      // Attach keyword + session metadata
+      // Attach metadata
       post.keyword    = _keyword;
       post.session_id = L().sessionId;
 
-      // Deduplicate by URL
+      // Skip if no URL at all (can't identify the post)
+      if (!post.post_url) continue;
+
+      // Dedup by URL
       const urlKey = (post.post_url || '').split('?')[0].replace(/\/$/, '');
-      if (urlKey && _seenUrls.has(urlKey)) continue;
-      if (urlKey) _seenUrls.add(urlKey);
+      if (_seenUrls.has(urlKey)) continue;
+      _seenUrls.add(urlKey);
+
+      // Try to enrich with network data if available
+      const netData = drainNetworkDataForUrl(post.post_url);
+      if (netData) post = EX().mergeWithNetworkData(post, netData);
 
       _totalFound++;
-      newCardsThisRound++;
+      newThisRound++;
 
-      // Always add to WeakSet — prevents the same element being counted
-      // multiple times which would inflate _totalFound and trigger premature stop.
-      _seenCardEls.add(card);
-
-      // Visual highlight in debug mode
-      if (CFG().HIGHLIGHT_POSTS) {
-        L().highlight(card, '#10b981', `✓ ${post.likes_count}`);
-      }
-
-      // Buffer for sending
+      // Send immediately — no filter, no threshold
       TR().buffer(post);
 
-      // Hard cap
       if (_totalFound >= CFG().MAX_POSTS_PER_RUN) {
-        L().info(MODULE, `Max posts/run reached (${CFG().MAX_POSTS_PER_RUN}). Finishing.`);
+        L().info(MODULE, `Max posts/run (${CFG().MAX_POSTS_PER_RUN}) reached.`);
         finish('max_posts');
         return;
       }
     }
 
-    // ── Network buffer flush ───────────────────────────────────────────────
-    // IMPORTANT: Only flush entries that:
-    //   (a) have a URL not yet seen by DOM harvest (_seenUrls)
-    //   (b) are NOT null-likes-only — those stay in the buffer so
-    //       drainNetworkDataForUrl() can retry them on the next DOM harvest
-    //       (prevents the async timing race from losing enriched metrics).
-    // We iterate a COPY and only splice entries we are actually consuming.
-    let netNewThisRound = 0;
+    // ── Network-only posts (not matched by DOM) ────────────────────────────
+    // Drain ALL network buffer entries unconditionally. No null-likes gating.
     {
-      const toKeep = [];
+      const remaining = [];
       for (const np of _networkBuffer) {
         const urlKey = (np.url || '').split('?')[0].replace(/\/$/, '');
 
-        // No URL → keep pending, can't key it
-        if (!urlKey) { toKeep.push(np); continue; }
-
-        // Already processed by DOM harvest → discard (DOM path already handled it)
-        if (_seenUrls.has(urlKey)) continue;
-
-        // null-likes AND no text → keep pending; a later RSC chunk may enrich it
-        if (np.likes == null && !(np.text && np.text.length > 10)) {
-          toKeep.push(np);
-          continue;
-        }
+        // No URL → discard (can't save without URL)
+        if (!urlKey) continue;
 
         // Consume: mark seen and emit synthetic post
         _seenUrls.add(urlKey);
 
         const syntheticPost = {
           post_url:          np.url,
-          post_text:         np.text     || '',
-          likes_count:       np.likes    != null ? np.likes    : null,
-          comments_count:    np.comments != null ? np.comments : null,
-          shares_count:      np.reposts  != null ? np.reposts  : null,
-          author:            np.author   || 'Unknown',
+          post_text:         np.text      || '',
+          likes_count:       np.likes     != null ? np.likes     : null,
+          comments_count:    np.comments  != null ? np.comments  : null,
+          shares_count:      np.reposts   != null ? np.reposts   : null,
+          author:            np.author    || 'Unknown',
           timestamp:         np.postedAtMs ? new Date(np.postedAtMs).toISOString() : null,
           media_type:        'text',
           extraction_source: 'network',
@@ -281,38 +204,43 @@
         };
 
         _totalFound++;
-        newCardsThisRound++;
-        netNewThisRound++;
+        newThisRound++;
 
         TR().buffer(syntheticPost);
 
         if (_totalFound >= CFG().MAX_POSTS_PER_RUN) {
-          // Restore unprocessed entries before finishing
           _networkBuffer.length = 0;
-          _networkBuffer.push(...toKeep);
           finish('max_posts');
           return;
         }
       }
-      // Replace buffer contents with only the kept (pending) entries
+      // Only keep entries that had no URL (truly useless)
       _networkBuffer.length = 0;
-      _networkBuffer.push(...toKeep);
+      _networkBuffer.push(...remaining);
     }
 
-    // ── Stall reset accounts for BOTH DOM cards AND network-only posts ────────
-    // This is critical for SEARCH_B: a scroll step that delivers 0 new DOM cards
-    // but N new network posts must NOT increment the stall counter.
-    const totalNewThisRound = newCardsThisRound; // netNewThisRound already counted inside newCardsThisRound
+    // Diagnostic log every step
+    status(`🔍 "${_keyword}" — Step ${OBS().getStep()} | Found: ${_totalFound} | DOM cards: ${cards.length} | Layout: ${layout}`);
 
-    const qualified = TR().getSentCount() + TR().getBufferSize();
-    status(`🔍 "${_keyword}" — Step ${OBS().getStep()} | Found: ${_totalFound} | Buf: ${_networkBuffer.length} pending | Layout: ${layout}`);
-
-    OBS().onHarvestComplete(totalNewThisRound);
+    // Tell observer this harvest is done — it will schedule the next scroll
+    OBS().onHarvestComplete(newThisRound);
   }
 
-  // ── Feed exhausted ─────────────────────────────────────────────────────────
+  // ── Drain network data for a URL (consume entry) ──────────────────────────
+  function drainNetworkDataForUrl(url) {
+    if (!url || _networkBuffer.length === 0) return null;
+    const clean = url.split('?')[0].replace(/\/$/, '');
+    const idx = _networkBuffer.findIndex(p => {
+      const pu = (p.url || '').split('?')[0].replace(/\/$/, '');
+      return pu === clean;
+    });
+    if (idx === -1) return null;
+    return _networkBuffer.splice(idx, 1)[0]; // always consume
+  }
+
+  // ── Feed exhausted (called by observer after max steps) ────────────────────
   async function onExhausted(reason) {
-    L().info(MODULE, `Feed exhausted: ${reason}`);
+    L().info(MODULE, `Observer exhausted: ${reason}`);
     finish('exhausted');
   }
 
@@ -324,22 +252,22 @@
     stopHeartbeat();
     OBS().stop();
 
-    // Final flush
+    // Final flush of any remaining buffered posts
     try { await TR().flush(); } catch (e) {}
 
     const qualified = TR().getSentCount();
-    L().info(MODULE, `Run complete. reason=${reason} found=${_totalFound} qualified=${qualified}`);
-    status(`✅ "${_keyword}" done — ${qualified} posts sent (${_totalFound} scanned)`);
+    L().info(MODULE, `Run complete. reason=${reason} found=${_totalFound} sent=${qualified}`);
+    status(`✅ "${_keyword}" done — ${qualified} posts sent (${_totalFound} scanned, ${OBS().getStep()} steps)`);
 
     if (qualified === 0 && _totalFound === 0) {
       safeSend({
-        action:          'JOB_FAILED',
-        searchOnlyMode:  true,
-        postsExtracted:  0,
-        qualifiedPosts:  0,
-        keyword:         _keyword,
+        action:           'JOB_FAILED',
+        searchOnlyMode:   true,
+        postsExtracted:   0,
+        qualifiedPosts:   0,
+        keyword:          _keyword,
         linkedInProfileId: _profileId,
-        reason:          'NO_CONTENT',
+        reason:           'NO_CONTENT',
       });
       return;
     }
@@ -368,32 +296,44 @@
       return;
     }
 
-    _running       = true;
-    _keyword       = keyword       || '';
-    _dashboardUrl  = dashboardUrl  || '';
-    _userId        = userId        || '';
-    _seenCardEls   = new WeakSet();
-    _seenUrls      = new Set();
-    _totalFound    = 0;
-    _networkBuffer = [];
+    _running        = true;
+    _keyword        = keyword      || '';
+    _dashboardUrl   = dashboardUrl || '';
+    _userId         = userId       || '';
+    _seenCardEls    = new WeakSet();
+    _seenUrls       = new Set();
+    _totalFound     = 0;
+    _networkBuffer  = [];
+    _harvestCount   = 0;
 
-    // Apply settings overrides to config
-    if (settings) {
-      const overrides = {};
-      if (settings.likeThreshold != null)  overrides.LIKE_THRESHOLD   = Number(settings.likeThreshold);
-      if (settings.maxPosts != null)        overrides.MAX_POSTS_PER_RUN = Number(settings.maxPosts);
-      if (settings.debugMode != null)       overrides.DEBUG_MODE        = !!settings.debugMode;
-      if (settings.highlightPosts != null)  overrides.HIGHLIGHT_POSTS   = !!settings.highlightPosts;
-      CFG().update && CFG().update(overrides);
+    // Force brute-force config — ignore any user settings that would restrict
+    const forcedOverrides = {
+      MAX_SCROLL_STEPS:   60,   // Always run 60 steps
+      STALL_THRESHOLD:    999,  // Effectively disabled
+      LIKE_THRESHOLD:     0,    // Accept all posts
+      INCLUDE_UNKNOWN_LIKES: true,
+      SCROLL_DELAY_MS:    1200,
+      SCROLL_SETTLE_MS:   800,
+      MAX_POSTS_PER_RUN:  500,
+    };
+
+    // Apply any user settings first, then force our overrides on top
+    if (settings && CFG().update) {
+      const userOverrides = {};
+      if (settings.maxPosts    != null) userOverrides.MAX_POSTS_PER_RUN = Number(settings.maxPosts);
+      if (settings.debugMode   != null) userOverrides.DEBUG_MODE        = !!settings.debugMode;
+      CFG().update(userOverrides);
     }
+    CFG().update && CFG().update(forcedOverrides);
 
-    // Load config from storage (may override above)
+    // Load from storage (may override above, but forcedOverrides re-applied after)
     if (CFG().load) await CFG().load();
+    // Re-apply critical brute-force overrides AFTER storage load
+    CFG().update && CFG().update(forcedOverrides);
 
-    // Enable debug logging if configured
     if (CFG().DEBUG_MODE) L().setDebug(true);
 
-    L().info(MODULE, `Starting search-only run: keyword="${_keyword}" threshold=${CFG().LIKE_THRESHOLD}`);
+    L().info(MODULE, `Engine v2.0 starting: keyword="${_keyword}" steps=${CFG().MAX_SCROLL_STEPS}`);
     status(`🚀 Starting extraction for "${_keyword}"…`);
 
     // Configure transport
@@ -405,29 +345,26 @@
     });
     TR().reset();
 
-    // Detect LinkedIn profile
     detectProfileId();
 
-    // Inject network interceptor into MAIN world (fallback if content_script failed)
+    // Inject network interceptor + attach listener
     injectInterceptor();
     attachNetworkListener();
 
-    // Drain any posts the interceptor already scanned from embedded <code> elements.
-    // The interceptor runs at document_start and stores pre-scanned posts in this
-    // global BEFORE core-engine starts listening to postMessage.
+    // Drain any pre-scanned embedded posts
     const preScanned = window.__NexoraEmbeddedPosts || [];
     if (preScanned.length > 0) {
       _networkBuffer.push(...preScanned);
-      window.__NexoraEmbeddedPosts = []; // clear so we don't re-add on future calls
-      L().info(MODULE, `Loaded ${preScanned.length} pre-scanned embedded posts into buffer`);
+      window.__NexoraEmbeddedPosts = [];
+      L().info(MODULE, `Loaded ${preScanned.length} pre-scanned embedded posts`);
     }
 
-    // Wait for layout detection before starting observer
-    const layoutId = await LD().detectAsync(20000);
-    L().info(MODULE, `Layout detected as ${layoutId}`);
-    await new Promise(r => setTimeout(r, 1000)); // stabilization pause
+    // Detect layout — short timeout since SEARCH_B may not have data-urn yet
+    const layoutId = await LD().detectAsync(10000);
+    L().info(MODULE, `Layout detected: ${layoutId}`);
+    await new Promise(r => setTimeout(r, 800)); // short stabilization pause
 
-    // Start observer (MutationObserver + intelligent scroll)
+    // Start observer (drives scroll + harvest callbacks)
     startHeartbeat();
     OBS().start(harvest, onExhausted);
   }
@@ -441,10 +378,10 @@
     L().info(MODULE, 'Stopped by external call');
   }
 
-  // ── Expose on window (called by background.js) ────────────────────────────
+  // ── Expose on window ──────────────────────────────────────────────────────
   window.__NexoraEngine = { start, stop, emergencySync };
 
-  // ── Register cleanup for re-injection safety ──────────────────────────────
+  // ── Cleanup hook for re-injection safety ──────────────────────────────────
   window.__linkedInExtractorCleanup = window.__linkedInExtractorCleanup || function () {};
   const _prevCleanup = window.__linkedInExtractorCleanup;
   window.__linkedInExtractorCleanup = function () {
@@ -452,9 +389,8 @@
     stop();
   };
 
-  // ── Emergency sync hook (used by background.js watchdog) ─────────────────
   window.__emergencySync = emergencySync;
 
-  L().info(MODULE, 'Core Engine v1.0 ready');
+  L().info(MODULE, 'Core Engine v2.0 ready (brute-force mode)');
 
 })();

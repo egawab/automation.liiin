@@ -108,7 +108,7 @@ export async function POST(req: Request) {
             // ── SANITIZE all string fields before they touch Prisma ──
             const safeUrl = sanitizeString(post.url).substring(0, 2000);
             const safeAuthor = sanitizeString(post.author || 'Unknown').substring(0, 100);
-            const safePreview = sanitizeString(post.preview || '').substring(0, 1000);
+            const safePreview = sanitizeString(post.postText || post.preview || '').substring(0, 5000);
 
             // Skip posts with no usable URL after sanitization
             if (!safeUrl) return 'skipped';
