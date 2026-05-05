@@ -98,8 +98,8 @@ export async function POST(req: Request) {
     if (posts && posts.length > 0) {
         const results = await Promise.allSettled(posts.map(async (post) => {
             // Quality Gate: Relaxed to allow all real extracted posts through.
-            const postLikes = post.likes != null ? Number(post.likes) : null;
-            const postComments = post.comments != null ? Number(post.comments) : null;
+            const postLikes    = post.likes    != null ? BigInt(Math.round(Number(post.likes)))    : null;
+            const postComments = post.comments != null ? BigInt(Math.round(Number(post.comments))) : null;
 
             // ── SANITIZE all string fields before they touch Prisma ──
             const safeUrl = sanitizeString(post.url).substring(0, 2000);

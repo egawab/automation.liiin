@@ -34,7 +34,14 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    return NextResponse.json(posts);
+    // Serialize BigInt fields to Number for JSON compatibility
+    const serialized = posts.map(p => ({
+      ...p,
+      likes:    p.likes    != null ? Number(p.likes)    : null,
+      comments: p.comments != null ? Number(p.comments) : null,
+    }));
+
+    return NextResponse.json(serialized);
 
   } catch (error: any) {
     console.error('Error fetching saved posts:', error);
