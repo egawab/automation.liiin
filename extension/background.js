@@ -413,7 +413,12 @@ async function _checkJobsInner() {
     const response = await fetch(`${dashboardUrl}/api/extension/jobs`, {
       headers: { 'x-extension-token': userId, 'x-device-id': deviceId, 'Cache-Control': 'no-cache' }
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      let body = '';
+      try { body = await response.text(); } catch (_) {}
+      console.error(`[Worker] /api/extension/jobs returned ${response.status}. Body: ${body.slice(0, 300)}`);
+      throw new Error(`HTTP ${response.status}`);
+    }
     const data = await response.json();
 
     const isActive = data.active === true;
