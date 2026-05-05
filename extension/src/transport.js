@@ -152,45 +152,75 @@
     let key = normalizePostUrl(post.post_url || '');
     if (!key) key = `_nosurl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     
-    const hasEngagement = post.likes_count != null || post.comments_count != null;
-    const hasText = post.post_text && post.post_text.length > 20;
-
     const existing = _sentPostsMeta.get(key);
-    if (existing) {
-       // Only allow sending again if this is a substantial upgrade
-       if (!existing.hasEngagement && hasEngagement) {
-           L && L.debug(M, `Upgrading previously sent post (engagement data found): ${key}`);
-       } else if (!existing.hasText && hasText) {
-           L && L.debug(M, `Upgrading previously sent post (text data found): ${key}`);
-       } else {
-           return false; // ignore
+    let finalPost = post;
+
+    if (existing && existing.payload) {
+       // 🔴 TRANSPORT LAYER - DATA CORRUPTION FIX
+       // NEVER overwrite valid fields with null/undefined. Only fill missing fields.
+       const old = existing.payload;
+       finalPost = Object.assign({}, old);
+       finalPost._isUpgrade = true;
+
+       let upgraded = false;
+       
+       const hasOldText = !!(old.post_text && old.post_text.length > 20);
+       const hasNewText = !!(post.post_text && post.post_text.length > 20);
+       if (!hasOldText && hasNewText) {
+         finalPost.post_text = post.post_text;
+         upgraded = true;
        }
+
+       const hasOldAuth = old.author && old.author !== 'Unknown';
+       const hasNewAuth = post.author && post.author !== 'Unknown';
+       if (!hasOldAuth && hasNewAuth) {
+         finalPost.author = post.author;
+         upgraded = true;
+       }
+
+       if (old.likes_count == null && post.likes_count != null) {
+         finalPost.likes_count = post.likes_count;
+         upgraded = true;
+       }
+
+       if (old.comments_count == null && post.comments_count != null) {
+         finalPost.comments_count = post.comments_count;
+         upgraded = true;
+       }
+
+       if (!upgraded) {
+           return false; // ignore, no new data
+       }
+       L && L.debug(M, `Upgrading previously sent post (non-destructive merge): ${key}`);
     }
 
-    _sentPostsMeta.set(key, { hasEngagement, hasText });
+    const hasEngagement = finalPost.likes_count != null || finalPost.comments_count != null;
+    const hasText = finalPost.post_text && finalPost.post_text.length > 20;
+
+    _sentPostsMeta.set(key, { hasEngagement, hasText, payload: finalPost });
 
     // ── L3 Forensic log — final payload before queuing for send ───────────
     {
-      const traceId = post._traceId || key.split(':').pop() || '?';
-      const l3HasText = !!(post.post_text && post.post_text.length > 20);
-      const l3HasAuth = post.author && post.author !== 'Unknown';
+      const traceId = finalPost._traceId || key.split(':').pop() || '?';
+      const l3HasText = !!(finalPost.post_text && finalPost.post_text.length > 20);
+      const l3HasAuth = finalPost.author && finalPost.author !== 'Unknown';
       if (!l3HasText || !l3HasAuth) {
         if (window.__pipelineStats) window.__pipelineStats.transportFail++;
       }
       console.log('[L3-TRANSPORT]', {
         traceId,
-        post_url:  (post.post_url || '').slice(-50),
-        text:      post.post_text ? post.post_text.slice(0, 60) + '…' : '',
-        author:    post.author || '',
-        likes:     post.likes_count,
-        comments:  post.comments_count,
-        source:    post.extraction_source,
-        isUpgrade: !!post._isUpgrade,
+        post_url:  (finalPost.post_url || '').slice(-50),
+        text:      finalPost.post_text ? finalPost.post_text.slice(0, 60) + '…' : '',
+        author:    finalPost.author || '',
+        likes:     finalPost.likes_count,
+        comments:  finalPost.comments_count,
+        source:    finalPost.extraction_source,
+        isUpgrade: !!finalPost._isUpgrade,
         status:    (!l3HasText || !l3HasAuth) ? 'PAYLOAD_CORRUPTION' : 'READY_FOR_STORAGE',
       });
     }
 
-    _buffer.push(post);
+    _buffer.push(finalPost);
 
     const batchSize = cfg().BATCH_SIZE || 10;
     if (_buffer.length >= batchSize) {

@@ -177,6 +177,10 @@
       if (_seenUrls.has(urlKey)) continue;
       _seenUrls.add(urlKey);
 
+      // 🔴 GLOBAL PIPELINE CONSISTENCY RULE: ONE CANONICAL ACTIVITY ID
+      // Update the post URL to the normalized URN so the backend gets a unified entity.
+      post.post_url = urlKey;
+
       // Try to enrich with network data if available
       const netData = drainNetworkDataForUrl(post.post_url);
       if (netData) post = EX().mergeWithNetworkData(post, netData);

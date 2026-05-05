@@ -238,11 +238,12 @@
       if (t.length > best.length && t.length > 20 && t.length < 3000) best = t;
     }
 
-    if (!best) {
-      best = (card.innerText || card.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+    if (!best || best.length < 20) {
+      // 🔴 HARD FAILURE FIX: NEVER allow empty text if innerText exists
+      best = (card.innerText || card.textContent || '').replace(/\s+/g, ' ').trim();
     }
 
-    return best.slice(0, 500);
+    return best.slice(0, 3000); // Allow longer text
   }
 
   // ── Author extraction ──────────────────────────────────────────────────────
@@ -273,6 +274,17 @@
         if (t.length > 1 && t.length < 100 && !/^\d/.test(t)) return t.slice(0, 80);
       } catch (e) {}
     }
+
+    // 🔴 HARD FAILURE FIX: NEVER return "Unknown" if author is present in DOM subtree
+    const allLinks = card.querySelectorAll('a[href*="/in/"], a[href*="/company/"]');
+    for (const link of allLinks) {
+      const ariaLbl = (link.getAttribute('aria-label') || '').trim().split('\n')[0];
+      if (ariaLbl.length > 2 && ariaLbl.length < 100 && !/^\d/.test(ariaLbl)) return ariaLbl.slice(0, 80);
+
+      const txt = (link.innerText || link.textContent || '').trim().split('\n')[0];
+      if (txt.length > 2 && txt.length < 100 && !/^\d/.test(txt)) return txt.slice(0, 80);
+    }
+
     return 'Unknown';
   }
 
@@ -358,34 +370,40 @@
     return result;
   }
 
-  // ── Merge DOM result with network-intercepted data ─────────────────────────
-  // v1.1: null-safe merge — a real network value (47) is NEVER discarded
-  // because the DOM value happens to be null. The rule is:
-  //   - pick the larger of two non-null values (same as before)
-  //   - if one side is null, take the non-null side
-  //   - if both null, stay null
-  // Network data wins for text when it is longer; DOM author is kept when
-  // network only has 'Unknown'.
   function mergeWithNetworkData(domResult, networkPost) {
     if (!networkPost) return domResult;
 
-    // Null-safe numeric merge
-    const netLikes    = networkPost.likes    != null ? networkPost.likes    : null;
-    const netComments = networkPost.comments != null ? networkPost.comments : null;
-    const netReposts  = networkPost.reposts  != null ? networkPost.reposts  : null;
+    // 🔴 GLOBAL PIPELINE CONSISTENCY RULE: STRICT NON-DESTRUCTIVE MERGE
+    // NEVER overwrite valid fields with null/undefined
+    // Only fill missing fields, never replace existing ones
+    const merged = Object.assign({}, domResult);
+    merged.extraction_source = 'merged';
 
-    return Object.assign({}, domResult, {
-      likes_count:       nullMax(domResult.likes_count,    netLikes),
-      comments_count:    nullMax(domResult.comments_count, netComments),
-      shares_count:      nullMax(domResult.shares_count,   netReposts),
-      post_text:         (networkPost.text && networkPost.text.length > domResult.post_text.length)
-                           ? networkPost.text
-                           : domResult.post_text,
-      author:            networkPost.author && networkPost.author !== 'Unknown'
-                           ? networkPost.author
-                           : domResult.author,
-      extraction_source: 'merged',
-    });
+    const hasDomText = !!(merged.post_text && merged.post_text.length > 20);
+    const hasNetText = !!(networkPost.text && networkPost.text.length > 20);
+    if (!hasDomText && hasNetText) {
+      merged.post_text = networkPost.text;
+    }
+
+    const hasDomAuth = merged.author && merged.author !== 'Unknown';
+    const hasNetAuth = networkPost.author && networkPost.author !== 'Unknown';
+    if (!hasDomAuth && hasNetAuth) {
+      merged.author = networkPost.author;
+    }
+
+    if (merged.likes_count == null && networkPost.likes != null) {
+      merged.likes_count = networkPost.likes;
+    }
+    
+    if (merged.comments_count == null && networkPost.comments != null) {
+      merged.comments_count = networkPost.comments;
+    }
+    
+    if (merged.shares_count == null && networkPost.reposts != null) {
+      merged.shares_count = networkPost.reposts;
+    }
+
+    return merged;
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
