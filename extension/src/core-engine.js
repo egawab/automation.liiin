@@ -238,15 +238,31 @@
     }
 
     // ── Network buffer flush ───────────────────────────────────────────────
-    if (_networkBuffer.length > 0) {
-      const networkOnly = _networkBuffer.splice(0, _networkBuffer.length);
-
-      for (const np of networkOnly) {
+    // IMPORTANT: Only flush entries that:
+    //   (a) have a URL not yet seen by DOM harvest (_seenUrls)
+    //   (b) are NOT null-likes-only — those stay in the buffer so
+    //       drainNetworkDataForUrl() can retry them on the next DOM harvest
+    //       (prevents the async timing race from losing enriched metrics).
+    // We iterate a COPY and only splice entries we are actually consuming.
+    let netNewThisRound = 0;
+    {
+      const toKeep = [];
+      for (const np of _networkBuffer) {
         const urlKey = (np.url || '').split('?')[0].replace(/\/$/, '');
-        if (!urlKey) continue;
 
-        // ── new URL only seen in network stream ─────────────────────
+        // No URL → keep pending, can't key it
+        if (!urlKey) { toKeep.push(np); continue; }
+
+        // Already processed by DOM harvest → discard (DOM path already handled it)
         if (_seenUrls.has(urlKey)) continue;
+
+        // null-likes AND no text → keep pending; a later RSC chunk may enrich it
+        if (np.likes == null && !(np.text && np.text.length > 10)) {
+          toKeep.push(np);
+          continue;
+        }
+
+        // Consume: mark seen and emit synthetic post
         _seenUrls.add(urlKey);
 
         const syntheticPost = {
@@ -266,20 +282,32 @@
 
         _totalFound++;
         newCardsThisRound++;
+        netNewThisRound++;
 
         TR().buffer(syntheticPost);
 
         if (_totalFound >= CFG().MAX_POSTS_PER_RUN) {
+          // Restore unprocessed entries before finishing
+          _networkBuffer.length = 0;
+          _networkBuffer.push(...toKeep);
           finish('max_posts');
           return;
         }
       }
+      // Replace buffer contents with only the kept (pending) entries
+      _networkBuffer.length = 0;
+      _networkBuffer.push(...toKeep);
     }
 
-    const qualified = TR().getSentCount() + TR().getBufferSize();
-    status(`🔍 "${_keyword}" — Step ${OBS().getStep()} | Found: ${_totalFound} | Qualified: ${qualified} | Layout: ${layout}`);
+    // ── Stall reset accounts for BOTH DOM cards AND network-only posts ────────
+    // This is critical for SEARCH_B: a scroll step that delivers 0 new DOM cards
+    // but N new network posts must NOT increment the stall counter.
+    const totalNewThisRound = newCardsThisRound; // netNewThisRound already counted inside newCardsThisRound
 
-    OBS().onHarvestComplete(newCardsThisRound);
+    const qualified = TR().getSentCount() + TR().getBufferSize();
+    status(`🔍 "${_keyword}" — Step ${OBS().getStep()} | Found: ${_totalFound} | Buf: ${_networkBuffer.length} pending | Layout: ${layout}`);
+
+    OBS().onHarvestComplete(totalNewThisRound);
   }
 
   // ── Feed exhausted ─────────────────────────────────────────────────────────

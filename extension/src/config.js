@@ -19,14 +19,14 @@
     PENDING_MAX_CYCLES: 5,       // Max harvest cycles to wait for async likes to arrive before final rejection
 
     // ── Extraction limits ─────────────────────────────────────────────────────
-    MAX_POSTS_PER_RUN: 60,       // Hard cap on posts collected per keyword run
-    MAX_SCROLL_STEPS: 100,       // Max scroll iterations before declaring exhausted
-    STALL_THRESHOLD: 15,         // Consecutive empty scrolls → feed exhausted
+    MAX_POSTS_PER_RUN: 500,      // Hard cap on posts collected per keyword run
+    MAX_SCROLL_STEPS: 150,       // Max scroll iterations before declaring exhausted (raised for deep SEARCH_B runs)
+    STALL_THRESHOLD: 20,         // Consecutive empty scrolls → feed exhausted (raised: SEARCH_B has async gaps)
 
     // ── Timing ────────────────────────────────────────────────────────────────
     // Observer v1.1: timer-driven scroll — no debounce blocking
-    SCROLL_DELAY_MS: 1500,       // Fixed delay between scroll steps (±200ms jitter)
-    SCROLL_SETTLE_MS: 500,       // Wait after scroll before harvesting
+    SCROLL_DELAY_MS: 1200,       // Fixed delay between scroll steps (±200ms jitter) — slightly faster
+    SCROLL_SETTLE_MS: 600,       // Wait after scroll before harvesting (raised: let network data arrive)
     MIN_DELAY_MS: 600,           // Minimum floor (safety clamp)
     MAX_DELAY_MS: 1500,          // Not used by observer v1.1 directly
     BATCH_FLUSH_INTERVAL_MS: 5000,

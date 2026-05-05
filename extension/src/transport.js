@@ -131,8 +131,11 @@
 
   // ── Public: buffer a post ─────────────────────────────────────────────────
   function buffer(post) {
-    const key = (post.post_url || '').split('?')[0].replace(/\/$/, '');
-    if (!key || _sentUrls.has(key)) return false; // already sent this session
+    // Posts without a URL get a synthetic dedup key so they are not silently dropped.
+    // The dashboard receives them and can filter/display as appropriate.
+    let key = (post.post_url || '').split('?')[0].replace(/\/$/, '');
+    if (!key) key = `_nosurl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    if (_sentUrls.has(key)) return false; // already sent this session
     _sentUrls.add(key);
     _buffer.push(post);
 

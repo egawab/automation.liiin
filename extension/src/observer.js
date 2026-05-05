@@ -123,8 +123,8 @@
     if (!_active) return;
 
     _scrollStep++;
-    const maxSteps       = cfg().MAX_SCROLL_STEPS  || 100;
-    const stallThreshold = cfg().STALL_THRESHOLD   || 8;
+    const maxSteps       = cfg().MAX_SCROLL_STEPS  || 150;
+    const stallThreshold = cfg().STALL_THRESHOLD   || 20;
 
     if (_scrollStep > maxSteps) {
       L && L.info(M, `Max scroll steps (${maxSteps}). Done.`);
