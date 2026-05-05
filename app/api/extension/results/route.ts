@@ -133,14 +133,22 @@ export async function POST(req: Request) {
               });
               return 'saved';
             } else {
-              // OPTIMIZATION: Update reach metrics for existing post to show "Action"
+              // Update: merge best values — never overwrite a real value with null/empty
               await prisma.savedPost.update({
                 where: { id: existing.id },
                 data: {
-                  likes: postLikes,
-                  comments: postComments,
-                  postPreview: safePreview || undefined,
-                  savedAt: new Date() // Refresh timestamp to show it was recently seen
+                  // Likes: take the higher of stored vs incoming (never overwrite real with null)
+                  likes:       postLikes    != null ? postLikes    : existing.likes,
+                  comments:    postComments != null ? postComments : existing.comments,
+                  // Preview: update if incoming is longer than what's stored
+                  postPreview: (safePreview && safePreview.length > (existing.postPreview?.length ?? 0))
+                                 ? safePreview
+                                 : (existing.postPreview ?? undefined),
+                  // Author: update if we now have a real name (not Unknown)
+                  postAuthor:  (safeAuthor && safeAuthor !== 'Unknown')
+                                 ? safeAuthor
+                                 : (existing.postAuthor ?? undefined),
+                  savedAt: new Date()
                 }
               });
               return 'updated';
@@ -167,12 +175,31 @@ export async function POST(req: Request) {
         updatedCount = results.filter(r => r.status === 'fulfilled' && r.value === 'updated').length;
     }
 
+    // Collect one sample post for client-side debugging
+    let samplePost: any = null;
+    try {
+      samplePost = await prisma.savedPost.findFirst({
+        where: { userId },
+        orderBy: { savedAt: 'desc' },
+        select: { postUrl: true, postAuthor: true, postPreview: true, likes: true, comments: true, keyword: true }
+      });
+      if (samplePost) {
+        samplePost = {
+          ...samplePost,
+          likes:    samplePost.likes    != null ? Number(samplePost.likes)    : null,
+          comments: samplePost.comments != null ? Number(samplePost.comments) : null,
+          preview_length: samplePost.postPreview?.length ?? 0,
+        };
+      }
+    } catch (e) { /* non-fatal */ }
+
     return setCorsHeaders(NextResponse.json({ 
       success: true, 
       savedCount, 
       updatedCount, 
       errors,
-      message: `Processed ${posts.length} posts. ${savedCount} New, ${updatedCount} Refreshed.` 
+      message: `Processed ${posts.length} posts. ${savedCount} New, ${updatedCount} Refreshed.`,
+      samplePost, // ← debug: verify stored fields from extension console
     }, { status: 200 }));
 
   } catch (error: any) {

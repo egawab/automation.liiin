@@ -149,12 +149,38 @@
                            commentSignals.some(s => lbl.includes(s));
       if (!isEngagement) return;
 
-      // Priority 1: nearest <li> (works for SEARCH_A and standard layouts)
-      const liEl = btn.closest('li');
-      if (liEl && !seen.has(liEl)) {
-        seen.add(liEl);
-        found.push(liEl);
-        return;
+      // Priority 1: Walk ALL ancestor <li> elements and take the OUTERMOST
+      // one with substantial text content (> 120 chars).
+      //
+      // SEARCH_B DOM structure:
+      //   <li class="post-card">           ← we want THIS (full post text)
+      //     <div>post content…</div>
+      //     <ul class="reaction-bar">
+      //       <li>                         ← btn.closest('li') returns THIS (wrong)
+      //         <button aria-label="React Like">…</button>
+      //       </li>
+      //     </ul>
+      //   </li>
+      //
+      // Fix: keep walking past reaction list items by looking for the outermost
+      // ancestor li that has real content.
+      {
+        let ancestor = btn.parentElement;
+        let postCardLi = null;
+        while (ancestor && !STOP_TAGS.has(ancestor.tagName)) {
+          if (ancestor.tagName === 'LI') {
+            const textLen = (ancestor.textContent || '').replace(/\s+/g, ' ').trim().length;
+            if (textLen > 120) {
+              postCardLi = ancestor; // keep walking — want the OUTERMOST valid li
+            }
+          }
+          ancestor = ancestor.parentElement;
+        }
+        if (postCardLi && !seen.has(postCardLi)) {
+          seen.add(postCardLi);
+          found.push(postCardLi);
+          return;
+        }
       }
 
       // Priority 2: walk up to find a node with a post link anchor
