@@ -122,14 +122,21 @@
   }
 
   // ── Normalize URLs to a common URN format ───────────────────────────────
-  // Converts both DOM /posts/ and network /feed/update/ URLs to a canonical format
+  // Converts both DOM /posts/ slug URLs and network /feed/update/ URN URLs to
+  // a single canonical form: https://www.linkedin.com/feed/update/urn:li:<type>:<id>
+  // SEARCH_B posts arrive from DOM as /posts/name-activity-ID-slug/ and from
+  // network as /feed/update/urn:li:activity:ID — these MUST map to the same key.
   function normalizePostUrl(url) {
     if (!url) return '';
-    const m = url.match(/urn:li:(activity|ugcPost|share):(\d+)/) ||
-              url.match(/activity-(\d+)-/) ||
-              url.match(/ugcPost-(\d+)-/);
-    if (m && m[2]) return `https://www.linkedin.com/feed/update/urn:li:${m[1]}:${m[2]}`;
-    if (m && m[1]) return `https://www.linkedin.com/feed/update/urn:li:activity:${m[1]}`;
+    // Pattern 1: already has URN embedded (network interceptor URLs, canonical feed URLs)
+    const m1 = url.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
+    if (m1) return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
+    // Pattern 2: /posts/ slug format — ugcPost takes priority over activity
+    const m2 = url.match(/ugcPost-(\d{10,25})/i);
+    if (m2) return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${m2[1]}`;
+    const m3 = url.match(/activity-(\d{10,25})/i);
+    if (m3) return `https://www.linkedin.com/feed/update/urn:li:activity:${m3[1]}`;
+    // Fallback: strip tracking params
     return url.split('?')[0].replace(/\/$/, '');
   }
 
@@ -187,8 +194,12 @@
       }
     }
 
-    // ── Network-only posts (not matched by DOM) ────────────────────────────
-    // Drain ALL network buffer entries unconditionally. No null-likes gating.
+    // ── Network-only posts / DOM-upgrade packets ──────────────────────────
+    // For each network post:
+    //   - If URL not yet seen → new post, emit and count it.
+    //   - If URL already sent by DOM (with empty fields) → send upgrade packet
+    //     so the backend's update path can merge in text/author/likes.
+    //     Do NOT increment _totalFound for upgrades (already counted).
     {
       const remaining = [];
       for (const np of _networkBuffer) {
@@ -197,11 +208,17 @@
         // No URL → discard (can't save without URL)
         if (!urlKey) continue;
 
-        // Consume: mark seen and emit synthetic post
+        const alreadySentByDom = _seenUrls.has(urlKey);
         _seenUrls.add(urlKey);
 
+        // Only skip a network post if it was already DOM-seen AND has nothing useful
+        const hasRealText   = np.text   && np.text.length > 20;
+        const hasRealAuthor = np.author && np.author !== 'Unknown';
+        const hasMetrics    = np.likes  != null || np.comments != null;
+        if (alreadySentByDom && !hasRealText && !hasRealAuthor && !hasMetrics) continue;
+
         const syntheticPost = {
-          post_url:          np.url,
+          post_url:          urlKey,          // always use normalized URL
           post_text:         np.text      || '',
           likes_count:       np.likes     != null ? np.likes     : null,
           comments_count:    np.comments  != null ? np.comments  : null,
@@ -213,20 +230,22 @@
           layout_id:         layout,
           keyword:           _keyword,
           session_id:        L().sessionId,
+          _isUpgrade:        alreadySentByDom,
         };
 
-        _totalFound++;
-        newThisRound++;
+        if (!alreadySentByDom) {
+          _totalFound++;
+          newThisRound++;
+        }
 
         TR().buffer(syntheticPost);
 
-        if (_totalFound >= CFG().MAX_POSTS_PER_RUN) {
+        if (!alreadySentByDom && _totalFound >= CFG().MAX_POSTS_PER_RUN) {
           _networkBuffer.length = 0;
           finish('max_posts');
           return;
         }
       }
-      // Only keep entries that had no URL (truly useless)
       _networkBuffer.length = 0;
       _networkBuffer.push(...remaining);
     }

@@ -351,9 +351,16 @@
 
     const posts = [];
     map.forEach((post, url) => {
-      // v2.2: emit upgrades if we now have a non-null likes for a finalized URL
       if (_finalized.has(url)) {
-        if (post.likes != null && post.likes > 0) posts.push(post);
+        // v2.4 SEARCH_B fix: allow upgrade whenever we now have BETTER data.
+        // Previously only upgraded if likes > 0 — this blocked text/author upgrades
+        // that arrive in a later RSC chunk after the URL was already finalized.
+        const hasRealText   = post.text   && post.text.length > 20;
+        const hasRealAuthor = post.author && post.author !== 'Unknown';
+        const hasLikes      = post.likes  != null && post.likes >= 0;
+        if (hasRealText || hasRealAuthor || hasLikes) {
+          posts.push({ ...post, _upgrade: true });
+        }
         return;
       }
       _finalized.add(url); // lock AFTER deciding to emit
@@ -364,7 +371,7 @@
       window.__NexoraEmbeddedPosts = window.__NexoraEmbeddedPosts || [];
       window.__NexoraEmbeddedPosts.push(...posts);
       window.postMessage({ type: '__NEXORA_NETWORK_POSTS__', posts, sourceUrl }, '*');
-      console.log(`[Nexora][Interceptor] ${posts.length} posts from ${sourceUrl.split('?')[0].slice(-50)}`);
+      console.log(`[Nexora][Interceptor v2.4] ${posts.length} posts from ${sourceUrl.split('?')[0].slice(-50)}`);
     }
   }
 

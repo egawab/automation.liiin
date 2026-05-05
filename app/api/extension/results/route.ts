@@ -105,54 +105,53 @@ export async function POST(req: Request) {
             const postLikes    = rawLikes    != null && rawLikes    <= ENGAGEMENT_MAX ? rawLikes    : null;
             const postComments = rawComments != null && rawComments <= ENGAGEMENT_MAX ? rawComments : null;
 
-            // ── SANITIZE all string fields before they touch Prisma ──
-            const safeUrl = sanitizeString(post.url).substring(0, 2000);
-            const safeAuthor = sanitizeString(post.author || 'Unknown').substring(0, 100);
+        // ── SANITIZE all string fields before they touch Prisma ──
+            const rawUrl    = sanitizeString(post.url).substring(0, 2000);
+            const safeAuthor  = sanitizeString(post.author || 'Unknown').substring(0, 100);
             const safePreview = sanitizeString(post.postText || post.preview || '').substring(0, 5000);
+
+            // Normalize URL to canonical form — DOM /posts/ slug and network
+            // /feed/update/urn:li:activity:ID must resolve to the same DB row.
+            function normalizeUrl(u) {
+              if (!u) return u;
+              const m1 = u.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
+              if (m1) return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
+              const m2 = u.match(/ugcPost-(\d{10,25})/i);
+              if (m2) return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${m2[1]}`;
+              const m3 = u.match(/activity-(\d{10,25})/i);
+              if (m3) return `https://www.linkedin.com/feed/update/urn:li:activity:${m3[1]}`;
+              return u.split('?')[0].replace(/\/$/, '');
+            }
+            const safeUrl = normalizeUrl(rawUrl) || rawUrl;
 
             // Skip posts with no usable URL after sanitization
             if (!safeUrl) return 'skipped';
 
-            // Check for existing post for THIS user
-            const existing = await prisma.savedPost.findFirst({
-              where: { userId, postUrl: safeUrl }
+            // Atomic upsert — avoids the race condition where two posts with the
+            // same URL arrive in the same batch (e.g. a DOM blank + network upgrade)
+            // and both call findFirst → null → both try to create → only one survives.
+            await prisma.savedPost.upsert({
+              where: { userId_postUrl: { userId, postUrl: safeUrl } },
+              create: {
+                userId,
+                postUrl:     safeUrl,
+                postAuthor:  safeAuthor,
+                postPreview: safePreview,
+                likes:       postLikes,
+                comments:    postComments,
+                keyword:     safeKeyword,
+                visited:     false,
+              },
+              update: {
+                // Merge: only overwrite if the incoming value is genuinely better
+                likes:       postLikes    != null ? postLikes    : undefined,
+                comments:    postComments != null ? postComments : undefined,
+                postPreview: safePreview.length > 0 ? safePreview : undefined,
+                postAuthor:  (safeAuthor && safeAuthor !== 'Unknown') ? safeAuthor : undefined,
+                savedAt:     new Date(),
+              },
             });
-    
-            if (!existing) {
-              await prisma.savedPost.create({
-                data: {
-                  userId,
-                  postUrl: safeUrl,
-                  postAuthor: safeAuthor,
-                  postPreview: safePreview,
-                  likes: postLikes,
-                  comments: postComments,
-                  keyword: safeKeyword,
-                  visited: false
-                }
-              });
-              return 'saved';
-            } else {
-              // Update: merge best values — never overwrite a real value with null/empty
-              await prisma.savedPost.update({
-                where: { id: existing.id },
-                data: {
-                  // Likes: take the higher of stored vs incoming (never overwrite real with null)
-                  likes:       postLikes    != null ? postLikes    : existing.likes,
-                  comments:    postComments != null ? postComments : existing.comments,
-                  // Preview: update if incoming is longer than what's stored
-                  postPreview: (safePreview && safePreview.length > (existing.postPreview?.length ?? 0))
-                                 ? safePreview
-                                 : (existing.postPreview ?? undefined),
-                  // Author: update if we now have a real name (not Unknown)
-                  postAuthor:  (safeAuthor && safeAuthor !== 'Unknown')
-                                 ? safeAuthor
-                                 : (existing.postAuthor ?? undefined),
-                  savedAt: new Date()
-                }
-              });
-              return 'updated';
-            }
+            return 'saved';
         }));
 
         // Analyze results

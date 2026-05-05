@@ -137,6 +137,7 @@ model SavedPost {
   userId      String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
+  @@unique([userId, postUrl])
   @@index([userId, savedAt])
   @@index([userId, keyword])
 }

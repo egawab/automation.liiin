@@ -23,6 +23,21 @@
 
   const FAILURE_QUEUE_KEY = 'nexora_transport_failure_queue';
 
+  // Mirror of core-engine's normalizePostUrl — must be kept in sync.
+  // Used as the dedup key so DOM URLs and network URLs for the same post
+  // map to the same entry in _sentPostsMeta.
+  function normalizePostUrl(url) {
+    if (!url) return '';
+    const m1 = url.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
+    if (m1) return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
+    const m2 = url.match(/ugcPost-(\d{10,25})/i);
+    if (m2) return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${m2[1]}`;
+    const m3 = url.match(/activity-(\d{10,25})/i);
+    if (m3) return `https://www.linkedin.com/feed/update/urn:li:activity:${m3[1]}`;
+    return url.split('?')[0].replace(/\/$/, '');
+  }
+
+
   let _buffer     = [];     // pending posts not yet sent
   let _sentPostsMeta = new Map(); // in-session dedup with quality tracking
   let _jobMeta    = {};     // { keyword, dashboardUrl, userId, linkedInProfileId }
@@ -129,11 +144,12 @@
     }, interval);
   }
 
-  // ── Public: buffer a post ─────────────────────────────────────────────────
+  // ── Public: buffer a post ──────────────────────────────────────────────────
   function buffer(post) {
-    // Posts without a URL get a synthetic dedup key so they are not silently dropped.
-    // The dashboard receives them and can filter/display as appropriate.
-    let key = (post.post_url || '').split('?')[0].replace(/\/$/, '');
+    // Use normalized URL as dedup key so that a DOM post with /posts/slug/ URL
+    // and a network post with /feed/update/urn:li:activity:ID URL for the same
+    // post are recognized as the same entry and trigger an upgrade, not a duplicate.
+    let key = normalizePostUrl(post.post_url || '');
     if (!key) key = `_nosurl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     
     const hasEngagement = post.likes_count != null || post.comments_count != null;
