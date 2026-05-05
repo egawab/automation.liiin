@@ -69,10 +69,12 @@
     const found    = [];
     const seenSet  = new Set();
 
-    // Anchor on every <time> element — every real post has one.
+    // Anchor on every <time> element or action button — every real post has one.
     // Walk UP until we find a node that also contains an author link.
     // That ancestor is the post card.
-    const timeNodes = document.querySelectorAll('time');
+    const timeNodes = document.querySelectorAll(
+      'time, button[aria-label*="react" i], button[aria-label*="like" i], button[aria-label*="comment" i]'
+    );
 
     for (const timeNode of timeNodes) {
       if (isInsideCommentSection(timeNode)) continue;

@@ -60,12 +60,13 @@
 
   function scrollPage(amount) {
     const el = _scrollEl;
-    if (!el) return;
-    try {
-      el.scrollTop += amount;
-    } catch (e) {
-      try { window.scrollBy({ top: amount, behavior: 'instant' }); } catch (e2) {}
+    if (el) {
+      try { el.scrollTop += amount; } catch (e) {}
     }
+    // Always attempt window and body scrolls to guarantee movement (SPA containers change)
+    try { window.scrollBy({ top: amount, behavior: 'instant' }); } catch (e) {}
+    try { document.documentElement.scrollTop += amount; } catch(e) {}
+    try { document.body.scrollTop += amount; } catch(e) {}
   }
 
   // ── MutationObserver — harvest on new post nodes ─────────────────────────
