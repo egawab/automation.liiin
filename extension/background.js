@@ -172,15 +172,38 @@ async function handleStartFast(msg) {
   cdp.store.clear(); cdp.batchPending = []; cdp.totalSaved = 0; cdp._lastApiReqs.clear();
   await chrome.storage.session.clear();
 
-  const liTabs = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
-  let tab = liTabs[0];
+  // Always prefer the tab the user is actively looking at (focused window, active tab)
+  const allWindows = await chrome.windows.getAll({ populate: false });
+  const focusedWindowId = allWindows.find(w => w.focused)?.id;
+
+  let tab = null;
+
+  // 1. Try active tab in focused window first
+  if (focusedWindowId) {
+    const activeTabs = await chrome.tabs.query({ active: true, windowId: focusedWindowId, url: '*://*.linkedin.com/*' });
+    if (activeTabs.length > 0) tab = activeTabs[0];
+  }
+
+  // 2. Fall back: any active LinkedIn tab in any window
+  if (!tab) {
+    const anyActive = await chrome.tabs.query({ active: true, url: '*://*.linkedin.com/*' });
+    if (anyActive.length > 0) tab = anyActive[0];
+  }
+
+  // 3. Fall back: any LinkedIn tab at all
+  if (!tab) {
+    const liTabs = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
+    if (liTabs.length > 0) tab = liTabs[0];
+  }
+
+  // 4. Create a new LinkedIn tab as last resort
   if (!tab) {
     tab = await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/', active: true });
-    // Wait for the LinkedIn process to initialize before CDP attach to prevent cross-origin detach
-    await waitForTabLoad(tab.id, 15000); 
+    await waitForTabLoad(tab.id, 15000);
   }
+
   cdp.tabId = tab.id;
-  console.log('[Worker] Phase1 done. keyword=' + cdp.keyword + ' tabId=' + cdp.tabId);
+  console.log('[Worker] Phase1 done. keyword=' + cdp.keyword + ' tabId=' + cdp.tabId + ' (url=' + tab.url + ')');
   return { keyword: cdp.keyword };
 }
 
