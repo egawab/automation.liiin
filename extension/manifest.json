@@ -1,17 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Nexora – LinkedIn AI Assistant",
-  "version": "2.0",
-  "version_name": "final",
-  "description": "AI-powered LinkedIn engagement assistant. Auto-search, auto-comment with human-mimicry safety.",
+  "version": "5.0",
+  "version_name": "CDP-stable",
+  "description": "Automated LinkedIn content scraper — CDP protocol-level extraction.",
   "permissions": [
-    "storage",
-    "alarms",
-    "tabs",
-    "scripting",
-    "activeTab",
-    "notifications",
-    "cookies"
+    "storage", "alarms", "tabs", "scripting",
+    "activeTab", "notifications", "cookies", "debugger"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
@@ -23,32 +18,11 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": [
-        "interceptor.js",
-        "fiberSpy.js",
-        "postScraper.js",
-        "src/config.js",
-        "src/logger.js",
-        "src/layout-detector.js",
-        "src/dom-adapter.js",
-        "src/extractor.js",
-        "src/filter.js",
-        "src/transport.js",
-        "src/observer.js",
-        "src/interceptor.js",
-        "src/core-engine.js"
-      ],
+      "resources": ["content.js", "interceptor.js"],
       "matches": ["https://www.linkedin.com/*"]
     }
   ],
   "content_scripts": [
-    {
-      "matches": ["https://www.linkedin.com/*"],
-      "js": ["src/interceptor.js"],
-      "run_at": "document_start",
-      "world": "MAIN",
-      "all_frames": false
-    },
     {
       "matches": [
         "https://*.vercel.app/*",

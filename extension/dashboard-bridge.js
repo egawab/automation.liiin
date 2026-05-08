@@ -1,46 +1,60 @@
-// dashboard-bridge.js
-// Injected into localhost:3000 and *.vercel.app to allow the Nexora Dashboard to communicate with the Chrome Extension.
+// dashboard-bridge.js – Nexora v17
+// يستخدم connect() بدلاً من sendMessage لضمان تصحية عامل الخدمة دائماً
 
-console.log("[Nexora Bridge] Initialized. Listening for dashboard commands.");
+console.warn("[Nexora Bridge] Initialized.");
 
-// 1. Tell the dashboard we are installed (so it knows the extension is active)
 window.postMessage({ source: 'NEXORA_EXTENSION', action: 'EXTENSION_READY' }, '*');
 
-// 2. Listen for messages from the Dashboard page
 window.addEventListener('message', (event) => {
-  // We only accept messages from ourselves (the same page)
-  if (event.source !== window || !event.data || event.data.source !== 'NEXORA_DASHBOARD') {
-    return;
-  }
+  if (event.source !== window || !event.data || event.data.source !== 'NEXORA_DASHBOARD') return;
 
-  // Dashboard clicked 'START' or 'SYNC'
   if (event.data.action === 'START_ENGINE') {
-    console.log("[Nexora Bridge] Received START_ENGINE from Dashboard! Relaying to background worker...");
-    
-    // Auto-heal payload
+    console.warn("[Nexora Bridge] START_ENGINE received. Connecting to worker...");
+
     const dashboardUrl = window.location.origin;
     let userId = null;
-    const match = document.cookie.match(/(?:(?:^|.*;\s*)auth_token\s*\=\s*([^;]*).*$)|^.*$/);
-    if (match && match[1]) {
-      try {
+    try {
+      const match = document.cookie.match(/auth_token=([^;]+)/);
+      if (match) {
         const decoded = JSON.parse(atob(match[1].split('.')[1]));
-        userId = decoded.userId;
-      } catch(e) { userId = match[1]; }
-    }
+        userId = decoded.userId || null;
+      }
+    } catch(e) {}
 
     try {
-      if (chrome && chrome.runtime && chrome.runtime.id && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ action: 'START_POLLING', dashboardUrl, userId }, (response) => {
-          if (chrome.runtime.lastError) {
-            console.warn("[Nexora Bridge] Extension context error (safe to ignore):", chrome.runtime.lastError.message);
-            return;
-          }
-          console.log("[Nexora Bridge] Background worker acknowledged start command.", response);
-          window.postMessage({ source: 'NEXORA_EXTENSION', action: 'ENGINE_STARTED_ACK' }, '*');
-        });
+      // connect() يضمن تصحية عامل الخدمة — أكثر موثوقية من sendMessage
+      const port = chrome.runtime.connect({ name: 'nexora_cmd' });
+
+      port.onMessage.addListener((msg) => {
+        console.warn("[Nexora Bridge] Worker replied:", msg);
+        window.postMessage({
+          source: 'NEXORA_EXTENSION',
+          action: msg.ok ? 'ENGINE_STARTED_ACK' : 'ENGINE_ERROR',
+          keyword: msg.keyword,
+          error: msg.error
+        }, '*');
+        port.disconnect();
+      });
+
+      port.onDisconnect.addListener(() => {
+        if (chrome.runtime.lastError) {
+          console.error("[Nexora Bridge] Port error:", chrome.runtime.lastError.message);
+          window.postMessage({ source: 'NEXORA_EXTENSION', action: 'ENGINE_ERROR',
+            error: 'Extension disconnected' }, '*');
+        }
+      });
+
+      port.postMessage({ action: 'START', dashboardUrl, userId });
+      console.warn("[Nexora Bridge] Command sent via port.");
+
+    } catch(e) {
+      console.error("[Nexora Bridge] connect() failed:", e.message);
+      if (e.message.includes('Extension context invalidated')) {
+        console.warn("[Nexora Bridge] Extension was updated. Reloading page to inject new script...");
+        window.location.reload();
+      } else {
+        window.postMessage({ source: 'NEXORA_EXTENSION', action: 'ENGINE_ERROR', error: e.message }, '*');
       }
-    } catch (e) {
-      console.warn("[Nexora Bridge] Extension not available:", e.message);
     }
   }
 });

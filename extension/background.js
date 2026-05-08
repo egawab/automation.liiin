@@ -1,1534 +1,644 @@
-// ═══════════════════════════════════════════════════════════
-// LinkedIn Safety Worker v10 — Deep Extraction Support
-// ═══════════════════════════════════════════════════════════
-// v10 Changes from v9:
-//
-//   FIX 1 — STALE_TIMEOUT and WATCHDOG raised to 30 min:
-//     content.js v14 runs up to 120 main scroll steps (was 60) +
-//     3 expansion rounds of 40-60 steps each + time-filter injections.
-//     Total worst-case runtime: ~25-28 min. Raised both the stale
-//     job guard and the watchdog timer to 30 min to allow complete runs.
-//
-//   FIX 2 — SEARCH_INTER_KEYWORD_MS raised to 20s:
-//     v14 extraction takes longer per keyword due to deeper scrolling.
-//     Giving 20s between keywords in the same group (was 15s) avoids
-//     overlapping tab creation.
-//
-//   All v9 architecture preserved:
-//     - 3-keyword cooldown grouping
-//     - Single START_POLLING listener
-//     - Mutex-safe checkJobs
-//     - Comment mode unchanged
-// ═══════════════════════════════════════════════════════════
+// Nexora v16 – URN-link extraction (works on all LinkedIn layouts)
+console.log('[Worker] Nexora v16');
 
-console.log("[Worker] ═══ Safety Worker v11 (Multi-Pass Deep Extraction) Initialized ═══");
+const cdp = {
+  tabId: null, attached: false, keyword: '', allKeywords: [], keywordIndex: 0, cycleMode: false,
+  dashboardUrl: '', userId: '',
+  store: new Map(), batchPending: [], totalSaved: 0,
+  evalTimer: null, running: false,
+  _lastApiReqs: new Set()
+};
 
-const DEBUG_KEEP_TAB_OPEN = true; // Set to true to stop auto-closing tabs for debugging
-async function safeRemoveTab(tabId) {
-  if (DEBUG_KEEP_TAB_OPEN) {
-    console.log(`🐛 [Debug] Keeping tab open instead of closing: ${tabId}`);
-    return Promise.resolve();
-  }
-  return chrome.tabs.remove(tabId);
-}
-// ── Persistent State (chrome.storage.local) ──
-if (!self.__nexoraControlledNavTabs) self.__nexoraControlledNavTabs = new Set();
-if (!self.__globalSyncedUrlsByKeyword) self.__globalSyncedUrlsByKeyword = new Map();
-
-function isControlledNavigation(tabId) {
-  return !!(tabId && self.__nexoraControlledNavTabs && self.__nexoraControlledNavTabs.has(tabId));
-}
-
-function setControlledNavigation(tabId, enabled) {
-  if (!tabId || !self.__nexoraControlledNavTabs) return;
-  if (enabled) self.__nexoraControlledNavTabs.add(tabId);
-  else self.__nexoraControlledNavTabs.delete(tabId);
-}
-
-let cachedDeviceFingerprint = null;
-async function getExtensionFingerprint() {
-  if (cachedDeviceFingerprint) return cachedDeviceFingerprint;
+async function restoreSession() {
   try {
-    const { extFingerprint } = await chrome.storage.local.get(['extFingerprint']);
-    if (extFingerprint) {
-      cachedDeviceFingerprint = extFingerprint;
-      return cachedDeviceFingerprint;
+    const s = await chrome.storage.session.get(['cdpTabId','cdpKeyword','cdpDashUrl','cdpUserId']);
+    if (!s.cdpTabId) return;
+    try { await chrome.tabs.get(s.cdpTabId); } catch (_) { await chrome.storage.session.clear(); return; }
+    cdp.tabId = s.cdpTabId; cdp.keyword = s.cdpKeyword || '';
+    cdp.dashboardUrl = s.cdpDashUrl || ''; cdp.userId = s.cdpUserId || '';
+  } catch (_) {}
+}
+restoreSession();
+
+// ── تشغيل تلقائي عبر منبه داخلي ──────────────────────────────────────────
+// يسأل الداشبورد كل 30 ثانية — لو systemActive=true يشغل الماكينة تلقائياً
+// هذا يتجاوز مشكلة تصحية عامل الخدمة في المانيفست الثالث بالكامل
+chrome.alarms.create('nexora_poll', { periodInMinutes: 0.5 });
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'nexora_poll') return;
+  if (cdp.running) return;
+  const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
+  if (!config.dashboardUrl || !config.userId) return;
+  try {
+    const resp = await fetch(`${config.dashboardUrl}/api/extension/jobs`, {
+      headers: { 'x-extension-token': config.userId }
+    });
+    if (!resp.ok) return;
+    const jobs = await resp.json();
+    if (!jobs.active) {
+      cdp.lastRunHash = null;
+      return;
     }
-    const offscreen = new OffscreenCanvas(200, 50);
-    const ctx = offscreen.getContext('2d');
-    ctx.textBaseline = "top"; ctx.font = "14px 'Arial'"; ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = "#f60"; ctx.fillRect(125, 1, 62, 20);
-    ctx.fillStyle = "#069"; ctx.fillText("Nexora 😃", 2, 15);
-    ctx.fillStyle = "rgba(102, 204, 0, 0.7)"; ctx.fillText("Nexora 😃", 4, 17);
-    const blob = await offscreen.convertToBlob();
-    const buffer = await blob.arrayBuffer();
-    const nav = navigator;
-    const rawString = nav.userAgent + '|' + nav.language + '|' + (nav.hardwareConcurrency || '');
-    const txtBuf = new TextEncoder().encode(rawString);
-    const combined = new Uint8Array(buffer.byteLength + txtBuf.byteLength);
-    combined.set(new Uint8Array(buffer), 0);
-    combined.set(txtBuf, buffer.byteLength);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', combined);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    cachedDeviceFingerprint = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    await chrome.storage.local.set({ extFingerprint: cachedDeviceFingerprint });
-    return cachedDeviceFingerprint;
-  } catch (e) {
-    return 'fallback_ext_' + Math.random().toString(36);
-  }
-}
-
-async function loadState() {
-  return chrome.storage.local.get({
-    isJobRunning: false,
-    activeTabId: null,
-    activeWindowId: null,
-    cycleStartTime: 0,
-    lastJobTime: 0,
-    cooldownMs: 0,
-    isPaused: false,
-    keywordCycles: {},
-    currentKeyword: null,
-    wasDashboardActive: null,
-    dailyCommentsMade: 0,
-    hourlyCommentsMade: 0,
-    lastCommentDate: null,
-    lastCommentHour: -1,
-    keywordSearchPages: {},
-    consecutiveFailures: 0,
-    currentSearchCycle: 0,
-    currentSearchKeywordIndex: 0,
-    activityLog: [],
-    pendingCommentInsufficientRetry: null
-  });
-}
-
-// ── Live Badge Update ──
-async function updateBadge() {
-  const s = await loadState();
-  let text = s.dailyCommentsMade ? String(s.dailyCommentsMade) : '0';
-  let color = '#6b7280';
-
-  if (s.isPaused) {
-    color = '#ef4444';
-    text = 'PAUSED';
-  } else if (s.isJobRunning) {
-    color = '#10b981';
-  } else {
-    const elapsed = Date.now() - (s.lastJobTime || 0);
-    color = (s.lastJobTime > 0 && elapsed < (s.cooldownMs || 0)) ? '#f59e0b' : '#6b7280';
-  }
-
-  chrome.action.setBadgeText({ text });
-  chrome.action.setBadgeBackgroundColor({ color });
-}
-
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local') updateBadge();
+    if (jobs.active && !cdp.running) {
+      if (cdp.lastRunHash === 'DONE') return; // Already completed this configuration
+      console.log('[Worker] Auto-start: systemActive=true detected.');
+      cdp.dashboardUrl = config.dashboardUrl;
+      cdp.userId = config.userId;
+      await handleStartFast({ dashboardUrl: config.dashboardUrl, userId: config.userId });
+      launchEngine().catch(e => console.error('[Worker] launch error:', e.message));
+    }
+  } catch(e) { /* API unreachable – skip */ }
 });
 
-async function saveState(updates) {
-  await chrome.storage.local.set(updates);
-}
-
-// ── Premium In-Page Toast Notifications ──
-function injectToastDOM(title, message, isError) {
-  let container = document.getElementById('nexora-toast-container');
-  if (!container) {
-    container = document.createElement('div');
-    container.id = 'nexora-toast-container';
-    container.style.cssText = 'position: fixed; bottom: 24px; right: 24px; z-index: 2147483647; display: flex; flex-direction: column; gap: 12px; pointer-events: none;';
-    (document.body || document.documentElement).appendChild(container);
-  }
-  const host = document.createElement('div');
-  container.appendChild(host);
-  const shadow = host.attachShadow({ mode: 'open' });
-  const accent = isError ? '#ff3b30' : '#0071e3';
-  const icon = isError ? '⚠️' : '✨';
-  shadow.innerHTML = `
-    <style>
-      :host { --toast-bg:#ffffff; --toast-border:rgba(0,0,0,0.08); --toast-text:#1d1d1f; --toast-sec:rgba(0,0,0,0.56); --shadow:rgba(0,0,0,0.1) 0 8px 30px; }
-      @media (prefers-color-scheme: dark) { :host { --toast-bg:#1d1d1f; --toast-border:rgba(255,255,255,0.05); --toast-text:#ffffff; --toast-sec:rgba(255,255,255,0.48); --shadow:rgba(0,0,0,0.4) 0 8px 30px; } }
-      .toast { width:320px; background:var(--toast-bg); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid var(--toast-border); border-radius:12px; padding:16px 20px; color:var(--toast-text); font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif; box-shadow:var(--shadow); transform:translateX(120%); opacity:0; transition:all 0.4s cubic-bezier(0.175,0.885,0.32,1.275); display:flex; gap:14px; align-items:flex-start; overflow:hidden; position:relative; }
-      .toast.show { transform:translateX(0); opacity:1; }
-      .toast.hiding { transform:translateX(120%); opacity:0; }
-      .icon { font-size:20px; line-height:1; filter:drop-shadow(0 0 8px ${accent}60); }
-      .content { flex:1; }
-      .title { font-size:14px; font-weight:600; margin:0 0 4px 0; color:var(--toast-text); letter-spacing:-0.01em; }
-      .message { font-size:13px; font-weight:400; margin:0; color:var(--toast-sec); line-height:1.4; }
-      .progress { position:absolute; bottom:0; left:0; height:3px; background:${accent}; width:100%; animation:shrink 4s linear forwards; }
-      @keyframes shrink { from { width:100%; } to { width:0%; } }
-    </style>
-    <div class="toast">
-      <div class="icon">${icon}</div>
-      <div class="content"><h4 class="title">${title}</h4><p class="message">${message}</p></div>
-      <div class="progress"></div>
-    </div>`;
-  const toastEl = shadow.querySelector('.toast');
-  requestAnimationFrame(() => requestAnimationFrame(() => toastEl.classList.add('show')));
-  setTimeout(() => {
-    toastEl.classList.remove('show');
-    toastEl.classList.add('hiding');
-    setTimeout(() => { host.remove(); if (container.childElementCount === 0) container.remove(); }, 500);
-  }, 4000);
-}
-
-async function showPremiumToast(title, message, isError = false) {
-  try {
-    const win = await chrome.windows.getLastFocused();
-    if (win && win.focused) {
-      const tabs = await chrome.tabs.query({ active: true, windowId: win.id });
-      if (tabs.length > 0 && tabs[0].url && tabs[0].url.startsWith('http')) {
-        await chrome.scripting.executeScript({
-          target: { tabId: tabs[0].id },
-          func: injectToastDOM,
-          args: [title, message, isError]
+// وصلة دائمة من الجسر — أكثر موثوقية من sendMessage أو storage في المانيفست الثالث
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'nexora_cmd') return;
+  console.log('[Worker] Port connected from bridge.');
+  port.onMessage.addListener((msg) => {
+    if (msg.action !== 'START') return;
+    cdp.lastRunHash = null; // Clear hash so it runs
+    console.log('[Worker] START command via port:', msg);
+    handleStartFast(msg)
+      .then(() => {
+        port.postMessage({ ok: true, keyword: cdp.keyword || 'starting' });
+        launchEngine().catch(e => {
+          console.error('[Worker] launchEngine error:', e.message);
+          broadcast('EXTENSION_LIVE_STATUS', { text: '❌ ' + e.message });
         });
-        return;
-      }
-    }
-  } catch (e) { console.warn("Failed to inject toast:", e); }
-  chrome.notifications.create({
-    type: 'basic', iconUrl: 'icon-48.png',
-    title, message, priority: 1
-  });
-}
-
-// ── Helpers ──
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ── Cooldown Config ──
-// v9 FIX 2: 3-keyword grouping cooldown system
-// SEARCH_INTER_KEYWORD_MS: short pause between keywords within a group of 3
-// SEARCH_KEYWORD_COOLDOWN_MS: cooldown applied after every 3 keywords
-// SEARCH_FULL_CYCLE_COOLDOWN_MS: cooldown after all keywords are done
-const SEARCH_INTER_KEYWORD_MS = 60000;       // 1 min between keywords within a group
-const SEARCH_KEYWORD_COOLDOWN_MS = 900000;   // 15 min cooldown every 3 keywords (User requested rule)
-const SEARCH_FULL_CYCLE_COOLDOWN_MS = 1200000; // 20 min after all keywords done
-const COMMENT_CYCLE_COOLDOWN_MS = 900000;    // 15 min (comment mode — unchanged)
-
-// v9 FIX 2: Determine cooldown based on keyword position
-function getCooldown(kwIndex, totalKeywords, consecutiveFailures = 0, searchOnlyMode = false) {
-  if (searchOnlyMode) {
-    // Apply group cooldown every 3 keywords
-    const isGroupBoundary = kwIndex > 0 && kwIndex % 3 === 0;
-    if (isGroupBoundary || consecutiveFailures >= 2) {
-      const base = SEARCH_KEYWORD_COOLDOWN_MS;
-      if (consecutiveFailures >= 2) return base * 2;
-      if (consecutiveFailures >= 1) return Math.round(base * 1.5);
-      return base;
-    }
-    // Within a group: short inter-keyword pause
-    return SEARCH_INTER_KEYWORD_MS;
-  }
-  // Comment mode: exponential backoff as before
-  if (consecutiveFailures >= 2) return 1800000;
-  if (consecutiveFailures >= 1) return 1200000;
-  return COMMENT_CYCLE_COOLDOWN_MS;
-}
-
-function waitForTabLoad(tabId, timeoutMs = 20000) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) { settled = true; chrome.tabs.onUpdated.removeListener(listener); resolve(); }
-    }, timeoutMs);
-    const listener = (id, info) => {
-      if (id === tabId && info.status === 'complete') {
-        if (!settled) { settled = true; clearTimeout(timer); chrome.tabs.onUpdated.removeListener(listener); resolve(); }
-      }
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-  });
-}
-
-async function navigateTabControlled(tabId, url, timeoutMs = 30000) {
-  setControlledNavigation(tabId, true);
-  try {
-    await chrome.tabs.update(tabId, { url });
-    await waitForTabLoad(tabId, timeoutMs);
-    await sleep(1800);
-  } finally {
-    setControlledNavigation(tabId, false);
-  }
-}
-
-async function injectContentScriptOnly(tabId) {
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
-  await sleep(900);
-}
-
-async function runCommentExecutionPlan(tabId, plan) {
-  const executionPlan = Array.isArray(plan?.executionPlan) ? plan.executionPlan : [];
-  const keyword = plan?.keyword || '';
-  const assignedCommentsCount = Number(plan?.assignedCommentsCount) || executionPlan.length || 2;
-  const postsExtracted = Number(plan?.postsExtracted) || 0;
-  const commentCycleNumber = Number(plan?.commentCycleNumber) || 1;
-  const commentScrollPassesUsed = Number(plan?.commentScrollPassesUsed) || 0;
-
-  let posted = 0;
-  let commentsAttempted = 0;
-  let commentsFailed = 0;
-  let blocked = false;
-  const stateSnapshot = await chrome.storage.local.get(['commentedPosts', 'usedCommentIds']);
-  let commentedPosts = Array.isArray(stateSnapshot.commentedPosts) ? stateSnapshot.commentedPosts.slice() : [];
-  let usedCommentIds = Array.isArray(stateSnapshot.usedCommentIds) ? stateSnapshot.usedCommentIds.slice() : [];
-
-  for (let i = 0; i < executionPlan.length; i++) {
-    const target = executionPlan[i];
-    if (!target?.targetUrl || !target?.commentText) {
-      commentsFailed++;
-      continue;
-    }
-    commentsAttempted++;
-    console.log(`[Worker] Direct target execution ${i + 1}/${executionPlan.length}: ${target.targetUrl}`);
-    try {
-      await navigateTabControlled(tabId, target.targetUrl, 35000);
-      await injectContentScriptOnly(tabId);
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: async (payload) => {
-          if (!window.__resumeSingleCommentTarget) throw new Error('Direct comment executor missing.');
-          return await window.__resumeSingleCommentTarget(payload);
-        },
-        args: [{ targetUrl: target.targetUrl, commentText: target.commentText }]
+      })
+      .catch(e => {
+        console.error('[Worker] handleStartFast error:', e.message);
+        port.postMessage({ ok: false, error: e.message });
       });
-      const outcome = results && results[0] ? results[0].result : 'FAILED';
-      if (outcome === 'BLOCKED') {
-        blocked = true;
-        break;
-      }
-      if (outcome === 'SUCCESS') {
-        posted++;
-        commentedPosts = [...commentedPosts, target.targetUrl].slice(-200);
-        if (target.commentId) usedCommentIds = [...usedCommentIds, target.commentId].slice(-100);
-        await chrome.storage.local.set({ commentedPosts, usedCommentIds });
-      } else {
-        commentsFailed++;
-      }
-      await sleep(1200);
-    } catch (e) {
-      commentsFailed++;
-      console.error(`[Worker] Direct target execution failed for ${target.targetUrl}:`, e.message);
-    }
+  });
+});
+
+// احتفظ بـ storage.onChanged كخط احتياطي
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes.nexora_cmd) return;
+  const cmd = changes.nexora_cmd.newValue;
+  if (!cmd || cmd.action !== 'START') return;
+  console.log('[Worker] Storage command received (fallback):', cmd);
+  handleStartFast(cmd).then(() => launchEngine()).catch(console.error);
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'START_ENGINE' || msg.action === 'START_POLLING') {
+    // ⚠️ MV3 fix: respond SYNCHRONOUSLY before any await, then run engine async
+    sendResponse({ ok: true, result: { keyword: cdp.keyword || 'starting...' } });
+    handleStartFast(msg)
+      .then(() => launchEngine())
+      .catch(e => {
+        console.error('[Worker] Start error:', e.message);
+        broadcast('EXTENSION_LIVE_STATUS', { text: '❌ ' + e.message });
+      });
+    return false; // channel closed immediately – response already sent
   }
-
-  return {
-    blocked,
-    posted,
-    commentsAttempted,
-    commentsFailed,
-    assignedCommentsCount,
-    keyword,
-    postsExtracted,
-    commentCycleNumber,
-    commentScrollPassesUsed
-  };
-}
-
-async function tabExists(tabId) {
-  if (!tabId) return false;
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    return !!tab;
-  } catch (e) {
+  if (msg.action === 'KEEP_ALIVE')    { sendResponse({ ok: true }); return false; }
+  if (msg.action === 'GET_CDP_COUNT') { sendResponse({ count: (cdp.keywordSavedCount || 0) + cdp.batchPending.length }); return false; }
+  if (msg.action === 'GET_STATUS')    { sendResponse({ running: cdp.running, keyword: cdp.keyword, totalSaved: cdp.totalSaved }); return false; }
+  if (msg.action === 'CONTENT_SCROLL_COMPLETE') { finalFlush().catch(console.error); return false; }
+  if (msg.action === 'SYNC_RESULTS') {
+    syncBatch(msg.posts, msg.keyword || cdp.keyword)
+      .then(n => sendResponse({ ok: true, savedCount: n }))
+      .catch(e => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg.action === 'DOM_POSTS') {
+    // البوستات جاية من content.js DOM extraction
+    let enriched = 0;
+    for (const p of (msg.posts || [])) {
+      if (!p.urn) continue;
+      if (cdp.store.has(p.urn)) {
+        // حدّث بيانات الـ store الموجود
+        const ex = cdp.store.get(p.urn);
+        if (p.text  && p.text.length  > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; }
+        if (p.author && !ex.author || ex.author === 'Unknown') ex.author = p.author;
+        if (p.likes !== null && ex.likes === null) ex.likes = p.likes;
+        if (ex._networkOnly) {
+          delete ex._networkOnly;
+          cdp.batchPending.push({ ...ex });
+          enriched++;
+        }
+      } else {
+        // بوست جديد من DOM مباشرة
+        const post = { canonicalUrn: p.urn, url: p.url, postText: p.text || '', preview: p.text || '',
+          author: p.author || 'Unknown', likes: p.likes, comments: p.comments,
+          confidence: p.text ? 0.95 : 0.5, source: 'dom_direct' };
+        cdp.store.set(p.urn, post);
+        cdp.batchPending.push({ ...post });
+        enriched++;
+      }
+    }
+    if (enriched > 0) {
+      console.log('[DOM] Enriched/added', enriched, 'posts -> flushing');
+      flushBatch().catch(console.error);
+    }
+    sendResponse({ ok: true });
     return false;
   }
-}
+});
 
-// ── Main Poll (with mutex) ──
-let checkJobsLock = false;
-
-async function checkJobs() {
-  if (checkJobsLock) return; // v9 FIX 4: reentrant-safe
-  checkJobsLock = true;
-  try {
-    await _checkJobsInner();
-  } finally {
-    checkJobsLock = false;
+// Phase 1: fast – resolve keyword + tab, reply to message channel immediately
+async function handleStartFast(msg) {
+  if (cdp.running) {
+    cdp.running = false; stopEvalLoop();
+    await safeDetach().catch(() => {});
   }
-}
-
-async function _checkJobsInner() {
-  const state = await loadState();
-
-  // Gate 1: Already running
-  if (state.isJobRunning) {
-    // v10: Raised STALE_TIMEOUT to 30 min for deep multi-round extraction (content.js v14)
-    const STALE_TIMEOUT_MS = 1800000; // 30 min
-    const runningTime = Date.now() - (state.cycleStartTime || state.lastJobTime || 0);
-
-    if (runningTime < STALE_TIMEOUT_MS) {
-      const alive = await tabExists(state.activeTabId);
-      if (!alive && state.activeTabId !== null) {
-        console.warn(`🧹 [Worker] Active tab ${state.activeTabId} no longer exists. Cleaning up early.`);
-        await saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
-        // Fall through to restart cycle
-      } else {
-        console.log(`⏳ [Worker] Job in progress (${Math.round(runningTime / 1000)}s), skipping poll.`);
-        return;
-      }
-    } else {
-      console.log("🧹 [Worker] Stale job detected (15min+). Cleaning up...");
-      if (state.activeTabId) {
-        try { await safeRemoveTab(state.activeTabId); } catch (e) { }
-      }
-      await saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
-    }
-  }
-
-  // Gate 2: Cooldown timer
-  const elapsed = Date.now() - state.lastJobTime;
-  if (state.lastJobTime > 0 && elapsed < state.cooldownMs) {
-    const remaining = Math.ceil((state.cooldownMs - elapsed) / 60000);
-    console.log(`🛌 [Worker] Cooldown active. ${remaining} min remaining.`);
-    return;
-  }
-
-  // Gate 3: Paused
-  if (state.isPaused) {
-    const trickleMs = 600000;
-    if (elapsed < trickleMs) {
-      console.log(`⏸️ [Worker] PAUSED. Trickle: ${Math.ceil((trickleMs - elapsed) / 60000)} min left.`);
-      return;
-    }
-  }
-
-  // Gate 4: Clean any stale tab (safety net)
-  if (state.activeTabId !== null) {
-    try { await safeRemoveTab(state.activeTabId); console.log(`🧹 [Worker] Cleaned stale tab ${state.activeTabId}.`); } catch (e) { }
-    await saveState({ activeTabId: null });
-  }
-
-  // ── Fetch jobs ──
   const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
-  const { dashboardUrl, userId } = config;
-  if (!dashboardUrl || !userId) {
-    console.warn("⚠️ [Worker] Missing dashboardUrl or userId.");
-    return;
-  }
+  cdp.dashboardUrl = msg.dashboardUrl || config.dashboardUrl;
+  cdp.userId       = msg.userId       || config.userId;
+  if (!cdp.dashboardUrl || !cdp.userId) throw new Error('Not connected.');
 
+  let keywords = [];
   try {
-    const deviceId = await getExtensionFingerprint();
-    const response = await fetch(`${dashboardUrl}/api/extension/jobs`, {
-      headers: { 'x-extension-token': userId, 'x-device-id': deviceId, 'Cache-Control': 'no-cache' }
-    });
-    if (!response.ok) {
-      let body = '';
-      try { body = await response.text(); } catch (_) {}
-      console.error(`[Worker] /api/extension/jobs returned ${response.status}. Body: ${body.slice(0, 300)}`);
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const data = await response.json();
-
-    const isActive = data.active === true;
-    if (state.wasDashboardActive === false && isActive) {
-      console.log("🔄 [Worker] Dashboard turned active. Full reset.");
-      await saveState({
-        keywordCycles: {},
-        keywordSearchPages: {},
-        isPaused: false,
-        wasDashboardActive: true,
-        lastJobTime: 0,
-        dailyCommentsMade: 0,
-        currentSearchCycle: 0,
-        currentSearchKeywordIndex: 0,
-        cycleStartTime: 0,
-        consecutiveFailures: 0
-      });
-      state.keywordCycles = {};
-      state.keywordSearchPages = {};
-      state.isPaused = false;
-      state.wasDashboardActive = true;
-      state.lastJobTime = 0;
-      state.dailyCommentsMade = 0;
-      state.currentSearchCycle = 0;
-      state.currentSearchKeywordIndex = 0;
-    } else {
-      await saveState({ wasDashboardActive: isActive });
-    }
-
-    const settings = data.settings || {};
-
-    if (!isActive || !data.hasJobs) {
-      console.log(`😴 [Worker] Idle. active=${isActive}, hasJobs=${data.hasJobs}`);
-      return;
-    }
-
-    if (!settings.searchOnlyMode) {
-      if (!data.keywords?.length) {
-        console.log(`😴 [Worker] Idle: Comment campaigns missing.`);
-        return;
-      }
-      const kc = (await loadState()).keywordCycles || {};
-      const availableKeywords = data.keywords.filter(k => (kc[k.keyword] || 0) < (k.targetCycles || 1));
-
-      if (availableKeywords.length === 0) {
-        if (!state.isPaused) {
-          const fallbackCooldown = COMMENT_CYCLE_COOLDOWN_MS + Math.floor(Math.random() * 300000);
-          await saveState({ isPaused: true, lastJobTime: Date.now(), cooldownMs: fallbackCooldown, dailyCommentsMade: 0 });
-          console.log("⏸️ [Worker] AUTO-PAUSED: All comment keywords completed.");
-          try {
-            await fetch(`${dashboardUrl}/api/settings`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-              body: JSON.stringify({ systemActive: false })
-            });
-          } catch (e) { }
-        }
-        return;
-      }
-      data.availableKeywords = availableKeywords;
-    }
-
-    if (state.isPaused) {
-      await saveState({ isPaused: false });
-    }
-
-    // ── Safety Limit Resets ──
-    const today = new Date().toDateString();
-    const currentHour = new Date().getHours();
-    const freshState = await loadState();
-    if (freshState.lastCommentDate !== today) {
-      await saveState({ dailyCommentsMade: 0, hourlyCommentsMade: 0, lastCommentDate: today, lastCommentHour: currentHour });
-      console.log("📅 [Worker] New day. Reset daily comment quota.");
-    }
-    if (freshState.lastCommentHour !== currentHour) {
-      await saveState({ hourlyCommentsMade: 0, lastCommentHour: currentHour });
-      console.log("🕐 [Worker] New hour. Reset hourly comment quota.");
-    }
-
-    const allComments = data.comments || [];
-
-    // ═══════════════════════════════════════════════════════════
-    // SEARCH-ONLY MODE — Sequential Keyword Queue (v9)
-    // ═══════════════════════════════════════════════════════════
-    if (settings.searchOnlyMode) {
-      let allKeywords = [];
-      try {
-        allKeywords = JSON.parse(settings.searchConfigJson || "[]")
-          .flat(Infinity)
-          .filter(k => typeof k === 'string' && k.trim().length > 0)
-          .map(k => k.trim());
-      } catch (e) {
-        console.warn("⚠️ [Worker] Failed to parse searchConfigJson:", e.message);
-      }
-
-      if (allKeywords.length === 0) {
-        console.warn("⚠️ [Worker] Search-Only: no keywords configured.");
-        return;
-      }
-
-      const kwIndex = (await loadState()).currentSearchKeywordIndex || 0;
-
-      // All keywords done → full cycle complete
-      if (kwIndex >= allKeywords.length) {
-        const cyclesDone = ((await loadState()).currentSearchCycle || 0) + 1;
-        await saveState({
-          isJobRunning: false,
-          activeTabId: null,
-          cycleStartTime: 0,
-          lastJobTime: Date.now(),
-          cooldownMs: SEARCH_FULL_CYCLE_COOLDOWN_MS,
-          currentKeyword: null,
-          currentSearchKeywordIndex: 0,
-          currentSearchCycle: cyclesDone,
-          keywordSearchPages: {},
-          isPaused: true,
-          liveStatusText: ''
-        });
-        const cdMin = Math.round(SEARCH_FULL_CYCLE_COOLDOWN_MS / 60000);
-        console.log(`[Worker] ✅ All ${allKeywords.length} keywords done. Cycle ${cyclesDone} complete. Pausing ${cdMin} min.`);
-        showPremiumToast('All Keywords Done', `✅ Cycle ${cyclesDone} complete! ${allKeywords.length} keywords searched. Resuming in ${cdMin} min.`, false);
-        try {
-          await fetch(`${dashboardUrl}/api/settings`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-            body: JSON.stringify({ systemActive: false })
-          });
-        } catch (e) { }
-        return;
-      }
-
-      const kwStr = allKeywords[kwIndex];
-      const pageNum = 1; // content.js handles all pagination internally
-      try {
-        if (self.__globalSyncedUrlsByKeyword) self.__globalSyncedUrlsByKeyword.delete(kwStr);
-      } catch (e) {}
-
-      // v9 FIX 2: Log group position for visibility
-      const groupNum = Math.floor(kwIndex / 3) + 1;
-      const posInGroup = (kwIndex % 3) + 1;
-      console.log(`🔍 [Worker] Search-only: keyword ${kwIndex + 1}/${allKeywords.length} (Group ${groupNum}, #${posInGroup}/3): "${kwStr}"`);
-      showPremiumToast('Search Mode', `🔍 Keyword ${kwIndex + 1}/${allKeywords.length}: "${kwStr}"`, false);
-
-      await saveState({
-        isJobRunning: true,
-        cycleStartTime: Date.now(),
-        currentKeyword: kwStr,
-        liveStatusText: `🔍 Searching "${kwStr}" (${kwIndex + 1}/${allKeywords.length})...`
-      });
-      // Save settings for PASS_DONE handler
-      await chrome.storage.local.set({
-        jobSettings: { ...settings, engineMode: 'SEARCH_ONLY', searchOnlyMode: true },
-        jobComments: []
-      });
-
-      const currentCycle = ((await loadState()).currentSearchCycle || 0) + 1;
-      startScrapingCycle(kwStr, settings, [], dashboardUrl, userId, currentCycle, pageNum, 0, []);
-      return;
-    }
-
-    // ═══════════════════════════════════════════════════════════
-    // COMMENT MODE (unchanged from v8)
-    // ═══════════════════════════════════════════════════════════
-    const available = data.availableKeywords || [];
-    if (available.length === 0) return;
-
-    const stPick = await loadState();
-    const forcedRetryKw = stPick.pendingCommentInsufficientRetry || null;
-    let kwObj = forcedRetryKw
-      ? available.find(k => k.keyword === forcedRetryKw)
-      : null;
-    if (!kwObj) {
-      kwObj = available[Math.floor(Math.random() * available.length)];
-    }
-    const kw = kwObj.keyword;
-    const kc = (await loadState()).keywordCycles || {};
-    const cycleNum = (kc[kw] || 0) + 1;
-    const commentsPerCycle = Math.max(1, Number(kwObj.commentsPerCycle) || Number(settings.commentsPerCycle) || 2);
-    const insufficientRetryPass = !!(forcedRetryKw && forcedRetryKw === kw);
-
-    const keywordComments = allComments.filter(c =>
-      c.keywordId === kwObj.id && Number(c.cycleIndex) === cycleNum
-    );
-    console.log(`[Worker] Comments for "${kw}" cycle #${cycleNum}: ${keywordComments.length} found (expect ${commentsPerCycle})`);
-
-    if (keywordComments.length !== commentsPerCycle) {
-      console.error(`[Worker] ❌ VALIDATION FAILED: Expected ${commentsPerCycle} comments for cycle #${cycleNum} of "${kw}", found ${keywordComments.length}.`);
-      showPremiumToast('Configuration Error', `❌ "${kw}" cycle #${cycleNum} needs ${commentsPerCycle} comments, found ${keywordComments.length}.`, true);
-      return;
-    }
-
-    const cState = await loadState();
-
-    if (cState.hourlyCommentsMade >= 12) {
-      console.warn("🛡️ [Worker] Hourly comment cap (12/hr) reached.");
-      showPremiumToast('Safety Limit', '🛡️ Hourly limit reached. Cooling down.', false);
-      await saveState({ cooldownMs: COMMENT_CYCLE_COOLDOWN_MS, lastJobTime: Date.now() });
-      return;
-    }
-
-    if (cState.dailyCommentsMade >= 15) {
-      console.warn("🛡️ [Worker] Daily comment limit (15) reached.");
-      showPremiumToast('Daily Limit', '🛡️ Daily limit reached. Resuming tomorrow.', false);
-      await saveState({ isPaused: true, cooldownMs: 3600000, lastJobTime: Date.now() });
-      return;
-    }
-
-    await saveState({
-      isJobRunning: true,
-      currentKeyword: kw,
-      cycleStartTime: Date.now(),
-      liveStatusText: `🚀 Starting cycle #${cycleNum} for "${kw}"...`,
-      ...(insufficientRetryPass ? { pendingCommentInsufficientRetry: null } : {})
-    });
-
-    const searchPages = (await loadState()).keywordSearchPages || {};
-    const pageNum = (searchPages[kw] || 0) + 1;
-
-    const commentSurface = kwObj.surface === 'feed' ? 'feed' : 'search_posts';
-    const jobSettings = {
-      ...settings,
-      engineMode: 'COMMENT_CAMPAIGN',
-      searchOnlyMode: false,
-      commentSurface,
-      commentCycleNumber: cycleNum,
-      insufficientRetryPass
-    };
-
-    console.log(`🚀 [Worker] Comment cycle #${cycleNum}/${kwObj.targetCycles || 1} for: "${kw}" (Page ${pageNum}) surface=${commentSurface}`);
-    showPremiumToast('Nexora Engine', `Starting cycle #${cycleNum} for "${kw}" (Pg ${pageNum})`, false);
-    await startScrapingCycle(kw, jobSettings, keywordComments, dashboardUrl, userId, cycleNum, pageNum);
-
-  } catch (error) {
-    console.error("❌ [Worker] Poll failed:", error.message);
-    const s = await loadState();
-    if (s.isJobRunning) {
-      await saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0 });
-    }
-  }
-}
-
-// ── Scraping Cycle (Single-Tab, Navigation-Resilient) ──
-// passIndex: 0 = relevance URL (all time ranges), 1 = date URL (recent)
-// priorPosts: serialized posts from pass 0, forwarded to content.js for pass 1
-async function startScrapingCycle(keyword, settings, comments, dashboardUrl, userId, cycleNum = 1, pageNum = 1, passIndex = 0, priorPosts = []) {
-  const isSearchOnlyJob = settings.searchOnlyMode === true || settings.engineMode === 'SEARCH_ONLY';
-  const searchPostsUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=RELEVANCE&origin=SWITCH_SEARCH_VERTICAL`;
-  const feedUrl = 'https://www.linkedin.com/feed/';
-  const searchUrl = isSearchOnlyJob
-    ? searchPostsUrl
-    : (settings.commentSurface === 'feed' ? feedUrl : searchPostsUrl);
-  let injectionCount = 0;
-  const MAX_INJECTIONS = 3;
-
-  try {
-    // Open ONE focused window — prevents timer throttling
-    const win = await chrome.windows.create({
-      url: searchUrl,
-      type: 'normal',
-      state: 'normal',
-      focused: true,
-      width: 1100,
-      height: 900
-    });
-    const tab = win.tabs[0];
-    await saveState({ activeTabId: tab.id, activeWindowId: win.id });
-
-    console.log(`💉 [Worker] Tab ${tab.id} created for "${keyword}". Waiting for load...`);
-    await waitForTabLoad(tab.id, 20000);
-    await sleep(1500);
-
-    let isInjecting = false;
-    async function injectAndStart() {
-      if (isInjecting) {
-        console.log("🛠️ [Worker] Injection already in progress. Guard preventing loop.");
-        return false;
-      }
-      isInjecting = true;
-      try {
-        injectionCount++;
-        console.log(`🛠️ [Worker] Injection attempt #${injectionCount}/${MAX_INJECTIONS}...`);
-
-        const alive = await tabExists(tab.id);
-        if (!alive) {
-          console.warn("⚠️ [Worker] Tab lost before injection.");
-          await finishCycle(null, false, settings.searchOnlyMode);
-          return false;
-        }
-
-        let currentTab;
-        try {
-          currentTab = await chrome.tabs.get(tab.id);
-        } catch (e) {
-          console.warn("⚠️ [Worker] Failed to get tab info:", e.message);
-          await finishCycle(null, false, settings.searchOnlyMode);
-          return false;
-        }
-
-        if (!currentTab.url || !currentTab.url.includes('linkedin.com')) {
-          console.warn(`⚠️ [Worker] Tab URL not LinkedIn: ${currentTab.url}`);
-          safeRemoveTab(tab.id).catch(() => { });
-          await finishCycle(null, false, settings.searchOnlyMode);
-          return false;
-        }
-
-        console.log(`📍 [Worker] Tab verified: ${currentTab.url.substring(0, 80)}...`);
-
-        // ── SEARCH-ONLY: inject new modular engine ─────────────────────────
-        // ── COMMENT CAMPAIGN: inject legacy content.js (UNCHANGED) ──────────
-        if (isSearchOnlyJob) {
-          // Step 1: Inject interceptor into MAIN world FIRST.
-          // Patches fetch+XHR before LinkedIn fires scroll-triggered API calls,
-          // ensuring all search result data is captured by the interceptor.
-          try {
-            await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              files: ['src/interceptor.js'],
-              world: 'MAIN',
-            });
-            console.log('🕸️ [Worker] Interceptor injected in MAIN world.');
-          } catch (e) {
-            console.warn('⚠️ [Worker] MAIN-world interceptor failed (non-fatal):', e.message);
-          }
-
-          // Step 2: Inject content-world modules in dependency order
-          const SEARCH_ENGINE_FILES = [
-            'src/config.js',
-            'src/logger.js',
-            'src/layout-detector.js',
-            'src/dom-adapter.js',
-            'src/extractor.js',
-            'src/filter.js',
-            'src/transport.js',
-            'src/observer.js',
-            'src/core-engine.js',
-          ];
-          try {
-            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: SEARCH_ENGINE_FILES });
-          } catch (e) {
-            console.error("❌ [Worker] Search engine injection failed:", e.message);
-            safeRemoveTab(tab.id).catch(() => { });
-            await finishCycle(null, false, true);
-            return false;
-          }
-
-          await sleep(800);
-
-          console.log("🚀 [Worker] Starting new Search Engine...");
-          try {
-            await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              func: (k, s, du, u) => {
-                if (!window.__NexoraEngine) throw new Error('__NexoraEngine not defined — module load failed.');
-                window.__NexoraEngine.start(k, s, du, u);
-              },
-              args: [keyword, { ...settings }, dashboardUrl, userId]
-            });
-            console.log("✅ [Worker] Search Engine started.");
-            _lastContentHeartbeat = Date.now();
-            return true;
-          } catch (e) {
-            console.error(`❌ [Worker] Search engine start error on attempt #${injectionCount}:`, e.message);
-            if (injectionCount < MAX_INJECTIONS) {
-              console.log("🔄 [Worker] Retrying...");
-              await sleep(5000);
-              isInjecting = false;
-              return injectAndStart();
-            }
-            safeRemoveTab(tab.id).catch(() => { });
-            await finishCycle(null, false, true);
-            return false;
-          }
-        }
-
-        // ── COMMENT CAMPAIGN path (original code — DO NOT MODIFY) ─────────
-        try {
-          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-        } catch (e) {
-          console.error("❌ [Worker] Inject failed:", e.message);
-          safeRemoveTab(tab.id).catch(() => { });
-          await finishCycle(null, false, settings.searchOnlyMode);
-          return false;
-        }
-
-        await sleep(1500);
-
-        console.log("🚀 [Worker] Starting extraction...");
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: (k, s, c, du, u) => {
-              const merged = { ...s };
-              if (window.__startCommentCampaign) window.__startCommentCampaign(k, merged, c, du, u);
-              else if (window.__startExtraction) window.__startExtraction(k, merged, c, du, u);
-              else throw new Error('Comment-campaign starter not defined on window.');
-            },
-            args: [keyword, { ...settings, passIndex, priorPosts }, comments, dashboardUrl, userId]
-          });
-          console.log("✅ [Worker] Content script started.");
-          _lastContentHeartbeat = Date.now();
-          return true;
-        } catch (e) {
-          console.error(`❌ [Worker] Comm error on attempt #${injectionCount}:`, e.message);
-          if (injectionCount < MAX_INJECTIONS) {
-            console.log("🔄 [Worker] Retrying injection...");
-            await sleep(5000);
-            isInjecting = false;
-            return injectAndStart();
-          }
-          safeRemoveTab(tab.id).catch(() => { });
-          await finishCycle(null, false, settings.searchOnlyMode);
-          return false;
-        }
-      } finally {
-        isInjecting = false;
-      }
-    }
-
-    const started = await injectAndStart();
-    if (!started) return;
-
-    // CRITICAL: Do NOT minimize — minimized tabs have document.visibilityState='hidden'
-    // which disables IntersectionObserver, killing LinkedIn's infinite scroll loader.
-    // Instead: shrink the window and unfocus it. It stays "visible" to Chrome's engine
-    // so IntersectionObserver fires and LinkedIn loads new post cards.
-    setTimeout(async () => {
-      try {
-        await chrome.windows.update(win.id, {
-          state: 'normal',
-          focused: false,
-          width: 800,
-          height: 600
-        });
-        console.log(`🪟 [Worker] Window ${win.id} unfocused (800x600, visible to renderer).`);
-      } catch(e) {
-        console.log(`🪟 [Worker] Window unfocus failed (non-fatal):`, e.message);
-      }
-    }, 3000);
-
-    // Re-inject on tab navigation
-    // IMPORTANT: Do NOT re-inject for pass-driven navigations — those are handled
-    // by the PASS_DONE message handler which injects content.js itself.
-    // Only re-inject on unexpected navigations (e.g. LinkedIn redirects).
-    const navListener = async (tabId, changeInfo) => {
-      if (tabId !== tab.id) return;
-      if (changeInfo.status === 'complete' && !isControlledNavigation(tabId) && injectionCount < MAX_INJECTIONS) {
-        const newTab = await chrome.tabs.get(tabId).catch(() => null);
-        if (!newTab) return;
-        // Treat ANY navigation within linkedin.com as in-run (SPA route changes,
-        // auth refreshes, feed redirects, pagination). Only re-inject if the tab
-        // genuinely left the LinkedIn domain entirely — that is an unrecoverable
-        // navigation that warrants a fresh injection attempt.
-        const url = String(newTab.url || '');
-        const isLinkedInHost = /https?:\/\/(?:www\.)?linkedin\.com\//i.test(url);
-
-        if (isLinkedInHost) {
-          // LinkedIn SPA navigation, auth redirect, or search param change — keep going.
-          console.log("🔄 [Worker] In-run LinkedIn navigation detected — skipping re-inject to preserve running extraction.");
-        } else {
-          // Left LinkedIn entirely — this is genuinely unexpected. Re-inject after a pause.
-          console.log("🔄 [Worker] Tab navigated away from LinkedIn. Re-injecting after delay...");
-          await sleep(5000);
-          await injectAndStart();
-        }
-      }
-    };
-    chrome.tabs.onUpdated.addListener(navListener);
-
-    // Heartbeat monitor
-    const heartbeatInterval = setInterval(async () => {
-      const s = await loadState();
-      if (!s.isJobRunning || s.activeTabId !== tab.id) {
-        clearInterval(heartbeatInterval);
-        chrome.tabs.onUpdated.removeListener(navListener);
-        return;
-      }
-
-      // Keep worker renderer alive in background mode.
-      // If the worker window gets minimized, restore it to normal (unfocused) so scrolling/extraction continues.
-      try {
-        if (s.activeWindowId) {
-          const w = await chrome.windows.get(s.activeWindowId);
-          if (w && w.state === 'minimized') {
-            await chrome.windows.update(s.activeWindowId, {
-              state: 'normal',
-              focused: false,
-              width: 800,
-              height: 600
-            });
-            console.log(`🪟 [Worker] Restored minimized worker window ${s.activeWindowId} to keep extraction active.`);
-          }
-        }
-      } catch (e) {
-        // Non-fatal: window may be closed by user.
-      }
-
-      const timeSinceHeartbeat = Date.now() - _lastContentHeartbeat;
-      if (timeSinceHeartbeat > 90000 && !isControlledNavigation(tab.id) && injectionCount < MAX_INJECTIONS) {
-        // v9: Raised re-inject threshold from 60s to 90s (content.js v10 pauses up to 3.5s/step × 5 = 17s between heartbeats)
-        console.warn(`💀 [Worker] No heartbeat for ${Math.round(timeSinceHeartbeat / 1000)}s. Re-injecting...`);
-        await injectAndStart();
-      }
-    }, 20000);
-
-    // v10: Watchdog raised to 30 min for deep multi-round extraction (content.js v14)
-    const WATCHDOG_MS = 1800000;
-    const watchdogTabId = tab.id;
-    setTimeout(async () => {
-      clearInterval(heartbeatInterval);
-      chrome.tabs.onUpdated.removeListener(navListener);
-      const s = await loadState();
-      if (s.isJobRunning && s.activeTabId === watchdogTabId) {
-        console.warn("⏱️ [Worker] WATCHDOG: 30-min timeout reached. Triggering emergency memory flush...");
-        
-        try {
-          // Force content.js to dump all un-synced posts to the backend API before dying
-          await chrome.scripting.executeScript({
-            target: { tabId: watchdogTabId },
-            func: () => { if (window.__emergencySync) window.__emergencySync(); }
-          });
-          // Give the fetch operation inside background.js a few seconds to buffer the incoming DB write
-          await sleep(4000); 
-        } catch(e) {
-          console.warn("⏱️ [Worker] Error during emergency sync:", e.message);
-        }
-
-        console.warn("⏱️ [Worker] WATCHDOG: Emergency sync complete. Force-killing tab.");
-        safeRemoveTab(watchdogTabId).catch(() => { });
-        await finishCycle(null, false, settings.searchOnlyMode);
-      }
-    }, WATCHDOG_MS);
-
-  } catch (err) {
-    console.error("❌ [Worker] Cycle failed:", err.message);
-    await finishCycle(null, false, settings.searchOnlyMode);
-  }
-}
-
-async function processSniperQueue({ urls, keyword, dashboardUrl, userId, linkedInProfileId, settings }) {
-  if (!urls || urls.length === 0) return;
-
-  const targetMax   = Number(settings.targetMax)   || 150;
-  const workList    = urls.slice(0, 150); // Hard cap: 150 URLs max (background fetches, no UI freeze)
-
-  console.log(`[Sniper] 🎯 FETCH mode: ${workList.length} URLs for "${keyword}"`);
-  showPremiumToast('Sniper Active', `🎯 Fetching ${workList.length} posts for "${keyword}"...`, false);
-
-  const allPosts = [];
-  const INT4_MAX = 2147483647;
-  const safeInt = (v) => Math.min(Math.max(Math.round(Number(v) || 0), 0), INT4_MAX);
-
-  function extractNum(html, ...keys) {
-    for (const key of keys) {
-      const re = new RegExp(`"${key}"\\s*:\\s*(\\d+)`, 'g');
-      let best = 0, m;
-      while ((m = re.exec(html)) !== null) {
-        const n = parseInt(m[1], 10);
-        if (n > best) best = n;
-      }
-      if (best > 0) return best;
-    }
-    return 0;
-  }
-
-  function extractLikes(html) {
-    const directLikes = extractNum(html, 'numLikes', 'likeCount', 'totalReactionCount', 'reactionCount', 'reaction_count', 'numReactions', 'totalLikeCount');
-    if (directLikes > 0) return directLikes;
-    
-    // Fallbacks
-    let best = 0;
-    const reAgg = /aggregatedTotalReactions":\s*(\d+)/g;
-    let m;
-    while ((m = reAgg.exec(html)) !== null) {
-      const n = parseInt(m[1], 10);
-      if (n > best) best = n;
-    }
-    return best > 0 ? best : null; // Return null if no engagement data found
-  }
-
-  function extractText(html) {
-    const re = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
-    let longest = '', m;
-    while ((m = re.exec(html)) !== null) {
-      const s = m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"').trim();
-      if (s.length > longest.length && s.length > 20 && s.length < 2000) longest = s;
-    }
-    return longest.slice(0, 300);
-  }
-
-  function extractAuthor(html) {
-    const m = html.match(/"(?:actorName|localizedName|firstName|name)"\s*:\s*"([^"]{2,80})"/);
-    return m ? m[1] : 'Unknown';
-  }
-
-  for (let i = 0; i < workList.length; i++) {
-    const url = workList[i];
-    try {
-      console.log(`[Sniper] (${i + 1}/${workList.length}) → ${url}`);
-      const resp = await fetch(url, {
-        method: 'GET', credentials: 'include', cache: 'no-store',
-        headers: { 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' }
-      });
-      if (!resp.ok) { console.warn(`[Sniper] ⏭️ HTTP ${resp.status}`); await sleep(400); continue; }
-
-      const html = await resp.text();
-      if (html.includes('authwall') || html.includes('session_redirect') || html.length < 5000) {
-        console.warn(`[Sniper] ⏭️ Auth/empty page`); await sleep(400); continue;
-      }
-
-      const likes    = extractLikes(html);
-      const comments = extractNum(html, 'numComments', 'commentCount', 'totalSocialCommentCount', 'commentsCount');
-      const text     = extractText(html);
-      const author   = extractAuthor(html);
-      let mediaType  = 'text';
-      if (/"mediaType"\s*:\s*"VIDEO"/.test(html)) mediaType = 'video';
-      else if (/"mediaType"\s*:\s*"IMAGE"/.test(html)) mediaType = 'image';
-      else if (/"mediaType"\s*:\s*"ARTICLE"/.test(html)) mediaType = 'article';
-
-      console.log(`[Sniper] likes=${likes}, comments=${comments}`);
-      const urnMatch = url.match(/urn:li:(activity|ugcPost|share):(\d+)/);
-      const id = urnMatch ? `${urnMatch[1]}_${urnMatch[2]}` : url.split('/').filter(Boolean).pop();
-      allPosts.push({
-        url: url.endsWith('/') ? url : url + '/',
-        likes: likes != null ? safeInt(likes) : null,
-        comments: safeInt(comments),
-        shares: 0,
-        author, preview: text.slice(0, 200), postText: text,
-        timestamp: new Date().toISOString(), mediaType, id,
-        commentable: true, hasRealUrl: true,
-      });
-      console.log(`[Sniper] ✅ Collected #${allPosts.length}: likes=${likes}`);
-      if (allPosts.length >= targetMax) { console.log(`[Sniper] 🎯 Target reached.`); break; }
-    } catch (e) {
-      console.error(`[Sniper] Error on ${url}:`, e.message);
-    }
-    await sleep(600);
-  }
-
-  console.log(`[Sniper] 🏁 ${allPosts.length}/${workList.length} collected.`);
-  if (allPosts.length === 0) {
-    showPremiumToast('Sniper Done', `⚠️ No posts fetched for "${keyword}".`, true);
-    return;
-  }
-  try {
-    const deviceId = await getExtensionFingerprint();
-    const resp2 = await fetch(`${dashboardUrl}/api/extension/results`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
-      body: JSON.stringify({ keyword, posts: allPosts, linkedInProfileId, debugInfo: { source: 'sniper_fetch', checked: workList.length } })
-    });
-    if (resp2.ok) {
-      const r = await resp2.json().catch(() => ({}));
-      console.log(`[Sniper] ✅ Synced. savedCount=${r.savedCount || 0}`);
-      showPremiumToast('Sniper Complete', `✅ Saved ${r.savedCount || allPosts.length} posts for "${keyword}"!`, false);
-    } else { throw new Error(`HTTP ${resp2.status}`); }
+    keywords = await fetchKeywordsArray(cdp.dashboardUrl, cdp.userId);
   } catch (e) {
-    console.error('[Sniper] ❌ Sync failed:', e.message);
-    showPremiumToast('Sync Error', `❌ Failed to save: ${e.message}`, true);
-  }
-}
-
-// ── Finish Cycle ──
-// v9 FIX 2: Uses position-aware cooldown (3-keyword grouping for search mode)
-async function finishCycle(tabId, incrementKeyword = true, searchOnlyMode = false) {
-  if (tabId) {
-    try { await safeRemoveTab(tabId); } catch (e) { }
-  }
-
-  const state = await loadState();
-  const failures = incrementKeyword ? 0 : (state.consecutiveFailures || 0) + 1;
-
-  // Get next keyword index for cooldown calculation
-  const nextKwIndex = (state.currentSearchKeywordIndex || 0) + 1;
-
-  const cd = getCooldown(nextKwIndex, 999 /* totalKeywords not needed for grouping */, failures, searchOnlyMode);
-
-  const updates = {
-    isJobRunning: false,
-    activeTabId: null,
-    activeWindowId: null,
-    cycleStartTime: 0,
-    lastJobTime: Date.now(),
-    cooldownMs: cd,
-    consecutiveFailures: failures,
-    liveStatusText: ''
-  };
-
-  if (state.currentKeyword) {
-    if (searchOnlyMode) {
-      if (incrementKeyword) {
-        updates.currentSearchKeywordIndex = nextKwIndex;
-        updates.currentKeyword = null;
-        const searchPages = state.keywordSearchPages || {};
-        delete searchPages[state.currentKeyword];
-        updates.keywordSearchPages = searchPages;
-
-        // Log with group context
-        const groupBoundary = nextKwIndex > 0 && nextKwIndex % 3 === 0;
-        const cdSec = Math.round(cd / 1000);
-        const cdLabel = cd >= 60000 ? `${Math.round(cd / 60000)} min` : `${cdSec}s`;
-        console.log(`[Worker] ✅ "${state.currentKeyword}" done. → Keyword ${nextKwIndex}. Cooldown: ${cdLabel}${groupBoundary ? ' (GROUP BOUNDARY)' : ''}.`);
-      } else {
-        console.log(`[Worker] 🔄 Retrying "${state.currentKeyword}" on next cycle due to failure/0 posts.`);
-      }
+    const cached = await chrome.storage.local.get('lastKeywords');
+    if (cached.lastKeywords && cached.lastKeywords.length > 0) {
+      keywords = cached.lastKeywords;
+      console.warn('[Worker] fetchKeywords failed, using cached:', keywords);
     } else {
-      // Comment mode — only advance keyword cycle / clear keyword on real success (same idea as search-only retry).
-      if (incrementKeyword) {
-        updates.currentSearchKeywordIndex = nextKwIndex;
-        updates.currentKeyword = null;
-        const searchPages = state.keywordSearchPages || {};
-        delete searchPages[state.currentKeyword];
-        updates.keywordSearchPages = searchPages;
-
-        const kc = state.keywordCycles || {};
-        kc[state.currentKeyword] = (kc[state.currentKeyword] || 0) + 1;
-        updates.keywordCycles = kc;
-        updates.consecutiveFailures = 0;
-        console.log(`[Worker] ✅ "${state.currentKeyword}" cycle → ${kc[state.currentKeyword]}.`);
-      } else {
-        console.log(`[Worker] 🔄 Comment job failed or 0 comments posted; "${state.currentKeyword}" cycle not advanced — will retry after cooldown.`);
-      }
+      broadcast('EXTENSION_LIVE_STATUS', { text: '\u274c Error: ' + e.message });
+      throw e;
     }
   }
+  cdp.allKeywords = keywords;
+  cdp.keywordIndex = 0; cdp.keywordSavedCount = 0;
+  cdp.keyword = keywords[0] || 'linkedin';
+  cdp.cycleMode = keywords.length > 1;
+  await chrome.storage.local.set({ lastKeywords: keywords, lastKeyword: cdp.keyword });
+  cdp.store.clear(); cdp.batchPending = []; cdp.totalSaved = 0; cdp._lastApiReqs.clear();
+  await chrome.storage.session.clear();
 
-  await saveState(updates);
-  const cdMin = Math.round(cd / 60000);
-  const cdSec = Math.round(cd / 1000);
-  const cdLabel = cd >= 60000 ? `${cdMin} min` : `${cdSec}s`;
-  console.log(`[Worker] Cycle done. Cooldown: ${cdLabel}${failures > 0 ? ` (backoff level ${failures})` : ''}.`);
-  showPremiumToast('Cycle Complete', `✅ Done! Cooling ${cdLabel} before next keyword...`, false);
+  const liTabs = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
+  let tab = liTabs[0];
+  if (!tab) {
+    tab = await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/', active: true });
+    // Wait for the LinkedIn process to initialize before CDP attach to prevent cross-origin detach
+    await waitForTabLoad(tab.id, 15000); 
+  }
+  cdp.tabId = tab.id;
+  console.log('[Worker] Phase1 done. keyword=' + cdp.keyword + ' tabId=' + cdp.tabId);
+  return { keyword: cdp.keyword };
+}
 
-  // ── SNIPER: launch AFTER main tab is closed (no renderer competition) ────────
-  // The SNIPER_QUEUE handler only stores the queue. We pick it up here, after
-  // finishCycle has removed the main tab and all state is written to storage.
-  // This guarantees the sniper tabs do not compete with the scroll renderer.
+// Phase 2: slow – CDP attach, navigate, wait for load, start loop (runs after response sent)
+async function launchEngine() {
+  // Keep service worker alive via alarm during the long tab-load wait
+  chrome.alarms.create('sw_keepalive', { periodInMinutes: 0.4 });
   try {
-    const sniperData = await chrome.storage.local.get(['pendingSniperQueue']);
-    if (sniperData.pendingSniperQueue) {
-      const q = sniperData.pendingSniperQueue;
-      await chrome.storage.local.remove('pendingSniperQueue');
-      console.log(`[Worker] 🎯 Launching sniper AFTER main tab closed. ${(q.urls||[]).length} URLs.`);
-      // Small delay so the renderer fully releases the closed tab
-      await sleep(2000);
-      processSniperQueue(q).catch(e => console.error('[Worker] Sniper error:', e.message));
-    }
-  } catch(e) {
-    console.warn('[Worker] Could not read pendingSniperQueue:', e.message);
-  }
-}
+    const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(cdp.keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+    await chrome.tabs.update(cdp.tabId, { url: searchUrl, active: true });
+    await chrome.storage.session.set({ cdpTabId: cdp.tabId, cdpKeyword: cdp.keyword, cdpDashUrl: cdp.dashboardUrl, cdpUserId: cdp.userId });
+    broadcast('EXTENSION_LIVE_STATUS', { text: '\u23f3 Loading LinkedIn...' });
+    await waitForTabLoad(cdp.tabId);
 
-async function handleTerminalJobResult(message, senderTabId) {
-  const status = message.action === 'JOB_COMPLETED' ? "✅ COMPLETED" : "❌ FAILED";
-  const posted = message.commentsPostedCount || 0;
-  const assigned = message.assignedCommentsCount || 0;
-  const blocked = message.linkedinBlocked || false;
-  const isSearchOnly = message.searchOnlyMode === true;
-
-  console.log(`📐 [Worker] Job ${status}. Real posts extracted: ${message.postsExtracted || 'N/A'} | SearchOnly: ${isSearchOnly} | Blocked: ${blocked}${message.reason ? ` | reason=${message.reason}` : ''}${message.resultStatus ? ` | result=${message.resultStatus}` : ''}`);
-
-  let isSuccessfulCycle = message.action === 'JOB_COMPLETED';
-
-  if (message.action === 'JOB_FAILED' && message.reason === 'CYCLE_INSUFFICIENT_TARGETS') {
-    const st = await loadState();
-    const kw = message.keyword || st.currentKeyword;
-    if (message.insufficientRetryPass) {
-      await saveState({ pendingCommentInsufficientRetry: null });
-      console.log(`[Worker] Comment campaign: insufficient targets after retry for "${kw}" — advancing.`);
-      showPremiumToast('Campaign', `Insufficient posts after retry for "${kw}".`, true);
-    } else if (kw) {
-      await saveState({ pendingCommentInsufficientRetry: kw });
-      console.log(`[Worker] Comment campaign: scheduling one retry for "${kw}" (insufficient targets).`);
-      showPremiumToast('Campaign', `Not enough posts — retrying once for "${kw}".`, false);
-    }
-    await finishCycle(senderTabId ?? st.activeTabId, message.insufficientRetryPass === true, false);
-    return;
-  }
-
-  if (isSuccessfulCycle && !isSearchOnly && assigned > 0 && posted < assigned) {
-    console.log(`[Worker] ✅ Partial comments: ${posted}/${assigned} — cycle complete.`);
-    showPremiumToast('Partial comments', `Posted ${posted}/${assigned}. Cycle complete.`, false);
-  }
-
-  if (message.action === 'JOB_FAILED' && !isSearchOnly && message.reason === 'NO_COMMENTS_POSTED') {
-    showPremiumToast('Comments not posted', 'No comments were posted this run; same cycle will retry after cooldown.', true);
-  }
-
-  if (blocked) {
-    console.error(`[Worker] 🚫 LINKEDIN RESTRICTION DETECTED. Pausing 30 min.`);
-    showPremiumToast('🚫 Account Restricted', `LinkedIn blocking comments. Pausing 30 min.`, true);
-    const s = await loadState();
-    await finishCycle(senderTabId ?? s.activeTabId, false, isSearchOnly);
-    await saveState({ cooldownMs: 1800000 });
-    return;
-  }
-
-  const s = await loadState();
-  await finishCycle(senderTabId ?? s.activeTabId, isSuccessfulCycle, isSearchOnly);
-}
-
-// ── Message Router ──
-// v9 FIX 3: Single listener handles all message types including both START_POLLING sources
-let _lastContentHeartbeat = 0;
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-
-  // ── START_POLLING (from popup OR from dashboard-bridge) ──
-  if (message.action === 'START_COMMENT_CAMPAIGN' || message.action === 'START_SEARCH_ONLY') {
-    console.log(`🚀 [Worker] ${message.action} received.`);
-    if (sendResponse) sendResponse({ ok: true, ack: true });
-    const triggerStart = () => {
-      try { self.__globalSyncedUrlsByKeyword = new Map(); } catch (e) {}
-      chrome.storage.local.set({
-        isPaused: false,
-        keywordCycles: {},
-        keywordSearchPages: {},
-        cooldownMs: 0,
-        cycleStartTime: 0,
-        consecutiveFailures: 0,
-        hourlyCommentsMade: 0,
-        currentSearchCycle: 0,
-        currentSearchKeywordIndex: 0,
-        wasDashboardActive: false,
-        pendingCommentInsufficientRetry: null
-      }, () => {
-        // Wait 1500ms before first poll — gives the dashboard's /api/settings DB write
-        // (systemActive=true) time to propagate to Vercel before we hit /api/extension/jobs.
-        // 50ms was too short and caused immediate 'Idle. active=false' exit.
-        setTimeout(() => checkJobs(), 1500);
-      });
-    };
-    if (message.dashboardUrl && message.userId) {
-      chrome.storage.sync.set({ dashboardUrl: message.dashboardUrl, userId: message.userId }, triggerStart);
-    } else {
-      triggerStart();
-    }
-    return true;
-  }
-
-  if (message.action === 'START_POLLING') {
-    console.log("🚀 [Worker] START command received.");
-    if (sendResponse) sendResponse({ ok: true, ack: true });
-
-    const triggerStart = () => {
-      try { self.__globalSyncedUrlsByKeyword = new Map(); } catch (e) {}
-      chrome.storage.local.set({
-        isPaused: false,
-        keywordCycles: {},
-        keywordSearchPages: {},
-        cooldownMs: 0,
-        cycleStartTime: 0,
-        consecutiveFailures: 0,
-        hourlyCommentsMade: 0,
-        currentSearchCycle: 0,
-        currentSearchKeywordIndex: 0,
-        wasDashboardActive: false,
-        pendingCommentInsufficientRetry: null
-      }, () => {
-        // Wait 1500ms before first poll — gives the dashboard's /api/settings DB write
-        // (systemActive=true) time to propagate to Vercel before we hit /api/extension/jobs.
-        // 50ms was too short and caused immediate 'Idle. active=false' exit.
-        setTimeout(() => checkJobs(), 1500);
-      });
-    };
-
-    if (message.dashboardUrl && message.userId) {
-      chrome.storage.sync.set({ dashboardUrl: message.dashboardUrl, userId: message.userId }, triggerStart);
-    } else {
-      triggerStart();
-    }
-    return true;
-  }
-
-  if (message.action === 'HEARTBEAT') {
-    _lastContentHeartbeat = Date.now();
-    console.log(`💓 [Worker] Heartbeat (Phase: ${message.phase || '?'})`);
-    return;
-  }
-
-  if (message.action === 'LIVE_STATUS') {
-    saveState({ liveStatusText: message.text });
-    loadState().then(s => {
-      const log = s.activityLog || [];
-      log.push({ text: message.text, time: Date.now() });
-      while (log.length > 8) log.shift();
-      saveState({ activityLog: log });
-    });
     try {
-      chrome.runtime.sendMessage({ action: 'EXTENSION_LIVE_STATUS', text: message.text }, () => {
-        if (chrome.runtime.lastError) { /* popup closed */ }
+      await chrome.debugger.attach({ tabId: cdp.tabId }, '1.3');
+      cdp.attached = true;
+    } catch (e) {
+      if (e.message?.toLowerCase().includes('already')) { cdp.attached = true; }
+      else { console.warn('CDP attach failed:', e.message); cdp.attached = false; }
+    }
+    if (cdp.attached) {
+      try { await chrome.debugger.sendCommand({ tabId: cdp.tabId }, 'Network.enable'); } catch (_) {}
+    }
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: cdp.tabId }, files: ['content.js'] });
+    } catch (e) { console.warn('[Worker] content.js inject warning:', e.message); }
+    cdp.running = true;
+    startEvalLoop();
+    broadcast('EXTENSION_LIVE_STATUS', { text: '\u26a1 Engine running: "' + cdp.keyword + '"' });
+    console.log('[Worker] Engine running.');
+  } catch (e) {
+    broadcast('EXTENSION_LIVE_STATUS', { text: '\u274c Launch failed: ' + e.message });
+    console.error('[Worker] launchEngine error:', e);
+  } finally {
+    chrome.alarms.clear('sw_keepalive');
+  }
+}
+
+// ── EVAL_SCRIPT ────────────────────────────────────────────────────────────
+// Finds all LinkedIn post links in the DOM (always present in every layout).
+// Each link contains the real URN and is inside the post card container.
+const EVAL_SCRIPT = `(function(){
+    var posts = [];
+    var seen  = {};
+  
+    var allLinks = Array.from(document.querySelectorAll('a[href]'));
+    var postLinks = allLinks.filter(function(a) {
+      return a.href && (a.href.indexOf('feed/update/urn:li:') > -1 || a.href.indexOf('/posts/') > -1);
+    });
+  
+    postLinks.forEach(function(link){
+      var href = link.href || '';
+      var urn = '';
+      var um = href.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+      if (um) {
+        urn = 'urn:li:' + um[1] + ':' + um[2];
+      } else {
+        var pm = href.match(/activity-([0-9]{10,25})/);
+        if (pm) urn = 'urn:li:activity:' + pm[1];
+      }
+      if (!urn) return;
+      if (seen[urn]) return; seen[urn] = 1;
+  
+      var container = link, best = null;
+      for (var i = 0; i < 25; i++) {
+        container = container.parentElement;
+        if (!container || container === document.body) break;
+        var len = (container.innerText || '').trim().length;
+        if (len > 30 && len < 15000) { best = container; break; }
+      }
+      if (!best) return;
+  
+      var authorEl = best.querySelector('a[href*="/in/"]');
+      var author = authorEl ? (authorEl.innerText || '').trim().split('\\n')[0].substring(0, 100) : '';
+  
+      var postText = '';
+      var textCandidates = Array.from(best.querySelectorAll('[dir="ltr"], .feed-shared-update-v2__description, .update-components-text, .search-result__snippets, .break-words'));
+      textCandidates.forEach(function(d) {
+        var t = (d.innerText||'').trim();
+        if (t.length > postText.length) postText = t;
       });
-    } catch (e) { }
+      if (postText.length < 10) postText = (best.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 3000);
+  
+      function parseEng(str) {
+        if (!str) return null;
+        var s = str.toUpperCase().replace(/,/g, '');
+        var m = s.match(/[0-9.]+/);
+        if (!m) return null;
+        var n = parseFloat(m[0]);
+        if (s.indexOf('K') > -1) n *= 1000;
+        if (s.indexOf('M') > -1) n *= 1000000;
+        return Math.floor(n);
+      }
+
+      var likes = null;
+      Array.from(best.querySelectorAll('[aria-label]')).forEach(function(el){
+        if (likes !== null) return;
+        var l = el.getAttribute('aria-label') || '';
+        if (/[0-9]/.test(l) && /(reaction|like)/i.test(l)) {
+          likes = parseEng(l);
+        }
+      });
+      if (likes === null) {
+        var bm = (best.innerText || '').match(/([0-9.,]+[KkMm]?)\s*(reactions?|likes?)/i);
+        if (bm) likes = parseEng(bm[1]);
+      }
+  
+      var comments = null;
+      Array.from(best.querySelectorAll('[aria-label]')).forEach(function(el){
+        if (comments !== null) return;
+        var l = el.getAttribute('aria-label') || '';
+        if (/[0-9]/.test(l) && /comment/i.test(l)) {
+          comments = parseEng(l);
+        }
+      });
+      if (comments === null) {
+        var cm = (best.innerText || '').match(/([0-9.,]+[KkMm]?)\s*comment/i);
+        if (cm) comments = parseEng(cm[1]);
+      }
+
+      posts.push({ urn: urn, url: href,
+        text: postText.substring(0, 3000), author: author,
+        likes: likes, comments: comments });
+    });
+
+    
+    var nextBtn = document.querySelector('.artdeco-pagination__button--next, button[aria-label="Next"]');
+    if (nextBtn && !nextBtn.disabled) {
+      var rect = nextBtn.getBoundingClientRect();
+      if (rect.top >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) + 500) {
+        try { nextBtn.click(); } catch(e){}
+      } else {
+        window.scrollBy(0, 1000);
+      }
+    } else {
+      window.scrollBy(0, 800);
+    }
+  
+
+    return JSON.stringify({ posts: posts, total: posts.length, linkCount: postLinks.length });
+  })()`;
+
+// ── EVAL LOOP ─────────────────────────────────────────────────────────────
+async function evaluatePageState() {
+  if (!cdp.attached || !cdp.tabId) return 0;
+  try {
+    const r = await chrome.debugger.sendCommand({ tabId: cdp.tabId }, 'Runtime.evaluate',
+      { expression: EVAL_SCRIPT, returnByValue: true, timeout: 12000 });
+    if (!r?.result?.value) return 0;
+    const parsed = JSON.parse(r.result.value);
+    // Always log so we can debug
+    console.log(`[EVAL] links=${parsed.linkCount} posts=${parsed.total} store=${cdp.store.size}`);
+    let added = 0;
+    for (const p of (parsed.posts || [])) {
+      if (!p.urn) continue;
+      if (cdp.store.has(p.urn)) {
+        const ex = cdp.store.get(p.urn);
+        let enriched = false;
+        if (!ex.postText && p.text)                              { ex.postText = p.text; ex.preview = p.text; enriched = true; }
+        if ((!ex.author || ex.author === 'Unknown') & p.author) { ex.author = p.author; enriched = true; }
+        if (ex.likes === null && p.likes !== null)               { ex.likes = p.likes; enriched = true; }
+        // Push to batch if enriched OR if it's a network-only post not yet pushed
+        if ((enriched || ex._networkOnly) && !ex._flushed) {
+          delete ex._networkOnly;
+          ex._flushed = true; // prevent duplicate push
+          cdp.batchPending.push({ ...ex }); added++;
+        }
+        continue;
+      }
+      const post = { canonicalUrn: p.urn, url: p.url, postText: p.text || '', preview: p.text || '',
+        author: p.author || 'Unknown', likes: p.likes, comments: p.comments,
+        confidence: p.text ? 0.9 : 0.5, source: 'cdp_dom' };
+      cdp.store.set(p.urn, post);
+      post._flushed = true; cdp.batchPending.push(post);
+      added++;
+    }
+    if (added > 0) {
+      broadcast('EXTENSION_LIVE_STATUS', { text: `📦 ${cdp.store.size} found | 💾 ${cdp.totalSaved} saved` });
+      await flushBatch();
+    }
+    return added;
+  } catch (e) { console.error('[EVAL] error:', e.message); return 0; }
+}
+
+function startEvalLoop() {
+  stopEvalLoop();
+  evaluatePageState();
+  cdp.evalTimer = setInterval(() => { if (!cdp.attached) { stopEvalLoop(); return; } evaluatePageState(); }, 4000);
+}
+function stopEvalLoop() { if (cdp.evalTimer) { clearInterval(cdp.evalTimer); cdp.evalTimer = null; } }
+
+async function finalFlush() {
+  stopEvalLoop();
+  await sleep(1500);
+  await evaluatePageState();
+  await flushBatch();
+  
+  // CYCLING LOGIC
+  cdp.keywordIndex++; cdp.keywordSavedCount = 0;
+  if (cdp.allKeywords && cdp.keywordIndex < cdp.allKeywords.length) {
+    cdp.keyword = cdp.allKeywords[cdp.keywordIndex];
+    broadcast('EXTENSION_LIVE_STATUS', { text: `🔄 Switching to keyword: "${cdp.keyword}"` });
+    console.log('[Worker] Cycling to next keyword:', cdp.keyword);
+    // Short wait before next cycle
+    await sleep(6000);
+    // Run next cycle without resetting tab or store
+    launchEngine().catch(e => console.error('[Worker] launchEngine cycle error:', e));
     return;
   }
+  
+  // Done with all keywords or cycleMode off
+  broadcast('SCRAPER_COMPLETE', { totalSaved: cdp.totalSaved });
+  broadcast('EXTENSION_LIVE_STATUS', { text: `🎉 Done! ${cdp.totalSaved} posts saved.` });
+  await safeDetach();
+  await chrome.storage.session.clear();
+  cdp.lastRunHash = 'DONE';
+  cdp.running = false;
+  cdp.keywordIndex = 0;
+}
 
-  if (message.action === 'EXECUTE_COMMENT_PLAN') {
-    if (sendResponse) sendResponse({ ok: true, accepted: true });
-    (async () => {
-      const s = await loadState();
-      const tabId = sender.tab?.id || s.activeTabId;
-      if (!tabId) {
-        await handleTerminalJobResult({
-          action: 'JOB_FAILED',
-          reason: 'NO_ACTIVE_TAB_FOR_COMMENT_EXECUTION',
-          commentsPostedCount: 0,
-          assignedCommentsCount: message.assignedCommentsCount || 0,
-          searchOnlyMode: false,
-          postsExtracted: message.postsExtracted || 0,
-          keyword: message.keyword,
-          commentCycleNumber: message.commentCycleNumber || 1,
-          commentScrollPassesUsed: message.commentScrollPassesUsed || 0,
-          commentsAttempted: 0,
-          commentsFailed: message.assignedCommentsCount || 0
-        }, null);
-        return;
-      }
-
-      const result = await runCommentExecutionPlan(tabId, message);
-      console.log('[Worker] Direct comment execution summary:', JSON.stringify(result));
-
-      await handleTerminalJobResult({
-        action: result.blocked
-          ? 'JOB_COMPLETED'
-          : (result.assignedCommentsCount > 0 && result.posted < result.assignedCommentsCount ? 'JOB_FAILED' : 'JOB_COMPLETED'),
-        reason: result.blocked
-          ? undefined
-          : (result.posted === 0 ? 'NO_COMMENTS_POSTED' : (result.posted < result.assignedCommentsCount ? 'COMMENT_CYCLE_INCOMPLETE' : undefined)),
-        commentsPostedCount: result.posted,
-        assignedCommentsCount: result.assignedCommentsCount,
-        searchOnlyMode: false,
-        linkedinBlocked: result.blocked,
-        postsExtracted: result.postsExtracted,
-        keyword: result.keyword,
-        commentCycleNumber: result.commentCycleNumber,
-        commentScrollPassesUsed: result.commentScrollPassesUsed,
-        commentsAttempted: result.commentsAttempted,
-        commentsFailed: result.commentsFailed
-      }, tabId);
-    })().catch(async (e) => {
-      console.error('[Worker] EXECUTE_COMMENT_PLAN failed:', e.message);
-      await handleTerminalJobResult({
-        action: 'JOB_FAILED',
-        reason: 'COMMENT_EXECUTION_CRASHED',
-        commentsPostedCount: 0,
-        assignedCommentsCount: message.assignedCommentsCount || 0,
-        searchOnlyMode: false,
-        postsExtracted: message.postsExtracted || 0,
-        keyword: message.keyword,
-        commentCycleNumber: message.commentCycleNumber || 1,
-        commentScrollPassesUsed: message.commentScrollPassesUsed || 0,
-        commentsAttempted: 0,
-        commentsFailed: message.assignedCommentsCount || 0
-      }, sender.tab?.id || null);
-    });
-    return true;
-  }
-
-  if (message.action === 'COMMENT_POSTED') {
-    loadState().then(async s => {
-      const newDaily = (s.dailyCommentsMade || 0) + 1;
-      const newHourly = (s.hourlyCommentsMade || 0) + 1;
-      await saveState({ dailyCommentsMade: newDaily, hourlyCommentsMade: newHourly });
-      console.log(`💬 [Worker] Comment posted. Daily: ${newDaily}/15 | Hourly: ${newHourly}/12`);
-      showPremiumToast('Comment Posted', `Comment #${newDaily}/15 today (${newHourly}/12 this hour)!`, false);
-      const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
-      if (config.dashboardUrl && config.userId) {
-        const deviceId = await getExtensionFingerprint();
-        fetch(`${config.dashboardUrl}/api/extension/action`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-extension-token': config.userId, 'x-device-id': deviceId },
-          body: JSON.stringify({ action: 'COMMENT', postUrl: message.url || 'LinkedIn Post', comment: 'Commented successfully.' })
-        }).catch(e => console.error("❌ [Worker] Action log failed:", e));
-      }
-      if (sendResponse) sendResponse({ ok: true });
-    });
-    return true;
-  }
-
-  if (message.action === 'SNIPER_QUEUE') {
-    if (sendResponse) sendResponse({ ok: true, accepted: true });
-    const { urls, keyword, dashboardUrl, userId, linkedInProfileId, settings } = message;
-    console.log(`[Worker] 💾 SNIPER_QUEUE stored: ${(urls||[]).length} URLs for "${keyword}" (will launch after main tab closes)`);
-    // Store in chrome.storage — do NOT launch now. finishCycle() will pick this up
-    // AFTER the main scroll tab is closed, preventing renderer competition and freezes.
-    chrome.storage.local.set({
-      pendingSniperQueue: { urls, keyword, dashboardUrl, userId, linkedInProfileId, settings }
-    });
-    return true;
-  }
-
-  if (message.action === 'IDENTITY_DETECTED') {
-    chrome.storage.local.set({ linkedInProfileId: message.linkedInProfileId });
-    if (sendResponse) sendResponse({ ok: true });
-    return true;
-  }
-
-  if (message.action === 'SYNC_RESULTS') {
-    const { posts, keyword, dashboardUrl, userId, linkedInProfileId, debugInfo } = message;
-    
-    // Dedupe per keyword run so one keyword cannot suppress another.
-    if (!self.__globalSyncedUrlsByKeyword) self.__globalSyncedUrlsByKeyword = new Map();
-    const keywordKey = String(keyword || '__global__');
-    if (!self.__globalSyncedUrlsByKeyword.has(keywordKey)) {
-      self.__globalSyncedUrlsByKeyword.set(keywordKey, new Set());
+// ── NETWORK INTERCEPTION ──────────────────────────────────────────────────
+chrome.debugger.onEvent.addListener(async (src, method, params) => {
+  if (src.tabId !== cdp.tabId || !cdp.running) return;
+  if (method === 'Network.responseReceived') {
+    const url = params?.response?.url || '';
+    if (url.includes('linkedin.com') & !url.includes('.js') & !url.includes('.css')
+        & !url.includes('.png') & !url.includes('.woff') & !url.includes('.ico')) {
+      cdp._lastApiReqs.add(params.requestId);
     }
-    const keywordSeen = self.__globalSyncedUrlsByKeyword.get(keywordKey);
-    const uniquePosts = posts.filter(p => {
-       if (!p.url) return false;
-       const clean = p.url.split('?')[0];
-       if (keywordSeen.has(clean)) return false;
-       keywordSeen.add(clean);
-       return true;
-    });
+  }
+  if (method === 'Network.loadingFinished' & cdp._lastApiReqs.has(params.requestId)) {
+    cdp._lastApiReqs.delete(params.requestId);
+    try {
+      const r = await chrome.debugger.sendCommand({ tabId: cdp.tabId }, 'Network.getResponseBody', { requestId: params.requestId });
+      const body = r.base64Encoded ? atob(r.body) : (r.body || '');
+      if (body.length > 100) ingestNetworkBody(body);
+    } catch (_) {}
+  }
+});
 
-    console.log(`📤 [Worker] Relaying ${uniquePosts.length} unique posts (filtered from ${posts.length}) for "${keyword}"...`);
-    
-    // Empty batch prevention
-    if (uniquePosts.length === 0) {
-        console.warn(`[Worker] SYNC_RESULTS received 0 unique posts. Skipping relay.`);
-        if (sendResponse) sendResponse({ ok: true, savedCount: 0 });
-        return true;
+function ingestNetworkBody(body) {
+  try {
+    let json = JSON.parse(body);
+    let postMap = {};
+
+    function parseEng(str) {
+      if (!str) return null;
+      var s = String(str).toUpperCase().replace(/,/g, '');
+      var m = s.match(/[0-9.]+/);
+      if (!m) return null;
+      var n = parseFloat(m[0]);
+      if (s.indexOf('K') > -1) n *= 1000;
+      if (s.indexOf('M') > -1) n *= 1000000;
+      return Math.floor(n);
     }
 
-    (async () => {
-      let savedCount = 0;
-      let success = false;
-      let lastError = null;
-      try {
-        const deviceId = await getExtensionFingerprint();
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          try {
-            console.log(`[Worker] Sync attempt ${attempt}/3...`);
-            const response = await fetch(`${dashboardUrl}/api/extension/results`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-extension-token': userId, 'x-device-id': deviceId },
-              body: JSON.stringify({ keyword, posts: uniquePosts, linkedInProfileId, debugInfo })
-            });
-            
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}: ${await response.text().catch(()=>'')}`);
-            }
-            
-            const result = await response.json().catch(() => ({}));
-            savedCount = result.savedCount || 0;
-            console.log(`✅ [Worker] Database sync successful. ${result.savedCount || 0} NEW + ${result.updatedCount || 0} UPDATED = ${posts.length} total relayed.`);
-            if (result.errors && result.errors.length > 0) {
-                console.error(`❌ [Worker] API reported ${result.errors.length} Prisma errors:`, result.errors);
-            }
-            success = true;
-            break;
-          } catch (e) {
-            lastError = e;
-            console.error(`⚠️ [Worker] Sync attempt ${attempt} failed:`, e.message);
-            if (attempt < 3) await sleep(2000 * attempt);
-          }
+    function extractPostData(obj) {
+      if (!obj || typeof obj !== 'object') return;
+
+      // Check if this object contains a URN
+      let rawUrn = obj.entityUrn || obj.updateUrn || obj.urn || '';
+      let um = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+      
+      if (um) {
+        let urn = 'urn:li:' + um[1] + ':' + um[2];
+        if (!postMap[urn]) {
+          postMap[urn] = { urn: urn, url: 'https://www.linkedin.com/feed/update/' + urn, text: '', author: '', likes: null, comments: null };
         }
         
-        if (!success) {
-          console.error("❌ [Worker] CRITICAL SYNC FAILURE. Data could not be saved to dashboard:", lastError);
+        let p = postMap[urn];
+
+        // Text
+        let txt = obj.commentary?.text?.text || obj.commentary?.text || obj.text || obj.summary || obj.description || '';
+        if (typeof txt === 'string' && txt.length > p.text.length) p.text = txt.substring(0, 5000);
+
+        // Author
+        let auth = obj.actor?.name?.text || obj.actor?.nameV2?.text || obj.actor?.title?.text || obj.actor?.fullName || obj.author?.name || '';
+        if (typeof auth === 'string' && auth.length > p.author.length) p.author = auth.substring(0, 100);
+
+        // Engagement
+        let soc = obj.socialDetail || obj.socialActivityCounts || obj.totalSocialActivityCounts || obj.socialProofText || {};
+        if (typeof soc === 'string') {
+           // Maybe a string like "1,200 Likes"
+           let l = soc.match(/([0-9.,]+[KkMm]?)\s*(reaction|like)/i);
+           if (l && p.likes === null) p.likes = parseEng(l[1]);
+           let c = soc.match(/([0-9.,]+[KkMm]?)\s*comment/i);
+           if (c && p.comments === null) p.comments = parseEng(c[1]);
+        } else {
+           if (soc.numLikes !== undefined && p.likes === null) p.likes = parseEng(soc.numLikes);
+           if (soc.numComments !== undefined && p.comments === null) p.comments = parseEng(soc.numComments);
+           
+           if (soc.totalSocialActivityCounts) {
+             let t = soc.totalSocialActivityCounts;
+             if (t.numLikes !== undefined && p.likes === null) p.likes = parseEng(t.numLikes);
+             if (t.numComments !== undefined && p.comments === null) p.comments = parseEng(t.numComments);
+           }
         }
-      } catch (err) {
-        console.error("❌ [Worker] Error preparing sync:", err);
+        
+        // Sometimes likes are directly on the object
+        if (obj.numLikes !== undefined && p.likes === null) p.likes = parseEng(obj.numLikes);
+        if (obj.numComments !== undefined && p.comments === null) p.comments = parseEng(obj.numComments);
       }
-      
-      if (sendResponse) sendResponse({ ok: success, savedCount });
-    })();
-    return true;
+
+      // Recurse into children
+      if (Array.isArray(obj)) {
+        for (let i=0; i<obj.length; i++) extractPostData(obj[i]);
+      } else {
+        let keys = Object.keys(obj);
+        for (let i=0; i<keys.length; i++) {
+          let k = keys[i];
+          if (k !== 'paging' && k !== 'metadata' && typeof obj[k] === 'object') {
+            extractPostData(obj[k]);
+          }
+        }
+      }
+    }
+
+    extractPostData(json);
+
+    // Filter and add to store
+    let enriched = 0;
+    for (let urn in postMap) {
+      let p = postMap[urn];
+      // Only add if it has some text or engagement
+      if (p.text.length > 10 || p.likes !== null || p.comments !== null) {
+        let existing = cdp.store.get(urn);
+        if (existing) {
+          if (p.text && p.text.length > (existing.postText || '').length) {
+            existing.postText = p.text;
+            existing.preview = p.text;
+          }
+          if (p.likes !== null) existing.likes = p.likes;
+          if (p.comments !== null) existing.comments = p.comments;
+          if (p.author && p.author.length > 2) existing.author = p.author;
+        } else {
+          let np = {
+            canonicalUrn: urn, url: p.url, postText: p.text, preview: p.text,
+            author: p.author || 'Unknown', likes: p.likes, comments: p.comments,
+            confidence: p.text ? 0.95 : 0.4, source: 'network_recursive'
+          };
+          cdp.store.set(urn, np);
+          cdp.batchPending.push(np);
+          enriched++;
+        }
+      }
+    }
+
+    if (enriched > 0) {
+      console.log('[NETWORK] Recursive parser added', enriched, 'posts -> flushing');
+      flushBatch().catch(console.error);
+    }
+  } catch (e) {
+    console.error('[NETWORK] Parse error:', e);
   }
+}
 
-  if (message.action === 'PASS_DONE') {
-    const { passIndex, posts, keyword, linkedInProfileId, filterParam, totalSaved } = message;
-    const realCount = (posts || []).filter(p => p.url && !p.url.includes('synthetic:')).length;
-    const highConf = (posts || []).filter(p => (p.likes||0) + (p.postComments||0) > 0).length;
-    console.log(`📄 [Worker] PASS_DONE pass=${passIndex} | ${posts?.length || 0} total (${realCount} real, ${highConf} high-conf) | filterParam=${filterParam || 'none'} | saved=${totalSaved || 0}`);
+async function flushBatch() {
+  if (!cdp.batchPending.length) return 0;
+  // Filter posts with < 10 total engagement before sending
+  const MIN_ENGAGEMENT = 0;
+  cdp.batchPending = cdp.batchPending.filter(p => {
+    const total = (p.likes || 0) + (p.comments || 0);
+    return total >= MIN_ENGAGEMENT;
+  });
 
-    loadState().then(async s => {
-      if (!s.isJobRunning) { console.warn('[Worker] PASS_DONE received but job not running. Ignoring.'); return; }
-      const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
-      const settingsData = await chrome.storage.local.get(['jobSettings', 'jobComments']);
-      const jobSettings = settingsData.jobSettings || {};
-      const jobComments = settingsData.jobComments || [];
-
-      console.log(`[Worker] PASS_DONE: Multi-pass disabled. Treating pass as final.`);
-      await finishCycle(sender.tab?.id ?? s.activeTabId, true, jobSettings.searchOnlyMode);
-    });
-    if (sendResponse) sendResponse({ ok: true });
-    return true;
+  // Sort by likes descending so highest-reach posts reach the dashboard first
+  cdp.batchPending.sort((a, b) => (b.likes ?? -1) - (a.likes ?? -1));
+  const CHUNK = 25; let synced = 0;
+  while (cdp.batchPending.length > 0) {
+    const chunk = cdp.batchPending.splice(0, CHUNK);
+    try {
+      const resp = await fetch(`${cdp.dashboardUrl}/api/extension/results`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-extension-token': cdp.userId },
+        body: JSON.stringify({ posts: chunk, keyword: cdp.keyword, source: 'nexora_v16' })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) { cdp.batchPending.unshift(...chunk); break; }
+      cdp.totalSaved += data.savedCount ?? chunk.length;
+      cdp.keywordSavedCount = (cdp.keywordSavedCount || 0) + (data.savedCount ?? chunk.length);
+      synced += data.savedCount ?? chunk.length;
+      console.log(`[Flush] ${data.savedCount}/${chunk.length} total=${cdp.totalSaved}`);
+    } catch (e) { cdp.batchPending.unshift(...chunk); break; }
   }
+  return synced;
+}
 
-  if (message.action === 'JOB_COMPLETED' || message.action === 'JOB_FAILED') {
-    handleTerminalJobResult(message, sender.tab?.id || null).catch(e => {
-      console.error('[Worker] Terminal result handling failed:', e.message);
-    });
-    return;
+async function syncBatch(posts, keyword) {
+  const resp = await fetch(`${cdp.dashboardUrl}/api/extension/results`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-extension-token': cdp.userId },
+    body: JSON.stringify({ posts, keyword, source: 'nexora_scraper' })
+  });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  return (await resp.json()).savedCount || posts.length;
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────
+async function safeDetach() {
+  if (!cdp.attached || !cdp.tabId) return;
+  try { await chrome.debugger.detach({ tabId: cdp.tabId }); } catch (_) {}
+  cdp.attached = false;
+}
+
+function waitForTabLoad(tabId, maxMs = 28000) {
+  return new Promise(resolve => {
+    const t = setTimeout(() => { chrome.tabs.onUpdated.removeListener(fn); resolve(); }, maxMs);
+    function fn(id, info) {
+      if (id !== tabId || info.status !== 'complete') return;
+      chrome.tabs.onUpdated.removeListener(fn); clearTimeout(t);
+      setTimeout(resolve, 4000);
+    }
+    chrome.tabs.onUpdated.addListener(fn);
+  });
+}
+
+async function fetchKeywordsArray(dashboardUrl, userId) {
+  const resp = await fetch(`${dashboardUrl}/api/extension/jobs`, { headers: { 'x-extension-token': userId } });
+  if (!resp.ok) throw new Error(`Jobs API ${resp.status}`);
+  const jobs = await resp.json();
+  if (!jobs.active) throw new Error(jobs.message || 'System inactive');
+
+  console.log('[Worker] Raw API response for keywords:', { searchOnly: jobs.settings?.searchOnlyMode, searchConfig: jobs.settings?.searchConfigJson, campaigns: jobs.keywords });
+
+  let allKw = [];
+  try {
+    if (jobs.settings?.searchConfigJson) {
+      const cfg = JSON.parse(jobs.settings.searchConfigJson);
+      if (Array.isArray(cfg)) {
+         const valid = cfg.flat().filter(k => typeof k === 'string' && k.trim());
+         allKw.push(...valid.map(k => k.trim()));
+      }
+    }
+  } catch(e) {}
+  
+  const searchOnly = jobs.settings?.searchOnlyMode !== false;
+  if (!searchOnly || allKw.length === 0) {
+    if (Array.isArray(jobs.keywords)) {
+      const campKw = jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean);
+      allKw.push(...campKw);
+    }
   }
-});
+  
+  if (allKw.length === 0) throw new Error('No keywords configured in dashboard.');
+  return [...new Set(allKw)];
+}
 
+function broadcast(action, data = {}) {
+  if (action === 'EXTENSION_LIVE_STATUS') {
+    chrome.action.setBadgeText({ text: cdp.totalSaved > 0 ? String(cdp.totalSaved) : '⚡' });
+    chrome.action.setBadgeBackgroundColor({ color: '#10b981' });
+  }
+  if (action === 'SCRAPER_COMPLETE') {
+    chrome.action.setBadgeText({ text: String(cdp.totalSaved) + '✓' });
+    chrome.action.setBadgeBackgroundColor({ color: '#3b82f6' });
+  }
+  chrome.runtime.sendMessage({ action, ...data }).catch(() => {});
+}
 
-// ── Alarm + Startup ──
-chrome.alarms.create('checkJobsAlarm', { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'checkJobsAlarm') checkJobs();
-});
-
-chrome.runtime.onInstalled.addListener(() => {
-  console.log("🚀 [Worker] v11 installed.");
-  saveState({ isJobRunning: false, activeTabId: null, cycleStartTime: 0, consecutiveFailures: 0 });
-  setTimeout(() => checkJobs(), 5000);
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  console.log("⚙️ [Worker] Restarting...");
-  setTimeout(() => checkJobs(), 5000);
-});
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+chrome.debugger.onDetach.addListener(src => { if (src.tabId === cdp.tabId) { cdp.attached = false; cdp.running = false; stopEvalLoop(); } });
+chrome.tabs.onRemoved.addListener(tabId => { if (tabId === cdp.tabId & cdp.attached) safeDetach(); });
