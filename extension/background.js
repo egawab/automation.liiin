@@ -430,8 +430,9 @@ chrome.debugger.onEvent.addListener(async (src, method, params) => {
   if (src.tabId !== cdp.tabId || !cdp.running) return;
   if (method === 'Network.responseReceived') {
     const url = params?.response?.url || '';
-    if (url.includes('linkedin.com') & !url.includes('.js') & !url.includes('.css')
-        & !url.includes('.png') & !url.includes('.woff') & !url.includes('.ico')) {
+    if (url.includes('linkedin.com') && !url.includes('.js') && !url.includes('.css')
+        && !url.includes('.png') && !url.includes('.woff') && !url.includes('.ico')
+        && !url.includes('.svg') && !url.includes('.gif') && !url.includes('.jpg')) {
       cdp._lastApiReqs.add(params.requestId);
     }
   }
@@ -446,6 +447,9 @@ chrome.debugger.onEvent.addListener(async (src, method, params) => {
 });
 
 function ingestNetworkBody(body) {
+  // Guard: skip HTML, SVG, and other non-JSON responses
+  const firstChar = body.trimStart()[0];
+  if (firstChar !== '{' && firstChar !== '[') return;
   try {
     let json = JSON.parse(body);
     let postMap = {};
@@ -464,8 +468,8 @@ function ingestNetworkBody(body) {
     function extractPostData(obj) {
       if (!obj || typeof obj !== 'object') return;
 
-      // Check if this object contains a URN
-      let rawUrn = obj.entityUrn || obj.updateUrn || obj.urn || '';
+      // Check if this object contains a URN — coerce to String to avoid TypeError
+      let rawUrn = String(obj.entityUrn || obj.updateUrn || obj.urn || '');
       let um = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
       
       if (um) {
