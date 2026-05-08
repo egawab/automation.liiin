@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 
-// Enable CORS for the Chrome extension
 function setCorsHeaders(res: NextResponse) {
   res.headers.set('Access-Control-Allow-Origin', '*');
   res.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -9,22 +8,30 @@ function setCorsHeaders(res: NextResponse) {
   return res;
 }
 
-// ── String Sanitization for PostgreSQL ──
-// LinkedIn DOM text often contains null bytes (\x00), broken hex/unicode escape
-// sequences, and other characters that PostgreSQL text columns reject outright.
-// This function strips ALL of them before data reaches Prisma.
-function sanitizeString(input: unknown): string {
+function sanitize(input: unknown, maxLen = 5000): string {
   if (input === null || input === undefined) return '';
   let s = String(input);
-  // 1. Remove null bytes (the #1 cause of "unexpected end of hex escape")
   s = s.replace(/\x00/g, '');
-  // 2. Remove all other C0 control characters except \t \n \r
   s = s.replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-  // 3. Strip broken backslash-x hex escapes like \x, \x0, \xG that PostgreSQL chokes on
   s = s.replace(/\\x[0-9a-fA-F]?(?![0-9a-fA-F])/g, '');
-  // 4. Remove lone backslashes that could start incomplete escape sequences
   s = s.replace(/\\(?![\\nrtbfux"'/])/g, '');
-  return s.trim();
+  return s.trim().substring(0, maxLen);
+}
+
+function normalizeUrn(raw: string): string | null {
+  if (!raw) return null;
+  const m = raw.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
+  if (m) return `urn:li:${m[1]}:${m[2]}`;
+  return null;
+}
+
+function normalizeUrl(u: string): string {
+  if (!u) return '';
+  const m1 = u.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
+  if (m1) return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
+  const m2 = u.match(/activity-(\d{10,25})/i);
+  if (m2) return `https://www.linkedin.com/feed/update/urn:li:activity:${m2[1]}`;
+  return u.split('?')[0].replace(/\/$/, '');
 }
 
 export async function OPTIONS() {
@@ -35,182 +42,96 @@ export async function POST(req: Request) {
   try {
     const userId = req.headers.get('x-extension-token');
     if (!userId) {
-      return setCorsHeaders(NextResponse.json({ error: 'Unauthorized: Missing User ID' }, { status: 401 }));
+      return setCorsHeaders(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
     }
 
     const body = await req.json();
-    const { keyword, posts, linkedInProfileId, debugInfo } = body;
-
-    // ── LinkedIn Identity Auto-Binding ──
-    if (linkedInProfileId && linkedInProfileId !== 'Unknown') {
-      try {
-        const user = await prisma.user.findUnique({ where: { id: userId }, select: { linkedInProfileId: true } });
-        if (user && !user.linkedInProfileId) {
-          // First time: bind this LinkedIn identity to this account
-          const existingBinding = await prisma.user.findUnique({ where: { linkedInProfileId } });
-          if (existingBinding && existingBinding.id !== userId) {
-            // Another account already uses this LinkedIn profile
-            return setCorsHeaders(NextResponse.json({
-              error: 'DUPLICATE_IDENTITY',
-              message: 'This LinkedIn profile is already linked to another account.'
-            }, { status: 403 }));
-          }
-          await prisma.user.update({ where: { id: userId }, data: { linkedInProfileId } });
-          console.log(`[Identity] 🔗 Bound LinkedIn "${linkedInProfileId}" to user ${userId}`);
-        } else if (user && user.linkedInProfileId && user.linkedInProfileId !== linkedInProfileId) {
-          // Mismatch: this user is bound to a different LinkedIn profile
-          return setCorsHeaders(NextResponse.json({
-            error: 'IDENTITY_MISMATCH',
-            message: 'Your account is bound to a different LinkedIn profile. Contact support.'
-          }, { status: 403 }));
-        }
-      } catch(e) { console.error('[Identity] Binding error:', e); }
-    }
-
-    if (debugInfo) {
-      console.log(`[Ext-Diagnostic] User ${userId} reported empty page for ${keyword}. Snippet:`, debugInfo);
-    }
+    const { keyword, posts } = body;
 
     if (!posts || !Array.isArray(posts)) {
       return setCorsHeaders(NextResponse.json({ error: 'Invalid payload: posts array required' }, { status: 400 }));
     }
 
-    // Sanitize keyword once
-    const safeKeyword = sanitizeString(keyword || 'auto').substring(0, 50);
+    const safeKeyword = sanitize(keyword || 'auto', 50);
+    const ENGAGEMENT_MAX = BigInt(10_000_000);
 
-    // 1. Log the action for dashboard metrics (First, to ensure we track the attempt)
+    // Log the action
     try {
-        await prisma.log.create({
-          data: {
-            userId,
-            action: 'SEARCH',
-            postUrl: posts.length === 0 && debugInfo ? `ext-search:DEBUG_EMPTY_PAGE` : `ext-search:CONTENT`,
-            comment: sanitizeString(debugInfo || (posts.length > 0 ? `KEYWORD: ${keyword} | FOUND: ${posts.length}` : `KEYWORD: ${keyword}`))
-          }
-        });
-    } catch(e) { console.error("Log creation failed:", e); }
+      await prisma.log.create({
+        data: {
+          userId,
+          action: 'SEARCH',
+          postUrl: `ext-search:${safeKeyword}`,
+          comment: sanitize(`KEYWORD: ${keyword} | FOUND: ${posts.length}`, 500),
+        }
+      });
+    } catch (_) {}
 
     let savedCount = 0;
-    let updatedCount = 0;
-    let errors: string[] = [];
-    
-    // Process posts in parallel for maximum performance
-    if (posts && posts.length > 0) {
-        const results = await Promise.allSettled(posts.map(async (post) => {
-            // Quality Gate: Relaxed to allow all real extracted posts through.
-            // Sanity cap: any value above 10M is an internal LinkedIn ID/counter, not a real count
-            const ENGAGEMENT_MAX = BigInt(10_000_000);
-            const rawLikes    = post.likes    != null ? BigInt(Math.round(Number(post.likes)))    : null;
-            const rawComments = post.comments != null ? BigInt(Math.round(Number(post.comments))) : null;
-            const postLikes    = rawLikes    != null && rawLikes    <= ENGAGEMENT_MAX ? rawLikes    : null;
-            const postComments = rawComments != null && rawComments <= ENGAGEMENT_MAX ? rawComments : null;
+    const errors: string[] = [];
 
-        // ── SANITIZE all string fields before they touch Prisma ──
-            const rawUrl    = sanitizeString(post.url).substring(0, 2000);
-            const safeAuthor  = sanitizeString(post.author || 'Unknown').substring(0, 100);
-            const safePreview = sanitizeString(post.postText || post.preview || '').substring(0, 5000);
+    const results = await Promise.allSettled(posts.map(async (post) => {
+      // Resolve canonicalUrn — required for dedup (skip posts without one)
+      const urn = normalizeUrn(post.canonicalUrn || post.urn || post.url || '');
+      if (!urn) return 'skipped_no_urn';
 
-            // Normalize URL to canonical form — DOM /posts/ slug and network
-            // /feed/update/urn:li:activity:ID must resolve to the same DB row.
-            function normalizeUrl(u: string): string {
-              if (!u) return u;
-              const m1 = u.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
-              if (m1) return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
-              const m2 = u.match(/ugcPost-(\d{10,25})/i);
-              if (m2) return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${m2[1]}`;
-              const m3 = u.match(/activity-(\d{10,25})/i);
-              if (m3) return `https://www.linkedin.com/feed/update/urn:li:activity:${m3[1]}`;
-              return u.split('?')[0].replace(/\/$/, '');
-            }
-            const safeUrl = normalizeUrl(rawUrl) || rawUrl;
+      const rawLikes    = post.likes    != null ? BigInt(Math.round(Math.abs(Number(post.likes))))    : null;
+      const rawComments = post.comments != null ? BigInt(Math.round(Math.abs(Number(post.comments)))) : null;
+      const postLikes    = rawLikes    != null && rawLikes    <= ENGAGEMENT_MAX ? rawLikes    : null;
+      const postComments = rawComments != null && rawComments <= ENGAGEMENT_MAX ? rawComments : null;
 
-            // Skip posts with no usable URL after sanitization
-            if (!safeUrl) return 'skipped';
+      const safeUrl     = normalizeUrl(sanitize(post.url || post.canonicalUrn || '', 2000));
+      const safeAuthor  = sanitize(post.author || 'Unknown', 100);
+      const safePreview = sanitize(post.postText || post.preview || '', 5000);
 
-            // Atomic upsert — avoids the race condition where two posts with the
-            // same URL arrive in the same batch (e.g. a DOM blank + network upgrade)
-            // and both call findFirst → null → both try to create → only one survives.
-            // For the update path we need the existing record to decide which text is longer.
-            // Use upsert with a conditional update expression via raw Prisma upsert.
-            // Strategy: always overwrite with incoming data, but the API-level logic ensures
-            // we only call upsert with the best available data (engine already did enrichment).
-            await prisma.savedPost.upsert({
-              where: { userId_postUrl: { userId, postUrl: safeUrl } },
-              create: {
-                userId,
-                postUrl:     safeUrl,
-                postAuthor:  safeAuthor,
-                postPreview: safePreview,
-                likes:       postLikes,
-                comments:    postComments,
-                keyword:     safeKeyword,
-                visited:     false,
-              },
-              update: {
-                // Engagement: always take incoming if non-null (engine guarantees best value)
-                likes:       postLikes    != null ? postLikes    : undefined,
-                comments:    postComments != null ? postComments : undefined,
-                // Text: always update if incoming is non-empty (engine sends longest available)
-                postPreview: safePreview.length > 20 ? safePreview : undefined,
-                // Author: update whenever incoming is a real name (not Unknown or empty)
-                postAuthor:  (safeAuthor && safeAuthor !== 'Unknown' && safeAuthor.length > 1)
-                               ? safeAuthor
-                               : undefined,
-                savedAt:     new Date(),
-              },
-            });
-            return 'saved';
-        }));
+      await prisma.savedPost.upsert({
+        where: { userId_canonicalUrn: { userId, canonicalUrn: urn } },
+        create: {
+          userId,
+          canonicalUrn: urn,
+          postUrl:      safeUrl,
+          postAuthor:   safeAuthor,
+          postPreview:  safePreview,
+          likes:        postLikes,
+          comments:     postComments,
+          keyword:      safeKeyword,
+          visited:      false,
+        },
+        update: {
+          postUrl:     safeUrl.length > 0 ? safeUrl : undefined,
+          likes:       postLikes    != null ? postLikes    : undefined,
+          comments:    postComments != null ? postComments : undefined,
+          postPreview: safePreview.length > 20 ? safePreview : undefined,
+          postAuthor:  (safeAuthor && safeAuthor !== 'Unknown') ? safeAuthor : undefined,
+          savedAt:     new Date(),
+        },
+      });
+      return 'saved';
+    }));
 
-        // Analyze results
-        const rejected = results.filter(r => r.status === 'rejected');
-        if (rejected.length > 0) {
-            rejected.forEach((r: any) => {
-                const errStr = r.reason?.message || String(r.reason);
-                console.error(`[API] Prisma Error:`, errStr);
-                errors.push(errStr);
-            });
-
-            // STRICT REQUIREMENT: If ALL posts failed to save, the API MUST throw a 500 error
-            // so the extension knows it failed and doesn't log a "fake success".
-            if (rejected.length === posts.length) {
-                throw new Error(`CRITICAL PRISMA FAILURE: All ${posts.length} posts failed to save. First error: ${errors[0]}`);
-            }
-        }
-
-        // upsert always returns 'saved' (both creates and merges); 'updated' no longer emitted
-        savedCount = results.filter(r => r.status === 'fulfilled' && r.value === 'saved').length;
+    for (const r of results) {
+      if (r.status === 'rejected') {
+        errors.push(r.reason?.message || String(r.reason));
+        console.error('[API/results] Prisma error:', r.reason?.message);
+      } else if (r.value === 'saved') {
+        savedCount++;
+      }
     }
 
-    // Collect one sample post for client-side debugging
-    let samplePost: any = null;
-    try {
-      samplePost = await prisma.savedPost.findFirst({
-        where: { userId },
-        orderBy: { savedAt: 'desc' },
-        select: { postUrl: true, postAuthor: true, postPreview: true, likes: true, comments: true, keyword: true }
-      });
-      if (samplePost) {
-        samplePost = {
-          ...samplePost,
-          likes:    samplePost.likes    != null ? Number(samplePost.likes)    : null,
-          comments: samplePost.comments != null ? Number(samplePost.comments) : null,
-          preview_length: samplePost.postPreview?.length ?? 0,
-        };
-      }
-    } catch (e) { /* non-fatal */ }
+    if (errors.length > 0 && errors.length === posts.length) {
+      throw new Error(`All ${posts.length} posts failed. First: ${errors[0]}`);
+    }
 
-    return setCorsHeaders(NextResponse.json({ 
-      success: true, 
-      savedCount, 
-      updatedCount, 
-      errors,
-      message: `Processed ${posts.length} posts. ${savedCount} New, ${updatedCount} Refreshed.`,
-      samplePost, // ← debug: verify stored fields from extension console
+    return setCorsHeaders(NextResponse.json({
+      success: true,
+      savedCount,
+      skippedCount: results.filter(r => r.status === 'fulfilled' && r.value?.startsWith('skipped')).length,
+      errorCount: errors.length,
+      message: `Processed ${posts.length} posts. ${savedCount} saved.`,
     }, { status: 200 }));
 
   } catch (error: any) {
-    console.error('Extension Results API Error:', error);
+    console.error('[API/results] Error:', error);
     return setCorsHeaders(NextResponse.json({ error: error.message }, { status: 500 }));
   }
 }

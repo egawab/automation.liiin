@@ -1,60 +1,100 @@
-// dashboard-bridge.js – Nexora v17
-// يستخدم connect() بدلاً من sendMessage لضمان تصحية عامل الخدمة دائماً
+// dashboard-bridge.js v6 — Reconnect-safe port, supports START + STOP.
+// Injected as content_script on dashboard pages.
+(function () {
+  if (window.__NexoraBridgeV6) return;
+  window.__NexoraBridgeV6 = true;
 
-console.warn("[Nexora Bridge] Initialized.");
+  let _port = null;
 
-window.postMessage({ source: 'NEXORA_EXTENSION', action: 'EXTENSION_READY' }, '*');
-
-window.addEventListener('message', (event) => {
-  if (event.source !== window || !event.data || event.data.source !== 'NEXORA_DASHBOARD') return;
-
-  if (event.data.action === 'START_ENGINE') {
-    console.warn("[Nexora Bridge] START_ENGINE received. Connecting to worker...");
-
+  function extractAuth() {
     const dashboardUrl = window.location.origin;
     let userId = null;
     try {
       const match = document.cookie.match(/auth_token=([^;]+)/);
       if (match) {
-        const decoded = JSON.parse(atob(match[1].split('.')[1]));
-        userId = decoded.userId || null;
+        const payload = JSON.parse(atob(match[1].split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+        userId = payload.userId || null;
       }
-    } catch(e) {}
+    } catch (_) {}
+    return { dashboardUrl, userId };
+  }
 
+  function notifyDashboard(action, data = {}) {
+    window.postMessage({ source: 'NEXORA_EXTENSION', action, ...data }, '*');
+  }
+
+  function disconnect() {
+    if (_port) { try { _port.disconnect(); } catch (_) {} _port = null; }
+  }
+
+  function connect(onConnected) {
+    disconnect();
     try {
-      // connect() يضمن تصحية عامل الخدمة — أكثر موثوقية من sendMessage
-      const port = chrome.runtime.connect({ name: 'nexora_cmd' });
+      _port = chrome.runtime.connect({ name: 'nexora_cmd' });
 
-      port.onMessage.addListener((msg) => {
-        console.warn("[Nexora Bridge] Worker replied:", msg);
-        window.postMessage({
-          source: 'NEXORA_EXTENSION',
-          action: msg.ok ? 'ENGINE_STARTED_ACK' : 'ENGINE_ERROR',
-          keyword: msg.keyword,
-          error: msg.error
-        }, '*');
-        port.disconnect();
-      });
-
-      port.onDisconnect.addListener(() => {
-        if (chrome.runtime.lastError) {
-          console.error("[Nexora Bridge] Port error:", chrome.runtime.lastError.message);
-          window.postMessage({ source: 'NEXORA_EXTENSION', action: 'ENGINE_ERROR',
-            error: 'Extension disconnected' }, '*');
+      _port.onMessage.addListener((msg) => {
+        if (msg.type === 'ACK_START') {
+          notifyDashboard('ENGINE_STARTED_ACK', { keyword: msg.keyword });
+        } else if (msg.type === 'ACK_STOP') {
+          notifyDashboard('ENGINE_STOPPED_ACK');
+        } else if (msg.type === 'STATUS') {
+          notifyDashboard('ENGINE_STATUS', msg);
+        } else if (msg.type === 'ERROR') {
+          notifyDashboard('ENGINE_ERROR', { error: msg.error });
         }
       });
 
-      port.postMessage({ action: 'START', dashboardUrl, userId });
-      console.warn("[Nexora Bridge] Command sent via port.");
+      _port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        _port = null;
+        if (err) {
+          console.warn('[NexoraBridge] Port disconnected:', err.message);
+          if (err.message && err.message.includes('context invalidated')) {
+            notifyDashboard('ENGINE_ERROR', { error: 'Extension reloaded — please refresh this page.' });
+          } else {
+            notifyDashboard('ENGINE_DISCONNECTED');
+          }
+        }
+      });
 
-    } catch(e) {
-      console.error("[Nexora Bridge] connect() failed:", e.message);
-      if (e.message.includes('Extension context invalidated')) {
-        console.warn("[Nexora Bridge] Extension was updated. Reloading page to inject new script...");
-        window.location.reload();
-      } else {
-        window.postMessage({ source: 'NEXORA_EXTENSION', action: 'ENGINE_ERROR', error: e.message }, '*');
-      }
+      if (onConnected) onConnected(_port);
+    } catch (e) {
+      console.error('[NexoraBridge] connect() failed:', e.message);
+      notifyDashboard('ENGINE_ERROR', { error: e.message });
     }
   }
-});
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== window || !event.data || event.data.source !== 'NEXORA_DASHBOARD') return;
+    const { action } = event.data;
+
+    if (action === 'START_ENGINE') {
+      const auth = extractAuth();
+      if (!auth.userId) {
+        notifyDashboard('ENGINE_ERROR', { error: 'Not authenticated — open Dashboard and log in first.' });
+        return;
+      }
+      connect(port => {
+        port.postMessage({ action: 'START', dashboardUrl: auth.dashboardUrl, userId: auth.userId });
+      });
+    }
+
+    if (action === 'STOP_ENGINE') {
+      if (_port) {
+        _port.postMessage({ action: 'STOP' });
+      } else {
+        notifyDashboard('ENGINE_STOPPED_ACK');
+      }
+    }
+
+    if (action === 'GET_STATUS') {
+      if (_port) {
+        _port.postMessage({ action: 'GET_STATUS' });
+      }
+    }
+  });
+
+  // Signal readiness to the dashboard
+  notifyDashboard('EXTENSION_READY');
+  console.log('[NexoraBridge] v6 ready.');
+})();

@@ -1,671 +1,460 @@
-// Nexora v16 – URN-link extraction (works on all LinkedIn layouts)
-console.log('[Worker] Nexora v16');
+// Nexora background.js v6 — FSM Session Manager
+// Single command channel (port only). Alarm = keep-alive only.
+console.log('[BG] Nexora v6 loaded');
 
-const cdp = {
-  tabId: null, attached: false, keyword: '', allKeywords: [], keywordIndex: 0, cycleMode: false,
-  dashboardUrl: '', userId: '',
-  store: new Map(), batchPending: [], totalSaved: 0,
-  evalTimer: null, running: false,
-  _lastApiReqs: new Set()
+// ── Structured Logger ────────────────────────────────────────────────────
+const LOG = [];
+function log(level, mod, msg, data) {
+  const e = { ts: Date.now(), level, mod, msg, data };
+  LOG.push(e); if (LOG.length > 300) LOG.shift();
+  console[level === 'ERROR' ? 'error' : level === 'WARN' ? 'warn' : 'log'](`[${mod}] ${msg}`, data || '');
+}
+
+// ── Session State (FSM) ──────────────────────────────────────────────────
+// States: IDLE | INITIALIZING | ATTACHING | NAVIGATING | SCRAPING | FLUSHING | DONE
+const S = {
+  state: 'IDLE',
+  tabId: null,
+  attached: false,
+  dashboardUrl: '',
+  userId: '',
+  kwQueue: null,       // KeywordQueue instance
+  store: new Map(),    // URN → post record (persists across keywords)
+  batch: [],           // pending posts to flush
+  retryQueue: [],      // posts that failed API submission
+  totalSaved: 0,
+  evalTimer: null,
+  sessionId: null,
 };
 
-async function restoreSession() {
-  try {
-    const s = await chrome.storage.session.get(['cdpTabId','cdpKeyword','cdpDashUrl','cdpUserId']);
-    if (!s.cdpTabId) return;
-    try { await chrome.tabs.get(s.cdpTabId); } catch (_) { await chrome.storage.session.clear(); return; }
-    cdp.tabId = s.cdpTabId; cdp.keyword = s.cdpKeyword || '';
-    cdp.dashboardUrl = s.cdpDashUrl || ''; cdp.userId = s.cdpUserId || '';
-  } catch (_) {}
+function setState(next) {
+  log('INFO', 'FSM', `${S.state} → ${next}`);
+  S.state = next;
+  broadcastStatus();
 }
-restoreSession();
 
-// ── تشغيل تلقائي عبر منبه داخلي ──────────────────────────────────────────
-// يسأل الداشبورد كل 30 ثانية — لو systemActive=true يشغل الماكينة تلقائياً
-// هذا يتجاوز مشكلة تصحية عامل الخدمة في المانيفست الثالث بالكامل
-chrome.alarms.create('nexora_poll', { periodInMinutes: 0.5 });
+// ── Keyword Queue ────────────────────────────────────────────────────────
+class KeywordQueue {
+  constructor(kws) { this._q = [...kws]; this._done = []; this.current = null; }
+  advance() { if (this.current) this._done.push(this.current); this.current = this._q.shift() || null; return this.current; }
+  hasMore() { return this._q.length > 0; }
+  status() { return { current: this.current, remaining: this._q.length, done: this._done.length }; }
+}
 
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== 'nexora_poll') return;
-  if (cdp.running) return;
-  const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
-  if (!config.dashboardUrl || !config.userId) return;
-  try {
-    const resp = await fetch(`${config.dashboardUrl}/api/extension/jobs`, {
-      headers: { 'x-extension-token': config.userId }
-    });
-    if (!resp.ok) return;
-    const jobs = await resp.json();
-    if (!jobs.active) {
-      cdp.lastRunHash = null;
-      return;
-    }
-    if (jobs.active && !cdp.running) {
-      if (cdp.lastRunHash === 'DONE') return; // Already completed this configuration
-      console.log('[Worker] Auto-start: systemActive=true detected.');
-      cdp.dashboardUrl = config.dashboardUrl;
-      cdp.userId = config.userId;
-      await handleStartFast({ dashboardUrl: config.dashboardUrl, userId: config.userId });
-      launchEngine().catch(e => console.error('[Worker] launch error:', e.message));
-    }
-  } catch(e) { /* API unreachable – skip */ }
+// ── Keep-Alive Alarm (heartbeat only) ────────────────────────────────────
+chrome.alarms.create('nexora_heartbeat', { periodInMinutes: 0.4 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== 'nexora_heartbeat') return;
+  // Keep service worker alive only. Never start/restart sessions.
+  if (S.state !== 'IDLE' && S.state !== 'DONE') {
+    log('INFO', 'HB', `Heartbeat — state=${S.state} saved=${S.totalSaved}`);
+  }
 });
 
-// وصلة دائمة من الجسر — أكثر موثوقية من sendMessage أو storage في المانيفست الثالث
+// ── Port Command Channel (ONLY command entry point) ──────────────────────
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'nexora_cmd') return;
-  console.log('[Worker] Port connected from bridge.');
-  port.onMessage.addListener((msg) => {
-    if (msg.action !== 'START') return;
-    cdp.lastRunHash = null; // Clear hash so it runs
-    console.log('[Worker] START command via port:', msg);
-    handleStartFast(msg)
-      .then(() => {
-        port.postMessage({ ok: true, keyword: cdp.keyword || 'starting' });
-        launchEngine().catch(e => {
-          console.error('[Worker] launchEngine error:', e.message);
-          broadcast('EXTENSION_LIVE_STATUS', { text: '❌ ' + e.message });
-        });
-      })
-      .catch(e => {
-        console.error('[Worker] handleStartFast error:', e.message);
-        port.postMessage({ ok: false, error: e.message });
-      });
+  log('INFO', 'PORT', 'Port connected');
+
+  port.onMessage.addListener(async (msg) => {
+    if (msg.action === 'START') {
+      if (S.state !== 'IDLE' && S.state !== 'DONE') {
+        await stopSession();
+      }
+      try {
+        await startSession(msg, port);
+      } catch (e) {
+        log('ERROR', 'PORT', 'startSession failed', e.message);
+        safePortMsg(port, { type: 'ERROR', error: e.message });
+      }
+    } else if (msg.action === 'STOP') {
+      await stopSession();
+      safePortMsg(port, { type: 'ACK_STOP' });
+    } else if (msg.action === 'GET_STATUS') {
+      safePortMsg(port, { type: 'STATUS', state: S.state, saved: S.totalSaved, kw: S.kwQueue?.current });
+    }
   });
+
+  port.onDisconnect.addListener(() => { log('INFO', 'PORT', 'Port disconnected'); });
 });
 
-// احتفظ بـ storage.onChanged كخط احتياطي
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local' || !changes.nexora_cmd) return;
-  const cmd = changes.nexora_cmd.newValue;
-  if (!cmd || cmd.action !== 'START') return;
-  console.log('[Worker] Storage command received (fallback):', cmd);
-  handleStartFast(cmd).then(() => launchEngine()).catch(console.error);
-});
+function safePortMsg(port, msg) { try { port.postMessage(msg); } catch (_) {} }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.action === 'START_ENGINE' || msg.action === 'START_POLLING') {
-    // ⚠️ MV3 fix: respond SYNCHRONOUSLY before any await, then run engine async
-    sendResponse({ ok: true, result: { keyword: cdp.keyword || 'starting...' } });
-    handleStartFast(msg)
-      .then(() => launchEngine())
-      .catch(e => {
-        console.error('[Worker] Start error:', e.message);
-        broadcast('EXTENSION_LIVE_STATUS', { text: '❌ ' + e.message });
-      });
-    return false; // channel closed immediately – response already sent
+// ── Start Session ────────────────────────────────────────────────────────
+async function startSession(msg, port) {
+  setState('INITIALIZING');
+  S.sessionId = Math.random().toString(36).slice(2);
+  S.totalSaved = 0;
+  S.store.clear(); // Clear URN store for new session
+  S.batch = []; S.retryQueue = [];
+
+  const cfg = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
+  S.dashboardUrl = msg.dashboardUrl || cfg.dashboardUrl || '';
+  S.userId = msg.userId || cfg.userId || '';
+  if (!S.dashboardUrl || !S.userId) throw new Error('Not configured — set Dashboard URL and User ID first.');
+
+  const kws = await fetchKeywords(S.dashboardUrl, S.userId);
+  S.kwQueue = new KeywordQueue(kws);
+  S.kwQueue.advance();
+  if (!S.kwQueue.current) throw new Error('No keywords configured in dashboard.');
+
+  log('INFO', 'SESSION', 'Starting', { keywords: kws, sessionId: S.sessionId });
+  safePortMsg(port, { type: 'ACK_START', keyword: S.kwQueue.current });
+
+  S.tabId = await resolveLinkedInTab();
+  runKeyword().catch(e => log('ERROR', 'SESSION', 'runKeyword crashed', e.message));
+}
+
+async function stopSession() {
+  log('WARN', 'SESSION', 'Stopping session', { state: S.state });
+  stopEval();
+  await safeDetach();
+  S.batch = []; S.retryQueue = [];
+  setState('IDLE');
+}
+
+// ── Keyword Execution ────────────────────────────────────────────────────
+async function runKeyword() {
+  const kw = S.kwQueue.current;
+  if (!kw) { finalizeSession(); return; }
+  log('INFO', 'KW', 'Running keyword', kw);
+  broadcast('EXTENSION_LIVE_STATUS', { text: `⚡ Keyword: "${kw}"` });
+
+  const url = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(kw)}&origin=GLOBAL_SEARCH_HEADER`;
+  setState('NAVIGATING');
+  await chrome.tabs.update(S.tabId, { url, active: true });
+  await waitForTabLoad(S.tabId);
+
+  setState('ATTACHING');
+  if (!S.attached) {
+    try {
+      await chrome.debugger.attach({ tabId: S.tabId }, '1.3');
+      S.attached = true;
+    } catch (e) {
+      if (e.message?.toLowerCase().includes('already')) { S.attached = true; }
+      else { log('WARN', 'CDP', 'Attach failed', e.message); }
+    }
   }
-  if (msg.action === 'KEEP_ALIVE')    { sendResponse({ ok: true }); return false; }
-  if (msg.action === 'GET_CDP_COUNT') { sendResponse({ count: (cdp.keywordSavedCount || 0) + cdp.batchPending.length }); return false; }
-  if (msg.action === 'GET_STATUS')    { sendResponse({ running: cdp.running, keyword: cdp.keyword, totalSaved: cdp.totalSaved }); return false; }
-  if (msg.action === 'CONTENT_SCROLL_COMPLETE') { finalFlush().catch(console.error); return false; }
-  if (msg.action === 'SYNC_RESULTS') {
-    syncBatch(msg.posts, msg.keyword || cdp.keyword)
-      .then(n => sendResponse({ ok: true, savedCount: n }))
-      .catch(e => sendResponse({ ok: false, error: e.message }));
-    return true;
+  if (S.attached) {
+    try { await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Network.enable'); } catch (_) {}
   }
-  if (msg.action === 'DOM_POSTS') {
-    // البوستات جاية من content.js DOM extraction
-    let enriched = 0;
-    for (const p of (msg.posts || [])) {
+
+  setState('SCRAPING');
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] });
+  } catch (e) { log('WARN', 'INJECT', 'content.js inject warning', e.message); }
+
+  startEval();
+  broadcast('EXTENSION_LIVE_STATUS', { text: `🔍 Scraping: "${kw}"` });
+}
+
+// ── CDP Eval Loop ────────────────────────────────────────────────────────
+const EVAL = `(function(){
+  var posts=[], seen={};
+  var links=Array.from(document.querySelectorAll('a[href]')).filter(function(a){
+    return a.href&&(a.href.indexOf('feed/update/urn:li:')>-1||a.href.indexOf('/posts/')>-1);
+  });
+  links.forEach(function(link){
+    var href=link.href||'';
+    var urn='';
+    var m=href.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+    if(m) urn='urn:li:'+m[1]+':'+m[2];
+    else{var p=href.match(/activity-([0-9]{10,25})/);if(p)urn='urn:li:activity:'+p[1];}
+    if(!urn||seen[urn])return; seen[urn]=1;
+    var c=link,best=null;
+    for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||'').trim().length;if(l>30&&l<15000){best=c;break;}}
+    if(!best)return;
+    var ae=best.querySelector('a[href*="/in/"]');
+    var author=ae?(ae.innerText||'').trim().split('\\n')[0].substring(0,100):'';
+    var txt='';
+    Array.from(best.querySelectorAll('[dir="ltr"],.feed-shared-update-v2__description,.update-components-text,.break-words')).forEach(function(d){var t=(d.innerText||'').trim();if(t.length>txt.length)txt=t;});
+    if(txt.length<10)txt=(best.innerText||'').replace(/\\s+/g,' ').trim().substring(0,3000);
+    function pe(s){if(!s)return null;var x=String(s).toUpperCase().replace(/,/g,'');var n=parseFloat((x.match(/[0-9.]+/)||[])[0]);if(isNaN(n))return null;if(x.indexOf('K')>-1)n*=1000;if(x.indexOf('M')>-1)n*=1000000;return Math.floor(n);}
+    var likes=null,comments=null;
+    Array.from(best.querySelectorAll('[aria-label]')).forEach(function(el){var l=el.getAttribute('aria-label')||'';if(/[0-9]/.test(l)&&/(reaction|like)/i.test(l)&&likes===null)likes=pe(l);if(/[0-9]/.test(l)&&/comment/i.test(l)&&comments===null)comments=pe(l);});
+    posts.push({urn:urn,url:href,text:txt.substring(0,3000),author:author,likes:likes,comments:comments});
+  });
+  return JSON.stringify({posts:posts,count:posts.length});
+})()`;
+
+function startEval() {
+  stopEval();
+  runEval();
+  S.evalTimer = setInterval(runEval, 3500);
+}
+function stopEval() { if (S.evalTimer) { clearInterval(S.evalTimer); S.evalTimer = null; } }
+
+async function runEval() {
+  if (!S.attached || !S.tabId || S.state !== 'SCRAPING') return;
+  try {
+    const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
+      { expression: EVAL, returnByValue: true, timeout: 10000 });
+    if (!r?.result?.value) return;
+    const { posts } = JSON.parse(r.result.value);
+    let added = 0;
+    for (const p of (posts || [])) {
       if (!p.urn) continue;
-      if (cdp.store.has(p.urn)) {
-        // حدّث بيانات الـ store الموجود
-        const ex = cdp.store.get(p.urn);
-        if (p.text  && p.text.length  > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; }
-        if (p.author && !ex.author || ex.author === 'Unknown') ex.author = p.author;
+      if (S.store.has(p.urn)) {
+        const ex = S.store.get(p.urn);
+        if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; }
+        if (p.author && (!ex.author || ex.author === 'Unknown')) ex.author = p.author;
         if (p.likes !== null && ex.likes === null) ex.likes = p.likes;
-        if (ex._networkOnly) {
-          delete ex._networkOnly;
-          cdp.batchPending.push({ ...ex });
-          enriched++;
-        }
+        if (p.comments !== null && ex.comments === null) ex.comments = p.comments;
       } else {
-        // بوست جديد من DOM مباشرة
-        const post = { canonicalUrn: p.urn, url: p.url, postText: p.text || '', preview: p.text || '',
-          author: p.author || 'Unknown', likes: p.likes, comments: p.comments,
-          confidence: p.text ? 0.95 : 0.5, source: 'dom_direct' };
-        cdp.store.set(p.urn, post);
-        cdp.batchPending.push({ ...post });
-        enriched++;
+        const post = {
+          canonicalUrn: p.urn, url: p.url, postText: p.text || '', preview: p.text || '',
+          author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'eval'
+        };
+        S.store.set(p.urn, post);
+        S.batch.push(post); added++;
       }
     }
-    if (enriched > 0) {
-      console.log('[DOM] Enriched/added', enriched, 'posts -> flushing');
-      flushBatch().catch(console.error);
+    if (added > 0) {
+      broadcast('EXTENSION_LIVE_STATUS', { text: `📦 ${S.store.size} found | 💾 ${S.totalSaved} saved` });
+      flushBatch().catch(() => {});
     }
+  } catch (e) { log('WARN', 'EVAL', 'Eval error', e.message); }
+}
+
+// ── Network Body Ingestion ───────────────────────────────────────────────
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'NET_BODY') {
+    ingestBody(msg.body);
     sendResponse({ ok: true });
+    return false;
+  }
+  if (msg.action === 'CONTENT_SCROLL_COMPLETE') {
+    if (S.state === 'SCRAPING') finalizeKeyword().catch(e => log('ERROR', 'KW', 'finalizeKeyword error', e.message));
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (msg.action === 'KEEP_ALIVE') { sendResponse({ ok: true }); return false; }
+  if (msg.action === 'GET_STATUS') {
+    sendResponse({ state: S.state, saved: S.totalSaved, kw: S.kwQueue?.current });
     return false;
   }
 });
 
-// Phase 1: fast – resolve keyword + tab, reply to message channel immediately
-async function handleStartFast(msg) {
-  if (cdp.running) {
-    cdp.running = false; stopEvalLoop();
-    await safeDetach().catch(() => {});
-  }
-  const config = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
-  cdp.dashboardUrl = msg.dashboardUrl || config.dashboardUrl;
-  cdp.userId       = msg.userId       || config.userId;
-  if (!cdp.dashboardUrl || !cdp.userId) throw new Error('Not connected.');
-
-  let keywords = [];
-  try {
-    keywords = await fetchKeywordsArray(cdp.dashboardUrl, cdp.userId);
-  } catch (e) {
-    const cached = await chrome.storage.local.get('lastKeywords');
-    if (cached.lastKeywords && cached.lastKeywords.length > 0) {
-      keywords = cached.lastKeywords;
-      console.warn('[Worker] fetchKeywords failed, using cached:', keywords);
-    } else {
-      broadcast('EXTENSION_LIVE_STATUS', { text: '\u274c Error: ' + e.message });
-      throw e;
-    }
-  }
-  cdp.allKeywords = keywords;
-  cdp.keywordIndex = 0; cdp.keywordSavedCount = 0;
-  cdp.keyword = keywords[0] || 'linkedin';
-  cdp.cycleMode = keywords.length > 1;
-  await chrome.storage.local.set({ lastKeywords: keywords, lastKeyword: cdp.keyword });
-  cdp.store.clear(); cdp.batchPending = []; cdp.totalSaved = 0; cdp._lastApiReqs.clear();
-  await chrome.storage.session.clear();
-
-  // Always prefer the tab the user is actively looking at (focused window, active tab)
-  const allWindows = await chrome.windows.getAll({ populate: false });
-  const focusedWindowId = allWindows.find(w => w.focused)?.id;
-
-  let tab = null;
-
-  // 1. Try active tab in focused window first
-  if (focusedWindowId) {
-    const activeTabs = await chrome.tabs.query({ active: true, windowId: focusedWindowId, url: '*://*.linkedin.com/*' });
-    if (activeTabs.length > 0) tab = activeTabs[0];
-  }
-
-  // 2. Fall back: any active LinkedIn tab in any window
-  if (!tab) {
-    const anyActive = await chrome.tabs.query({ active: true, url: '*://*.linkedin.com/*' });
-    if (anyActive.length > 0) tab = anyActive[0];
-  }
-
-  // 3. Fall back: any LinkedIn tab at all
-  if (!tab) {
-    const liTabs = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
-    if (liTabs.length > 0) tab = liTabs[0];
-  }
-
-  // 4. Create a new LinkedIn tab as last resort
-  if (!tab) {
-    tab = await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/', active: true });
-    await waitForTabLoad(tab.id, 15000);
-  }
-
-  cdp.tabId = tab.id;
-  console.log('[Worker] Phase1 done. keyword=' + cdp.keyword + ' tabId=' + cdp.tabId + ' (url=' + tab.url + ')');
-  return { keyword: cdp.keyword };
-}
-
-// Phase 2: slow – CDP attach, navigate, wait for load, start loop (runs after response sent)
-async function launchEngine() {
-  // Keep service worker alive via alarm during the long tab-load wait
-  chrome.alarms.create('sw_keepalive', { periodInMinutes: 0.4 });
-  try {
-    const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(cdp.keyword)}&origin=GLOBAL_SEARCH_HEADER`;
-    await chrome.tabs.update(cdp.tabId, { url: searchUrl, active: true });
-    await chrome.storage.session.set({ cdpTabId: cdp.tabId, cdpKeyword: cdp.keyword, cdpDashUrl: cdp.dashboardUrl, cdpUserId: cdp.userId });
-    broadcast('EXTENSION_LIVE_STATUS', { text: '\u23f3 Loading LinkedIn...' });
-    await waitForTabLoad(cdp.tabId);
-
-    try {
-      await chrome.debugger.attach({ tabId: cdp.tabId }, '1.3');
-      cdp.attached = true;
-    } catch (e) {
-      if (e.message?.toLowerCase().includes('already')) { cdp.attached = true; }
-      else { console.warn('CDP attach failed:', e.message); cdp.attached = false; }
-    }
-    if (cdp.attached) {
-      try { await chrome.debugger.sendCommand({ tabId: cdp.tabId }, 'Network.enable'); } catch (_) {}
-    }
-    try {
-      await chrome.scripting.executeScript({ target: { tabId: cdp.tabId }, files: ['content.js'] });
-    } catch (e) { console.warn('[Worker] content.js inject warning:', e.message); }
-    cdp.running = true;
-    startEvalLoop();
-    broadcast('EXTENSION_LIVE_STATUS', { text: '\u26a1 Engine running: "' + cdp.keyword + '"' });
-    console.log('[Worker] Engine running.');
-  } catch (e) {
-    broadcast('EXTENSION_LIVE_STATUS', { text: '\u274c Launch failed: ' + e.message });
-    console.error('[Worker] launchEngine error:', e);
-  } finally {
-    chrome.alarms.clear('sw_keepalive');
-  }
-}
-
-// ── EVAL_SCRIPT ────────────────────────────────────────────────────────────
-// Finds all LinkedIn post links in the DOM (always present in every layout).
-// Each link contains the real URN and is inside the post card container.
-const EVAL_SCRIPT = `(function(){
-    var posts = [];
-    var seen  = {};
-  
-    var allLinks = Array.from(document.querySelectorAll('a[href]'));
-    var postLinks = allLinks.filter(function(a) {
-      return a.href && (a.href.indexOf('feed/update/urn:li:') > -1 || a.href.indexOf('/posts/') > -1);
-    });
-  
-    postLinks.forEach(function(link){
-      var href = link.href || '';
-      var urn = '';
-      var um = href.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
-      if (um) {
-        urn = 'urn:li:' + um[1] + ':' + um[2];
-      } else {
-        var pm = href.match(/activity-([0-9]{10,25})/);
-        if (pm) urn = 'urn:li:activity:' + pm[1];
-      }
-      if (!urn) return;
-      if (seen[urn]) return; seen[urn] = 1;
-  
-      var container = link, best = null;
-      for (var i = 0; i < 25; i++) {
-        container = container.parentElement;
-        if (!container || container === document.body) break;
-        var len = (container.innerText || '').trim().length;
-        if (len > 30 && len < 15000) { best = container; break; }
-      }
-      if (!best) return;
-  
-      var authorEl = best.querySelector('a[href*="/in/"]');
-      var author = authorEl ? (authorEl.innerText || '').trim().split('\\n')[0].substring(0, 100) : '';
-  
-      var postText = '';
-      var textCandidates = Array.from(best.querySelectorAll('[dir="ltr"], .feed-shared-update-v2__description, .update-components-text, .search-result__snippets, .break-words'));
-      textCandidates.forEach(function(d) {
-        var t = (d.innerText||'').trim();
-        if (t.length > postText.length) postText = t;
-      });
-      if (postText.length < 10) postText = (best.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 3000);
-  
-      function parseEng(str) {
-        if (!str) return null;
-        var s = str.toUpperCase().replace(/,/g, '');
-        var m = s.match(/[0-9.]+/);
-        if (!m) return null;
-        var n = parseFloat(m[0]);
-        if (s.indexOf('K') > -1) n *= 1000;
-        if (s.indexOf('M') > -1) n *= 1000000;
-        return Math.floor(n);
-      }
-
-      var likes = null;
-      Array.from(best.querySelectorAll('[aria-label]')).forEach(function(el){
-        if (likes !== null) return;
-        var l = el.getAttribute('aria-label') || '';
-        if (/[0-9]/.test(l) && /(reaction|like)/i.test(l)) {
-          likes = parseEng(l);
-        }
-      });
-      if (likes === null) {
-        var bm = (best.innerText || '').match(/([0-9.,]+[KkMm]?)\s*(reactions?|likes?)/i);
-        if (bm) likes = parseEng(bm[1]);
-      }
-  
-      var comments = null;
-      Array.from(best.querySelectorAll('[aria-label]')).forEach(function(el){
-        if (comments !== null) return;
-        var l = el.getAttribute('aria-label') || '';
-        if (/[0-9]/.test(l) && /comment/i.test(l)) {
-          comments = parseEng(l);
-        }
-      });
-      if (comments === null) {
-        var cm = (best.innerText || '').match(/([0-9.,]+[KkMm]?)\s*comment/i);
-        if (cm) comments = parseEng(cm[1]);
-      }
-
-      posts.push({ urn: urn, url: href,
-        text: postText.substring(0, 3000), author: author,
-        likes: likes, comments: comments });
-    });
-
-    
-    var nextBtn = document.querySelector('.artdeco-pagination__button--next, button[aria-label="Next"]');
-    if (nextBtn && !nextBtn.disabled) {
-      var rect = nextBtn.getBoundingClientRect();
-      if (rect.top >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) + 500) {
-        try { nextBtn.click(); } catch(e){}
-      } else {
-        window.scrollBy(0, 1000);
-      }
-    } else {
-      window.scrollBy(0, 800);
-    }
-  
-
-    return JSON.stringify({ posts: posts, total: posts.length, linkCount: postLinks.length });
-  })()`;
-
-// ── EVAL LOOP ─────────────────────────────────────────────────────────────
-async function evaluatePageState() {
-  if (!cdp.attached || !cdp.tabId) return 0;
-  try {
-    const r = await chrome.debugger.sendCommand({ tabId: cdp.tabId }, 'Runtime.evaluate',
-      { expression: EVAL_SCRIPT, returnByValue: true, timeout: 12000 });
-    if (!r?.result?.value) return 0;
-    const parsed = JSON.parse(r.result.value);
-    // Always log so we can debug
-    console.log(`[EVAL] links=${parsed.linkCount} posts=${parsed.total} store=${cdp.store.size}`);
-    let added = 0;
-    for (const p of (parsed.posts || [])) {
-      if (!p.urn) continue;
-      if (cdp.store.has(p.urn)) {
-        const ex = cdp.store.get(p.urn);
-        let enriched = false;
-        if (!ex.postText && p.text)                              { ex.postText = p.text; ex.preview = p.text; enriched = true; }
-        if ((!ex.author || ex.author === 'Unknown') & p.author) { ex.author = p.author; enriched = true; }
-        if (ex.likes === null && p.likes !== null)               { ex.likes = p.likes; enriched = true; }
-        // Push to batch if enriched OR if it's a network-only post not yet pushed
-        if ((enriched || ex._networkOnly) && !ex._flushed) {
-          delete ex._networkOnly;
-          ex._flushed = true; // prevent duplicate push
-          cdp.batchPending.push({ ...ex }); added++;
-        }
-        continue;
-      }
-      const post = { canonicalUrn: p.urn, url: p.url, postText: p.text || '', preview: p.text || '',
-        author: p.author || 'Unknown', likes: p.likes, comments: p.comments,
-        confidence: p.text ? 0.9 : 0.5, source: 'cdp_dom' };
-      cdp.store.set(p.urn, post);
-      post._flushed = true; cdp.batchPending.push(post);
-      added++;
-    }
-    if (added > 0) {
-      broadcast('EXTENSION_LIVE_STATUS', { text: `📦 ${cdp.store.size} found | 💾 ${cdp.totalSaved} saved` });
-      await flushBatch();
-    }
-    return added;
-  } catch (e) { console.error('[EVAL] error:', e.message); return 0; }
-}
-
-function startEvalLoop() {
-  stopEvalLoop();
-  evaluatePageState();
-  cdp.evalTimer = setInterval(() => { if (!cdp.attached) { stopEvalLoop(); return; } evaluatePageState(); }, 4000);
-}
-function stopEvalLoop() { if (cdp.evalTimer) { clearInterval(cdp.evalTimer); cdp.evalTimer = null; } }
-
-async function finalFlush() {
-  stopEvalLoop();
-  await sleep(1500);
-  await evaluatePageState();
-  await flushBatch();
-  
-  // CYCLING LOGIC
-  cdp.keywordIndex++; cdp.keywordSavedCount = 0;
-  if (cdp.allKeywords && cdp.keywordIndex < cdp.allKeywords.length) {
-    cdp.keyword = cdp.allKeywords[cdp.keywordIndex];
-    broadcast('EXTENSION_LIVE_STATUS', { text: `🔄 Switching to keyword: "${cdp.keyword}"` });
-    console.log('[Worker] Cycling to next keyword:', cdp.keyword);
-    // Short wait before next cycle
-    await sleep(6000);
-    // Run next cycle without resetting tab or store
-    launchEngine().catch(e => console.error('[Worker] launchEngine cycle error:', e));
-    return;
-  }
-  
-  // Done with all keywords or cycleMode off
-  broadcast('SCRAPER_COMPLETE', { totalSaved: cdp.totalSaved });
-  broadcast('EXTENSION_LIVE_STATUS', { text: `🎉 Done! ${cdp.totalSaved} posts saved.` });
-  await safeDetach();
-  await chrome.storage.session.clear();
-  cdp.lastRunHash = 'DONE';
-  cdp.running = false;
-  cdp.keywordIndex = 0;
-}
-
-// ── NETWORK INTERCEPTION ──────────────────────────────────────────────────
+// Also handle CDP network events (debugger)
 chrome.debugger.onEvent.addListener(async (src, method, params) => {
-  if (src.tabId !== cdp.tabId || !cdp.running) return;
-  if (method === 'Network.responseReceived') {
-    const url = params?.response?.url || '';
-    if (url.includes('linkedin.com') && !url.includes('.js') && !url.includes('.css')
-        && !url.includes('.png') && !url.includes('.woff') && !url.includes('.ico')
-        && !url.includes('.svg') && !url.includes('.gif') && !url.includes('.jpg')) {
-      cdp._lastApiReqs.add(params.requestId);
-    }
-  }
-  if (method === 'Network.loadingFinished' & cdp._lastApiReqs.has(params.requestId)) {
-    cdp._lastApiReqs.delete(params.requestId);
+  if (src.tabId !== S.tabId || S.state !== 'SCRAPING') return;
+  if (method === 'Network.loadingFinished') {
     try {
-      const r = await chrome.debugger.sendCommand({ tabId: cdp.tabId }, 'Network.getResponseBody', { requestId: params.requestId });
+      const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Network.getResponseBody', { requestId: params.requestId });
       const body = r.base64Encoded ? atob(r.body) : (r.body || '');
-      if (body.length > 100) ingestNetworkBody(body);
+      if (body.length > 100) ingestBody(body);
     } catch (_) {}
   }
 });
 
-function ingestNetworkBody(body) {
-  // Guard: skip HTML, SVG, and other non-JSON responses
-  const firstChar = body.trimStart()[0];
-  if (firstChar !== '{' && firstChar !== '[') return;
+function ingestBody(body) {
+  if (!body) return;
+  const fc = body.trimStart()[0];
+  if (fc !== '{' && fc !== '[') return;
   try {
-    let json = JSON.parse(body);
-    let postMap = {};
-
-    function parseEng(str) {
-      if (!str) return null;
-      var s = String(str).toUpperCase().replace(/,/g, '');
-      var m = s.match(/[0-9.]+/);
-      if (!m) return null;
-      var n = parseFloat(m[0]);
-      if (s.indexOf('K') > -1) n *= 1000;
-      if (s.indexOf('M') > -1) n *= 1000000;
+    const json = JSON.parse(body);
+    const postMap = {};
+    function pe(s) {
+      if (s == null) return null;
+      const x = String(s).toUpperCase().replace(/,/g, '');
+      const n = parseFloat((x.match(/[0-9.]+/) || [])[0]);
+      if (isNaN(n)) return null;
+      if (x.includes('K')) return Math.floor(n * 1000);
+      if (x.includes('M')) return Math.floor(n * 1000000);
       return Math.floor(n);
     }
-
-    function extractPostData(obj) {
+    function walk(obj) {
       if (!obj || typeof obj !== 'object') return;
-
-      // Check if this object contains a URN — coerce to String to avoid TypeError
-      let rawUrn = String(obj.entityUrn || obj.updateUrn || obj.urn || '');
-      let um = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
-      
-      if (um) {
-        let urn = 'urn:li:' + um[1] + ':' + um[2];
-        if (!postMap[urn]) {
-          postMap[urn] = { urn: urn, url: 'https://www.linkedin.com/feed/update/' + urn, text: '', author: '', likes: null, comments: null };
-        }
-        
-        let p = postMap[urn];
-
-        // Text
-        let txt = obj.commentary?.text?.text || obj.commentary?.text || obj.text || obj.summary || obj.description || '';
+      const rawUrn = String(obj.entityUrn || obj.updateUrn || obj.urn || '');
+      const m = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+      if (m) {
+        const urn = `urn:li:${m[1]}:${m[2]}`;
+        if (!postMap[urn]) postMap[urn] = { urn, text: '', author: '', likes: null, comments: null };
+        const p = postMap[urn];
+        const txt = obj.commentary?.text?.text || obj.commentary?.text || obj.text || obj.summary || '';
         if (typeof txt === 'string' && txt.length > p.text.length) p.text = txt.substring(0, 5000);
-
-        // Author
-        let auth = obj.actor?.name?.text || obj.actor?.nameV2?.text || obj.actor?.title?.text || obj.actor?.fullName || obj.author?.name || '';
+        const auth = obj.actor?.name?.text || obj.actor?.nameV2?.text || obj.actor?.fullName || '';
         if (typeof auth === 'string' && auth.length > p.author.length) p.author = auth.substring(0, 100);
-
-        // Engagement
-        let soc = obj.socialDetail || obj.socialActivityCounts || obj.totalSocialActivityCounts || obj.socialProofText || {};
-        if (typeof soc === 'string') {
-           // Maybe a string like "1,200 Likes"
-           let l = soc.match(/([0-9.,]+[KkMm]?)\s*(reaction|like)/i);
-           if (l && p.likes === null) p.likes = parseEng(l[1]);
-           let c = soc.match(/([0-9.,]+[KkMm]?)\s*comment/i);
-           if (c && p.comments === null) p.comments = parseEng(c[1]);
-        } else {
-           if (soc.numLikes !== undefined && p.likes === null) p.likes = parseEng(soc.numLikes);
-           if (soc.numComments !== undefined && p.comments === null) p.comments = parseEng(soc.numComments);
-           
-           if (soc.totalSocialActivityCounts) {
-             let t = soc.totalSocialActivityCounts;
-             if (t.numLikes !== undefined && p.likes === null) p.likes = parseEng(t.numLikes);
-             if (t.numComments !== undefined && p.comments === null) p.comments = parseEng(t.numComments);
-           }
-        }
-        
-        // Sometimes likes are directly on the object
-        if (obj.numLikes !== undefined && p.likes === null) p.likes = parseEng(obj.numLikes);
-        if (obj.numComments !== undefined && p.comments === null) p.comments = parseEng(obj.numComments);
+        const soc = obj.socialDetail || obj.totalSocialActivityCounts || {};
+        if (soc.numLikes != null && p.likes === null) p.likes = pe(soc.numLikes);
+        if (soc.numComments != null && p.comments === null) p.comments = pe(soc.numComments);
+        if (obj.numLikes != null && p.likes === null) p.likes = pe(obj.numLikes);
+        if (obj.numComments != null && p.comments === null) p.comments = pe(obj.numComments);
       }
-
-      // Recurse into children
-      if (Array.isArray(obj)) {
-        for (let i=0; i<obj.length; i++) extractPostData(obj[i]);
-      } else {
-        let keys = Object.keys(obj);
-        for (let i=0; i<keys.length; i++) {
-          let k = keys[i];
-          if (k !== 'paging' && k !== 'metadata' && typeof obj[k] === 'object') {
-            extractPostData(obj[k]);
-          }
-        }
-      }
+      if (Array.isArray(obj)) { for (const item of obj) walk(item); }
+      else { for (const k of Object.keys(obj)) { if (typeof obj[k] === 'object' && k !== 'paging') walk(obj[k]); } }
     }
-
-    extractPostData(json);
-
-    // Filter and add to store
+    walk(json);
     let enriched = 0;
-    for (let urn in postMap) {
-      let p = postMap[urn];
-      // Only add if it has some text or engagement
-      if (p.text.length > 10 || p.likes !== null || p.comments !== null) {
-        let existing = cdp.store.get(urn);
-        if (existing) {
-          if (p.text && p.text.length > (existing.postText || '').length) {
-            existing.postText = p.text;
-            existing.preview = p.text;
-          }
-          if (p.likes !== null) existing.likes = p.likes;
-          if (p.comments !== null) existing.comments = p.comments;
-          if (p.author && p.author.length > 2) existing.author = p.author;
-        } else {
-          let np = {
-            canonicalUrn: urn, url: p.url, postText: p.text, preview: p.text,
-            author: p.author || 'Unknown', likes: p.likes, comments: p.comments,
-            confidence: p.text ? 0.95 : 0.4, source: 'network_recursive'
-          };
-          cdp.store.set(urn, np);
-          cdp.batchPending.push(np);
-          enriched++;
-        }
+    for (const urn in postMap) {
+      const p = postMap[urn];
+      if (!p.text && p.likes === null && p.comments === null) continue;
+      if (S.store.has(urn)) {
+        const ex = S.store.get(urn);
+        if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; }
+        if (p.likes !== null) ex.likes = p.likes;
+        if (p.comments !== null) ex.comments = p.comments;
+        if (p.author && p.author.length > 1) ex.author = p.author;
+      } else {
+        const np = { canonicalUrn: urn, url: `https://www.linkedin.com/feed/update/${urn}`, postText: p.text, preview: p.text, author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'network' };
+        S.store.set(urn, np); S.batch.push(np); enriched++;
       }
     }
-
-    if (enriched > 0) {
-      console.log('[NETWORK] Recursive parser added', enriched, 'posts -> flushing');
-      flushBatch().catch(console.error);
-    }
-  } catch (e) {
-    console.error('[NETWORK] Parse error:', e);
-  }
+    if (enriched > 0) flushBatch().catch(() => {});
+  } catch (_) {}
 }
 
+// ── Persistence ──────────────────────────────────────────────────────────
 async function flushBatch() {
-  if (!cdp.batchPending.length) return 0;
-  // Filter posts with < 10 total engagement before sending
-  const MIN_ENGAGEMENT = 0;
-  cdp.batchPending = cdp.batchPending.filter(p => {
-    const total = (p.likes || 0) + (p.comments || 0);
-    return total >= MIN_ENGAGEMENT;
-  });
-
-  // Sort by likes descending so highest-reach posts reach the dashboard first
-  cdp.batchPending.sort((a, b) => (b.likes ?? -1) - (a.likes ?? -1));
-  const CHUNK = 25; let synced = 0;
-  while (cdp.batchPending.length > 0) {
-    const chunk = cdp.batchPending.splice(0, CHUNK);
-    try {
-      const resp = await fetch(`${cdp.dashboardUrl}/api/extension/results`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-extension-token': cdp.userId },
-        body: JSON.stringify({ posts: chunk, keyword: cdp.keyword, source: 'nexora_v16' })
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) { cdp.batchPending.unshift(...chunk); break; }
-      cdp.totalSaved += data.savedCount ?? chunk.length;
-      cdp.keywordSavedCount = (cdp.keywordSavedCount || 0) + (data.savedCount ?? chunk.length);
-      synced += data.savedCount ?? chunk.length;
-      console.log(`[Flush] ${data.savedCount}/${chunk.length} total=${cdp.totalSaved}`);
-    } catch (e) { cdp.batchPending.unshift(...chunk); break; }
+  if (!S.batch.length) return;
+  const chunk = S.batch.splice(0, S.batch.length);
+  try {
+    await pushToAPI(chunk);
+  } catch (_) {
+    S.retryQueue.push(...chunk);
   }
-  return synced;
 }
 
-async function syncBatch(posts, keyword) {
-  const resp = await fetch(`${cdp.dashboardUrl}/api/extension/results`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-extension-token': cdp.userId },
-    body: JSON.stringify({ posts, keyword, source: 'nexora_scraper' })
+async function flushAll() {
+  stopEval();
+  await runEval();
+  await flushBatch();
+  // Drain retry queue with backoff
+  if (S.retryQueue.length > 0) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await sleep(attempt * 2000);
+      const retry = S.retryQueue.splice(0, S.retryQueue.length);
+      try { await pushToAPI(retry); break; } catch (_) { S.retryQueue.push(...retry); }
+    }
+  }
+}
+
+async function pushToAPI(posts) {
+  if (!posts.length) return;
+  const resp = await fetch(`${S.dashboardUrl}/api/extension/results`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
+    body: JSON.stringify({ posts, keyword: S.kwQueue?.current || '', source: 'nexora_v6' })
   });
   if (!resp.ok) throw new Error(`API ${resp.status}`);
-  return (await resp.json()).savedCount || posts.length;
+  const data = await resp.json().catch(() => ({}));
+  const n = data.savedCount ?? posts.length;
+  S.totalSaved += n;
+  log('INFO', 'FLUSH', `Saved ${n}/${posts.length} total=${S.totalSaved}`);
+  broadcast('EXTENSION_LIVE_STATUS', { text: `📦 ${S.store.size} found | 💾 ${S.totalSaved} saved` });
 }
 
-// ── HELPERS ───────────────────────────────────────────────────────────────
+// ── Keyword Lifecycle ────────────────────────────────────────────────────
+async function finalizeKeyword() {
+  setState('FLUSHING');
+  stopEval();
+  await sleep(1500);
+  await flushAll();
+  log('INFO', 'KW', 'Keyword complete', S.kwQueue.status());
+  if (S.kwQueue.hasMore()) {
+    S.kwQueue.advance();
+    await sleep(4000);
+    setState('NAVIGATING');
+    await runKeyword();
+  } else {
+    finalizeSession();
+  }
+}
+
+function finalizeSession() {
+  setState('DONE');
+  log('INFO', 'SESSION', 'All keywords done', { totalSaved: S.totalSaved });
+  broadcast('SCRAPER_COMPLETE', { totalSaved: S.totalSaved });
+  broadcast('EXTENSION_LIVE_STATUS', { text: `✅ Done! ${S.totalSaved} posts saved.` });
+  safeDetach();
+  setState('IDLE');
+}
+
+// ── Tab + CDP Lifecycle ───────────────────────────────────────────────────
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId !== S.tabId) return;
+  log('WARN', 'TAB', 'Tab removed during session', { state: S.state });
+  if (S.state === 'IDLE' || S.state === 'DONE') return;
+  stopEval(); S.attached = false; S.tabId = null;
+  flushAll().finally(() => setState('IDLE'));
+});
+
+chrome.debugger.onDetach.addListener((src, reason) => {
+  if (src.tabId !== S.tabId) return;
+  log('WARN', 'CDP', 'Debugger detached', reason);
+  S.attached = false;
+  if (S.state === 'SCRAPING') stopEval();
+});
+
 async function safeDetach() {
-  if (!cdp.attached || !cdp.tabId) return;
-  try { await chrome.debugger.detach({ tabId: cdp.tabId }); } catch (_) {}
-  cdp.attached = false;
+  if (!S.attached || !S.tabId) return;
+  try { await chrome.debugger.detach({ tabId: S.tabId }); } catch (_) {}
+  S.attached = false;
 }
 
-function waitForTabLoad(tabId, maxMs = 28000) {
+// ── Helpers ───────────────────────────────────────────────────────────────
+async function resolveLinkedInTab() {
+  const wins = await chrome.windows.getAll({ populate: false });
+  const fwId = wins.find(w => w.focused)?.id;
+  if (fwId) {
+    const [t] = await chrome.tabs.query({ active: true, windowId: fwId, url: '*://*.linkedin.com/*' });
+    if (t) return t.id;
+  }
+  const [t2] = await chrome.tabs.query({ active: true, url: '*://*.linkedin.com/*' });
+  if (t2) return t2.id;
+  const [t3] = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
+  if (t3) return t3.id;
+  const t4 = await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/', active: true });
+  await waitForTabLoad(t4.id, 15000);
+  return t4.id;
+}
+
+function waitForTabLoad(tabId, maxMs = 25000) {
   return new Promise(resolve => {
     const t = setTimeout(() => { chrome.tabs.onUpdated.removeListener(fn); resolve(); }, maxMs);
     function fn(id, info) {
       if (id !== tabId || info.status !== 'complete') return;
       chrome.tabs.onUpdated.removeListener(fn); clearTimeout(t);
-      setTimeout(resolve, 4000);
+      setTimeout(resolve, 3000); // extra settle time for SPA
     }
     chrome.tabs.onUpdated.addListener(fn);
   });
 }
 
-async function fetchKeywordsArray(dashboardUrl, userId) {
-  const resp = await fetch(`${dashboardUrl}/api/extension/jobs`, { headers: { 'x-extension-token': userId } });
+async function fetchKeywords(dashUrl, userId) {
+  const resp = await fetch(`${dashUrl}/api/extension/jobs`, { headers: { 'x-extension-token': userId } });
   if (!resp.ok) throw new Error(`Jobs API ${resp.status}`);
   const jobs = await resp.json();
-  if (!jobs.active) throw new Error(jobs.message || 'System inactive');
-
-  console.log('[Worker] Raw API response for keywords:', { searchOnly: jobs.settings?.searchOnlyMode, searchConfig: jobs.settings?.searchConfigJson, campaigns: jobs.keywords });
-
-  let allKw = [];
-  try {
-    if (jobs.settings?.searchConfigJson) {
+  if (!jobs.active) throw new Error(jobs.message || 'System inactive in dashboard.');
+  let kws = [];
+  if (jobs.settings?.searchConfigJson) {
+    try {
       const cfg = JSON.parse(jobs.settings.searchConfigJson);
-      if (Array.isArray(cfg)) {
-         const valid = cfg.flat().filter(k => typeof k === 'string' && k.trim());
-         allKw.push(...valid.map(k => k.trim()));
-      }
-    }
-  } catch(e) {}
-  
-  const searchOnly = jobs.settings?.searchOnlyMode !== false;
-  if (!searchOnly || allKw.length === 0) {
-    if (Array.isArray(jobs.keywords)) {
-      const campKw = jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean);
-      allKw.push(...campKw);
-    }
+      if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
+    } catch (_) {}
   }
-  
-  if (allKw.length === 0) throw new Error('No keywords configured in dashboard.');
-  return [...new Set(allKw)];
+  const searchOnly = jobs.settings?.searchOnlyMode !== false;
+  if (!searchOnly || kws.length === 0) {
+    if (Array.isArray(jobs.keywords)) kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
+  }
+  if (kws.length === 0) throw new Error('No keywords configured. Add keywords in dashboard settings.');
+  return [...new Set(kws)];
 }
 
 function broadcast(action, data = {}) {
   if (action === 'EXTENSION_LIVE_STATUS') {
-    chrome.action.setBadgeText({ text: cdp.totalSaved > 0 ? String(cdp.totalSaved) : '⚡' });
-    chrome.action.setBadgeBackgroundColor({ color: '#10b981' });
+    chrome.action.setBadgeText({ text: S.totalSaved > 0 ? String(S.totalSaved) : '⚡' }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: '#10b981' }).catch(() => {});
   }
   if (action === 'SCRAPER_COMPLETE') {
-    chrome.action.setBadgeText({ text: String(cdp.totalSaved) + '✓' });
-    chrome.action.setBadgeBackgroundColor({ color: '#3b82f6' });
+    chrome.action.setBadgeText({ text: `${S.totalSaved}✓` }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: '#3b82f6' }).catch(() => {});
   }
   chrome.runtime.sendMessage({ action, ...data }).catch(() => {});
 }
 
+function broadcastStatus() {
+  broadcast('EXTENSION_LIVE_STATUS', { text: `State: ${S.state}` });
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-chrome.debugger.onDetach.addListener(src => { if (src.tabId === cdp.tabId) { cdp.attached = false; cdp.running = false; stopEvalLoop(); } });
-chrome.tabs.onRemoved.addListener(tabId => { if (tabId === cdp.tabId & cdp.attached) safeDetach(); });
