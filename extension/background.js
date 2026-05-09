@@ -449,9 +449,7 @@ async function runDiagProbe() {
       samplePost: profile.sample || '(none)',
       issues: issues.length ? issues : ['none'],
     };
-    log('INFO', 'PROBE', '=== NEXORA COMPATIBILITY REPORT ===');
-    log('INFO', 'PROBE', JSON.stringify(report, null, 2));
-    log('INFO', 'PROBE', '=== END REPORT — strategy: ' + strategy + ' ===');
+    log('INFO', 'PROBE', 'NEXORA COMPATIBILITY REPORT\n' + JSON.stringify(report, null, 2));
     broadcast('EXTENSION_LIVE_STATUS', { text: '🔬 Strategy: ' + strategy });
   } catch (e) {
     log('WARN', 'PROBE', 'Probe failed: ' + e.message + ' — using default EVAL');
