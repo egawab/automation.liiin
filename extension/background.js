@@ -100,7 +100,9 @@ async function startSession(msg, port) {
   S.totalSaved = 0;
   S.store.clear();
   S.batch = []; S.retryQueue = [];
-  S.flushedUrns = new Set(); // track which URNs have already been sent to avoid double-counting
+  S.flushedUrns = new Set();
+  S.diagProfile = null;   // filled by runDiagProbe()
+  S.activeEval = null;    // built by buildEval() from diagProfile
 
   const cfg = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
   S.dashboardUrl = msg.dashboardUrl || cfg.dashboardUrl || '';
@@ -230,10 +232,8 @@ async function cdpScrollEngine(kw) {
     return 'empty_page';
   }
 
-  // DOM Diagnostic — runs once at scroll start to identify what's on the page
-  const diag = await cdpExec('JSON.stringify({links:document.querySelectorAll("a[href]").length,feedLinks:Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update")>-1||a.href.indexOf("/posts/")>-1);}).length,dataUrn:document.querySelectorAll("[data-urn]").length,dataActivityUrn:document.querySelectorAll("[data-activity-urn]").length,chameleon:document.querySelectorAll("[data-chameleon-result-urn]").length,entityUrn:document.querySelectorAll("[data-entity-urn]").length,trackingUrn:document.querySelectorAll("[data-tracking-urn]").length,articles:document.querySelectorAll("article").length,searchCards:document.querySelectorAll(".reusable-search__result-container,.search-result").length,bodyTextLen:document.body.innerText.length})');
-  log('INFO', 'DIAG', 'DOM snapshot: ' + diag);
-  broadcast('EXTENSION_LIVE_STATUS', { text: 'Diag: ' + diag });
+  // ── Compatibility Probe: detect layout, score strategies, build optimized extractor ──
+  await runDiagProbe();
   const CLICK_NEXT = '(function(){var ss=[".artdeco-pagination__button--next","button[aria-label=\'Next\']","button[aria-label=\'Go to next page\']"];for(var i=0;i<ss.length;i++){var b=document.querySelector(ss[i]);if(b&&!b.disabled){b.click();return true;}}var bs=Array.from(document.querySelectorAll("button,[role=\'button\']"));var m=bs.find(function(b){return /show more|load more|see more/i.test(b.innerText||"");});if(m&&!m.disabled){m.click();return true;}return false;})()';
 
   while (step < MAX_STEPS && S.state === 'SCRAPING' && S.tabId) {
@@ -343,9 +343,125 @@ async function runKeyword() {
   }
 }
 
+// ── Compatibility Probe + Adaptive EVAL Builder ─────────────────────────
+
+// DIAG_PROBE: runs once to detect layout/selector availability
+const DIAG_PROBE = [
+  '(function(){',
+  'function c(s){try{return document.querySelectorAll(s).length;}catch(e){return 0;}}',
+  'var feedLinks=Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).length;',
+  'var dataUrn=c("[data-urn]"),dataEntityUrn=c("[data-entity-urn]"),dataChameleon=c("[data-chameleon-result-urn]");',
+  'var feedCards=c(".feed-shared-update-v2,.update-components-update-v2");',
+  'var articleCards=c("article,.reusable-search__result-container");',
+  'var socialSpans=c("span[class*=social-count],li[class*=social-count],span[class*=reaction-count]");',
+  'var socialCounts=c(".social-details-social-counts");',
+  'var engAria=Array.from(document.querySelectorAll("[aria-label]")).filter(function(x){var a=x.getAttribute("aria-label")||"";return /[0-9]/.test(a)&&/(reaction|like|comment)/i.test(a);}).length;',
+  'var engButtons=Array.from(document.querySelectorAll("button")).filter(function(b){var t=(b.innerText||"").trim();return /^[0-9]/.test(t)&&/(like|reaction|comment)/i.test(t);}).length;',
+  'var textLtr=c("[dir=\\"ltr\\"]"),textBreak=c(".break-words"),textFeed=c(".feed-shared-update-v2__description"),textUpdate=c(".update-components-text");',
+  'var bodyLen=document.body.innerText.length;',
+  'var sample="";try{var fc=document.querySelector("[data-urn],[data-entity-urn],.feed-shared-update-v2,article");if(fc)sample=(fc.innerText||"").trim().substring(0,100);}catch(e){}',
+  'return JSON.stringify({feedLinks:feedLinks,dataUrn:dataUrn,dataEntityUrn:dataEntityUrn,dataChameleon:dataChameleon,feedCards:feedCards,articleCards:articleCards,socialSpans:socialSpans,socialCounts:socialCounts,engAria:engAria,engButtons:engButtons,textLtr:textLtr,textBreak:textBreak,textFeed:textFeed,textUpdate:textUpdate,bodyLen:bodyLen,sample:sample});',
+  '})()'
+].join('\n');
+
+// buildEval(profile): generates an account-optimized EVAL expression
+function buildEval(profile) {
+  const p = profile || {};
+  // Pick engagement container: prefer specific span/li counts; fall back to aria-label scan
+  const engSel = p.socialSpans > 0 ? '"span[class*=social-count],li[class*=social-count],span[class*=reaction-count]"' :
+                 p.socialCounts > 0 ? '".social-details-social-counts [aria-label]"' :
+                 '"[aria-label]"';
+  // min card size: search result cards are smaller than full feed cards
+  const minCard = (p.articleCards > 0 || p.dataUrn > 0) ? 30 : 40;
+  const strategy = p._strategy || 'FEED_CLASSIC';
+
+  const lines = [
+    '(function(){',
+    'var posts=[],seen={};',
+    'function pe(s){if(!s)return 0;var x=String(s).toUpperCase().replace(/,/g,"");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
+    'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
+    // Engagement: tries priority container first, then falls back to all aria-labels, then buttons
+    'function getEng(el){var lk=0,cm=0;',
+    'try{Array.from(el.querySelectorAll(' + engSel + ')).forEach(function(x){var a=x.getAttribute("aria-label")||x.innerText||"";if(/[0-9]/.test(a)&&/(reaction|like|reacted)/i.test(a))lk=Math.max(lk,pe(a));if(/[0-9]/.test(a)&&/comment/i.test(a))cm=Math.max(cm,pe(a));});}catch(e){}',
+    'if(!lk&&!cm)try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){var a=x.getAttribute("aria-label")||"";if(/[0-9]/.test(a)&&/(reaction|like|reacted)/i.test(a))lk=Math.max(lk,pe(a));if(/[0-9]/.test(a)&&/comment/i.test(a))cm=Math.max(cm,pe(a));});}catch(e){}',
+    'if(!lk&&!cm)try{Array.from(el.querySelectorAll("button")).forEach(function(b){var t=(b.innerText||"").trim();if(/^[0-9]/.test(t)&&/(like|reaction)/i.test(t))lk=Math.max(lk,pe(t));if(/^[0-9]/.test(t)&&/comment/i.test(t))cm=Math.max(cm,pe(t));});}catch(e){}',
+    'return {likes:lk,comments:cm};}',
+    // Text extraction
+    'function getText(el){var txt="";var ss=["[dir=\\"ltr\\"]",".feed-shared-update-v2__description",".update-components-text",".break-words",".attributed-text-segment-list__content",".feed-shared-text",".feed-shared-inline-show-more-text"];ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length)txt=t;});}catch(e){}});if(txt.length<20)txt=(el.innerText||"").replace(/\\s+/g," ").trim().substring(0,3000);return txt;}',
+    'function getAuthor(el){var a=el.querySelector("a[href*=\\"/in/\\"]");return a?(a.innerText||"").trim().replace(/[\\r\\n].*/,"").substring(0,100):"Unknown";}',
+    'function xPost(urn,el,href){if(!el||seen[urn])return;seen[urn]=1;var eng=getEng(el);posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:getText(el).substring(0,3000),author:getAuthor(el),likes:eng.likes,comments:eng.comments});}',
+    'function card(el,urn){var c=el;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){xPost(urn,c,"");return;}}}',
+    // Method 1: feed/update and /posts/ href links
+    'try{Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).forEach(function(lnk){var urn=xUrn(lnk.href);if(!urn||seen[urn])return;var c=lnk;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){xPost(urn,c,lnk.href);break;}}});}catch(e){}',
+    // Method 2: data-urn attributes (SEARCH_MODERN primary)
+    'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
+    // Method 3 (SEARCH_DENSE): timestamp links as URN fallback
+    strategy === 'SEARCH_DENSE' ? 'try{Array.from(document.querySelectorAll("a[href*=activity-],time a[href]")).forEach(function(a){var urn=xUrn(a.href);if(!urn||seen[urn])return;var c=a;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){xPost(urn,c,a.href);break;}}});}catch(e){}' : '',
+    'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '"});',
+    '})()'
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+// scoreAndSelectStrategy(profile): pick best extraction approach
+function scoreAndSelectStrategy(p) {
+  const scores = {
+    FEED_CLASSIC:   (p.feedLinks * 15) + (p.feedCards * 12) + (p.engAria * 4) + (p.textFeed * 6),
+    SEARCH_MODERN:  (p.dataUrn * 15)   + (p.dataEntityUrn * 15) + (p.dataChameleon * 12) + (p.socialSpans * 8),
+    SEARCH_DENSE:   (p.articleCards * 10) + (p.feedLinks * 6)   + (p.dataUrn * 6) + (p.engButtons * 5),
+  };
+  // Guarantee a minimum so FEED_CLASSIC wins when all counts are 0
+  scores.FEED_CLASSIC = Math.max(scores.FEED_CLASSIC, 5);
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  return { strategy: sorted[0][0], scores };
+}
+
+// runDiagProbe(): full compatibility analysis — sets S.diagProfile and S.activeEval
+async function runDiagProbe() {
+  try {
+    const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
+      { expression: DIAG_PROBE, returnByValue: true, timeout: 8000 });
+    if (!r?.result?.value) { log('WARN', 'PROBE', 'Probe returned no value'); S.activeEval = buildEval(null); return; }
+    const profile = JSON.parse(r.result.value);
+    const { strategy, scores } = scoreAndSelectStrategy(profile);
+    profile._strategy = strategy;
+    S.diagProfile = profile;
+    S.activeEval = buildEval(profile);
+
+    // ── Structured Diagnostic Report ──────────────────────────────────────
+    const issues = [];
+    if (profile.feedLinks < 2 && profile.dataUrn < 2 && profile.dataChameleon < 2) issues.push('LOW_URN_SIGNALS: few post identifiers found — may capture fewer posts');
+    if (profile.engAria === 0 && profile.socialSpans === 0 && profile.engButtons === 0) issues.push('NO_ENGAGEMENT_ELEMENTS: engagement counts not visible in DOM');
+    if (profile.bodyLen < 2000) issues.push('LOW_BODY_TEXT: page may not be fully loaded');
+    if (!profile.sample) issues.push('NO_SAMPLE_POST: no post card detected at probe time');
+
+    const report = {
+      strategy, scores,
+      selectors: {
+        feedLinks: profile.feedLinks, dataUrn: profile.dataUrn,
+        dataEntityUrn: profile.dataEntityUrn, dataChameleon: profile.dataChameleon,
+        feedCards: profile.feedCards, articleCards: profile.articleCards,
+        socialSpans: profile.socialSpans, socialCounts: profile.socialCounts,
+        engAria: profile.engAria, engButtons: profile.engButtons,
+        textLtr: profile.textLtr, textBreak: profile.textBreak,
+      },
+      bodyLen: profile.bodyLen,
+      samplePost: profile.sample || '(none)',
+      issues: issues.length ? issues : ['none'],
+    };
+    log('INFO', 'PROBE', '=== NEXORA COMPATIBILITY REPORT ===');
+    log('INFO', 'PROBE', JSON.stringify(report, null, 2));
+    log('INFO', 'PROBE', '=== END REPORT — strategy: ' + strategy + ' ===');
+    broadcast('EXTENSION_LIVE_STATUS', { text: '🔬 Strategy: ' + strategy });
+  } catch (e) {
+    log('WARN', 'PROBE', 'Probe failed: ' + e.message + ' — using default EVAL');
+    S.activeEval = buildEval(null);
+  }
+}
+
 // ── CDP Eval Loop ────────────────────────────────────────────────────────
 
-// EVAL built as joined string array — avoids ALL backtick/escape-sequence ambiguity
+// Fallback EVAL (FEED_CLASSIC baseline — used if probe hasn't run yet)
 const EVAL = [
   '(function(){',
   'var posts=[],seen={};',
@@ -413,18 +529,19 @@ function stopEval() { if (S.evalTimer) { clearInterval(S.evalTimer); S.evalTimer
 
 async function runEval() {
   if (!S.attached || !S.tabId || S.state !== 'SCRAPING') return;
+  const expr = S.activeEval || EVAL;  // use probe-optimized EVAL if available
   try {
     const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
-      { expression: EVAL, returnByValue: true, timeout: 10000 });
+      { expression: expr, returnByValue: true, timeout: 10000 });
     // Log raw result on first few calls to diagnose issues
     if (S.store.size === 0) {
       const raw = r && r.result ? r.result.value : null;
       const exType = r && r.exceptionDetails ? JSON.stringify(r.exceptionDetails).substring(0,200) : 'none';
-      log('INFO', 'EVAL', 'Raw result type=' + (r&&r.result?r.result.type:'null') + ' exception=' + exType + ' valueLen=' + (raw?String(raw).length:0));
+      log('INFO', 'EVAL', 'strategy=' + (S.diagProfile?._strategy||'fallback') + ' type=' + (r&&r.result?r.result.type:'null') + ' exception=' + exType + ' valueLen=' + (raw?String(raw).length:0));
     }
     if (!r?.result?.value) return;
-    const { posts } = JSON.parse(r.result.value);
-    if (S.store.size === 0) log('INFO', 'EVAL', 'EVAL returned ' + (posts||[]).length + ' posts');
+    const { posts, strategy } = JSON.parse(r.result.value);
+    if (S.store.size === 0) log('INFO', 'EVAL', 'EVAL[' + (strategy||'?') + '] returned ' + (posts||[]).length + ' posts');
     let added = 0;
     for (const p of (posts || [])) {
       if (!p.urn) continue;
