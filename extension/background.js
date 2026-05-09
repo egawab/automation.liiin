@@ -449,7 +449,7 @@ function waitForTabLoad(tabId, maxMs = 25000) {
     function fn(id, info) {
       if (id !== tabId || info.status !== 'complete') return;
       chrome.tabs.onUpdated.removeListener(fn); clearTimeout(t);
-      setTimeout(resolve, 3000); // extra settle time for SPA
+      setTimeout(resolve, 5000); // extra settle time for LinkedIn SPA
     }
     chrome.tabs.onUpdated.addListener(fn);
   });
