@@ -527,49 +527,66 @@ function ingestBody(body) {
 
 // ── Persistence ──────────────────────────────────────────────────────────
 async function flushBatch() {
+  log('INFO', 'FLUSH', 'flushBatch called — batch=' + S.batch.length);
   if (!S.batch.length) return;
   const chunk = S.batch.splice(0, S.batch.length);
+  log('INFO', 'FLUSH', 'Flushing ' + chunk.length + ' posts to API...');
   try {
     await pushToAPI(chunk);
-  } catch (_) {
+  } catch (e) {
+    log('ERROR', 'FLUSH', 'flushBatch FAILED: ' + e.message + ' — ' + chunk.length + ' posts to retry');
     S.retryQueue.push(...chunk);
   }
 }
 
 async function flushAll() {
   stopEval();
-  await runEval();
-  // Final reconciliation: push the CURRENT enriched state of every store entry.
-  // This guarantees the API receives the most hydrated version of each post,
-  // even if enrichment happened after the initial batch flush.
-  for (const [, post] of S.store) {
-    S.batch.push({ ...post });
-  }
+  log('INFO', 'FLUSH', 'flushAll start — store=' + S.store.size + ' batch=' + S.batch.length + ' retry=' + S.retryQueue.length);
+  // Final reconciliation: re-push every store entry so API gets most hydrated version
+  for (const [, post] of S.store) { S.batch.push({ ...post }); }
+  log('INFO', 'FLUSH', 'flushAll after reconcile — batch=' + S.batch.length);
   await flushBatch();
   // Drain retry queue with backoff
   if (S.retryQueue.length > 0) {
+    log('WARN', 'FLUSH', 'Retrying ' + S.retryQueue.length + ' failed posts...');
     for (let attempt = 1; attempt <= 3; attempt++) {
       await sleep(attempt * 2000);
       const retry = S.retryQueue.splice(0, S.retryQueue.length);
-      try { await pushToAPI(retry); break; } catch (_) { S.retryQueue.push(...retry); }
+      try { await pushToAPI(retry); log('INFO', 'FLUSH', 'Retry attempt ' + attempt + ' succeeded'); break; }
+      catch (e) { log('WARN', 'FLUSH', 'Retry attempt ' + attempt + ' failed: ' + e.message); S.retryQueue.push(...retry); }
     }
   }
 }
 
 async function pushToAPI(posts) {
   if (!posts.length) return;
-  const resp = await fetch(`${S.dashboardUrl}/api/extension/results`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
-    body: JSON.stringify({ posts, keyword: S.kwQueue?.current || '', source: 'nexora_v6' })
-  });
-  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  const endpoint = S.dashboardUrl + '/api/extension/results';
+  log('INFO', 'API', 'POST ' + posts.length + ' posts | url=' + endpoint.substring(0,60) + ' | userId=' + (S.userId||'').substring(0,8) + '...');
+  let resp;
+  try {
+    resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
+      body: JSON.stringify({ posts, keyword: S.kwQueue?.current || '', source: 'nexora_v6' })
+    });
+  } catch (netErr) {
+    log('WARN', 'API', 'Network error: ' + netErr.message);
+    throw netErr;
+  }
+  log('INFO', 'API', 'Response: HTTP ' + resp.status + ' ' + resp.statusText);
+  if (!resp.ok) {
+    const errBody = await resp.text().catch(() => '(no body)');
+    const msg = 'HTTP ' + resp.status + ': ' + errBody.substring(0, 300);
+    log('WARN', 'API', 'API error: ' + msg);
+    throw new Error(msg);
+  }
   const data = await resp.json().catch(() => ({}));
   const n = data.savedCount ?? posts.length;
   S.totalSaved += n;
-  log('INFO', 'FLUSH', `Saved ${n}/${posts.length} total=${S.totalSaved}`);
-  broadcast('EXTENSION_LIVE_STATUS', { text: `📦 ${S.store.size} found | 💾 ${S.totalSaved} saved` });
+  log('INFO', 'FLUSH', 'Saved ' + n + '/' + posts.length + ' | total=' + S.totalSaved);
+  broadcast('EXTENSION_LIVE_STATUS', { text: '\u2705 Saved ' + S.totalSaved + ' posts' });
 }
+
 
 // ── Keyword Lifecycle ────────────────────────────────────────────────────
 async function finalizeKeyword() {
