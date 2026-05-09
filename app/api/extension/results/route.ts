@@ -84,49 +84,51 @@ export async function POST(req: Request) {
       const safeAuthor  = sanitize(post.author || 'Unknown', 100);
       const safePreview = sanitize(post.postText || post.preview || '', 5000);
 
-      // Use create + catch-P2002 pattern instead of upsert
-      // (upsert generates ON CONFLICT which fails on nullable unique columns — PG 42P10)
-      try {
-        await prisma.savedPost.create({
-          data: {
-            userId,
-            canonicalUrn: urn,
-            postUrl:      safeUrl,
-            postAuthor:   safeAuthor,
-            postPreview:  safePreview,
-            likes:        postLikes,
-            comments:     postComments,
-            keyword:      safeKeyword,
-            visited:      false,
-          },
-        });
-      } catch (createErr: any) {
-        if (createErr?.code === 'P2002') {
-          // Row already exists — update it with enriched data
-          await prisma.savedPost.updateMany({
-            where: { userId, canonicalUrn: urn },
+        let outcome: 'created' | 'updated' = 'created';
+        try {
+          await prisma.savedPost.create({
             data: {
-              ...(safeUrl.length > 0           && { postUrl: safeUrl }),
-              ...(postLikes    != null          && { likes: postLikes }),
-              ...(postComments != null          && { comments: postComments }),
-              ...(safePreview.length > 20       && { postPreview: safePreview }),
-              ...(safeAuthor && safeAuthor !== 'Unknown' && { postAuthor: safeAuthor }),
-              savedAt: new Date(),
+              userId,
+              canonicalUrn: urn,
+              postUrl:      safeUrl,
+              postAuthor:   safeAuthor,
+              postPreview:  safePreview,
+              likes:        postLikes,
+              comments:     postComments,
+              keyword:      safeKeyword,
+              visited:      false,
             },
           });
-        } else {
-          throw createErr;
+        } catch (createErr: any) {
+          if (createErr?.code === 'P2002') {
+            outcome = 'updated';
+            await prisma.savedPost.updateMany({
+              where: { userId, canonicalUrn: urn },
+              data: {
+                ...(safeUrl.length > 0           && { postUrl: safeUrl }),
+                ...(postLikes    != null          && { likes: postLikes }),
+                ...(postComments != null          && { comments: postComments }),
+                ...(safePreview.length > 20       && { postPreview: safePreview }),
+                ...(safeAuthor && safeAuthor !== 'Unknown' && { postAuthor: safeAuthor }),
+                savedAt: new Date(),
+              },
+            });
+          } else {
+            throw createErr;
+          }
         }
-      }
-      return 'saved';
+        return outcome;
     }));
 
+    let createdCount = 0, updatedCount = 0;
     for (const r of results) {
       if (r.status === 'rejected') {
         errors.push(r.reason?.message || String(r.reason));
         console.error('[API/results] Prisma error:', r.reason?.message);
-      } else if (r.value === 'saved') {
-        savedCount++;
+      } else if (r.value === 'created') {
+        createdCount++;
+      } else if (r.value === 'updated') {
+        updatedCount++;
       }
     }
 
@@ -136,10 +138,12 @@ export async function POST(req: Request) {
 
     return setCorsHeaders(NextResponse.json({
       success: true,
-      savedCount,
+      savedCount: createdCount,   // legacy field — new rows only
+      createdCount,               // new posts inserted
+      updatedCount,               // existing posts enriched
       skippedCount: results.filter(r => r.status === 'fulfilled' && r.value?.startsWith('skipped')).length,
       errorCount: errors.length,
-      message: `Processed ${posts.length} posts. ${savedCount} saved.`,
+      message: `Processed ${posts.length}. Created: ${createdCount}, Updated: ${updatedCount}.`,
     }, { status: 200 }));
 
   } catch (error: any) {

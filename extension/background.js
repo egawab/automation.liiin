@@ -98,8 +98,9 @@ async function startSession(msg, port) {
   setState('INITIALIZING');
   S.sessionId = Math.random().toString(36).slice(2);
   S.totalSaved = 0;
-  S.store.clear(); // Clear URN store for new session
+  S.store.clear();
   S.batch = []; S.retryQueue = [];
+  S.flushedUrns = new Set(); // track which URNs have already been sent to avoid double-counting
 
   const cfg = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
   S.dashboardUrl = msg.dashboardUrl || cfg.dashboardUrl || '';
@@ -548,9 +549,11 @@ async function flushBatch() {
 
 async function flushAll() {
   stopEval();
-  log('INFO', 'FLUSH', 'flushAll start — store=' + S.store.size + ' batch=' + S.batch.length + ' retry=' + S.retryQueue.length);
-  // Final reconciliation: re-push every store entry so API gets most hydrated version
-  for (const [, post] of S.store) { S.batch.push({ ...post }); }
+  log('INFO', 'FLUSH', 'flushAll start — store=' + S.store.size + ' batch=' + S.batch.length + ' retry=' + S.retryQueue.length + ' flushed=' + S.flushedUrns.size);
+  // Only push posts that haven’t been flushed yet (new enrichments or network-only posts)
+  for (const [urn, post] of S.store) {
+    if (!S.flushedUrns.has(urn)) S.batch.push({ ...post });
+  }
   log('INFO', 'FLUSH', 'flushAll after reconcile — batch=' + S.batch.length);
   await flushBatch();
   // Drain retry queue with backoff
@@ -588,9 +591,12 @@ async function pushToAPI(posts) {
     throw new Error(msg);
   }
   const data = await resp.json().catch(() => ({}));
-  const n = data.savedCount ?? posts.length;
-  S.totalSaved += n;
-  log('INFO', 'FLUSH', 'Saved ' + n + '/' + posts.length + ' | total=' + S.totalSaved);
+  // Use createdCount (new rows only) so re-flushes of enriched posts don't inflate totalSaved
+  const created = data.createdCount ?? data.savedCount ?? posts.length;
+  S.totalSaved += created;
+  // Mark these URNs as flushed so flushAll won't re-send them
+  for (const p of posts) { if (p.canonicalUrn) S.flushedUrns.add(p.canonicalUrn); }
+  log('INFO', 'FLUSH', 'Saved ' + created + '/' + posts.length + ' new | total=' + S.totalSaved);
   broadcast('EXTENSION_LIVE_STATUS', { text: '\u2705 Saved ' + S.totalSaved + ' posts' });
 }
 
