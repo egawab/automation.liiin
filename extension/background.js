@@ -153,7 +153,14 @@ async function waitForPageReady(maxMs) {
     }
     await sleep(600);
   }
-  log('WARN', 'READY', 'Page readiness timeout — proceeding anyway');
+  // Timeout — diagnose what's on the page
+  const diagTitle = await cdpExec('document.title');
+  const diagText  = await cdpExec('(document.body&&document.body.innerText||"").replace(/\\s+/g," ").trim().substring(0,300)');
+  const diagH     = await cdpExec('document.body ? document.body.scrollHeight : -1');
+  const diagVh    = await cdpExec('window.innerHeight');
+  log('WARN', 'READY', 'Page readiness timeout. title="' + diagTitle + '" h=' + diagH + ' vh=' + diagVh);
+  log('WARN', 'READY', 'Page text: ' + diagText);
+  broadcast('EXTENSION_LIVE_STATUS', { text: 'WARN: page did not load results. title=' + diagTitle });
   return null;
 }
 
@@ -162,8 +169,17 @@ async function cdpScrollEngine(kw) {
   let step = 0, noProgress = 0, lastY = -1, scrolledAtAll = false;
   let stopReason = 'max_steps';
 
-  await waitForPageReady(12000);
+  const ready = await waitForPageReady(12000);
   broadcast('EXTENSION_LIVE_STATUS', { text: 'Scrolling: "' + kw + '"' });
+
+  // Early exit: page too small — clearly not search results
+  const initH = await cdpExec('document.body ? document.body.scrollHeight : 0');
+  const initVh = await cdpExec('window.innerHeight') || 900;
+  if (!ready && initH < initVh * 1.2) {
+    log('WARN', 'SCROLL', 'ABORT: page h=' + initH + ' too small for results (vh=' + initVh + '). Likely login/checkpoint/no-results page. Skipping keyword.');
+    broadcast('EXTENSION_LIVE_STATUS', { text: 'Skip: page empty (h=' + initH + ') — check LinkedIn login on account tab' });
+    return 'empty_page';
+  }
 
   const CLICK_NEXT = '(function(){var ss=[".artdeco-pagination__button--next","button[aria-label=\'Next\']","button[aria-label=\'Go to next page\']"];for(var i=0;i<ss.length;i++){var b=document.querySelector(ss[i]);if(b&&!b.disabled){b.click();return true;}}var bs=Array.from(document.querySelectorAll("button,[role=\'button\']"));var m=bs.find(function(b){return /show more|load more|see more/i.test(b.innerText||"");});if(m&&!m.disabled){m.click();return true;}return false;})()';
 
@@ -252,13 +268,11 @@ async function runKeyword() {
     try { await withTimeout(chrome.debugger.sendCommand({tabId:S.tabId},'Runtime.enable'), 4000, 'Runtime.enable'); log('INFO','CDP','Runtime.enable OK'); } catch(ex){ log('WARN','CDP','Runtime.enable: '+ex.message); }
   }
 
-  // content.js: optional network bridge only — failure does not block CDP scroll
-  try {
-    await withTimeout(chrome.scripting.executeScript({target:{tabId:S.tabId},files:['content.js']}), 5000, 'executeScript');
-    log('INFO','INJECT','content.js injected');
-  } catch(ex) {
-    log('WARN','INJECT','content.js skipped: '+ex.message);
-  }
+  // content.js: fire-and-forget network bridge — do NOT await (it's a long-running async IIFE)
+  chrome.scripting.executeScript({target:{tabId:S.tabId},files:['content.js']})
+    .then(function(){ log('INFO','INJECT','content.js injected'); })
+    .catch(function(ex){ log('WARN','INJECT','content.js skipped: '+ex.message); });
+  await sleep(300); // brief pause so content.js registers its listeners
 
   log('INFO','KW','Entering SCRAPING');
   setState('SCRAPING');
