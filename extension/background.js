@@ -140,44 +140,92 @@ async function cdpExec(expr) {
   } catch (_) { return null; }
 }
 
+// Finds LinkedIn's actual scrollable container (body:overflow:hidden, content scrolls inside)
+const FIND_SCROLL_EL = `(function(){
+  var candidates = [
+    document.querySelector('.scaffold-layout__main'),
+    document.querySelector('.scaffold-layout-container__main'),
+    document.querySelector('main'),
+    document.querySelector('[class*="scaffold"][class*="main"]'),
+    document.querySelector('.application-outlet'),
+    document.scrollingElement,
+    document.documentElement
+  ];
+  for(var i=0;i<candidates.length;i++){
+    var el=candidates[i];
+    if(el && el.scrollHeight > el.clientHeight+100){return JSON.stringify({sh:el.scrollHeight,ch:el.clientHeight,st:el.scrollTop,sel:el.tagName+(el.className?'.'+el.className.trim().split(' ')[0]:'')});}
+  }
+  return JSON.stringify({sh:document.body.scrollHeight,ch:window.innerHeight,st:window.scrollY,sel:'body-fallback'});
+})()`;
+
+const DO_SCROLL = `(function(){
+  var candidates = [
+    document.querySelector('.scaffold-layout__main'),
+    document.querySelector('.scaffold-layout-container__main'),
+    document.querySelector('main'),
+    document.querySelector('[class*="scaffold"][class*="main"]'),
+    document.querySelector('.application-outlet'),
+    document.scrollingElement,
+    document.documentElement
+  ];
+  for(var i=0;i<candidates.length;i++){
+    var el=candidates[i];
+    if(el && el.scrollHeight > el.clientHeight+100){
+      el.scrollBy({top:Math.floor(el.clientHeight*0.85),behavior:'smooth'});
+      el.dispatchEvent(new Event('scroll',{bubbles:true}));
+      window.dispatchEvent(new Event('scroll',{bubbles:true}));
+      return el.scrollTop;
+    }
+  }
+  window.scrollBy({top:Math.floor(window.innerHeight*0.85),behavior:'smooth'});
+  return window.scrollY;
+})()`;
+
 async function waitForPageReady(maxMs) {
   maxMs = maxMs || 15000;
   const start = Date.now();
   while (Date.now() - start < maxMs) {
-    const h  = await cdpExec('document.body ? document.body.scrollHeight : 0');
-    const vh = await cdpExec('window.innerHeight');
-    const rs = await cdpExec('document.readyState');
-    if (rs === 'complete' && h > 0 && vh > 0 && h > vh * 1.3) {
-      log('INFO', 'READY', 'Page ready h=' + h + ' vh=' + vh + ' in ' + (Date.now()-start) + 'ms');
-      return { height: h, vh: vh };
+    const raw = await cdpExec(FIND_SCROLL_EL);
+    const rs  = await cdpExec('document.readyState');
+    if (raw) {
+      try {
+        const m = JSON.parse(raw);
+        if (rs === 'complete' && m.sh > m.ch * 1.3) {
+          log('INFO', 'READY', 'Page ready via ' + m.sel + ' sh=' + m.sh + ' ch=' + m.ch + ' in ' + (Date.now()-start) + 'ms');
+          return m;
+        }
+      } catch(_) {}
     }
     await sleep(600);
   }
-  // Timeout — diagnose what's on the page
+  // Timeout — diagnose
+  const raw2 = await cdpExec(FIND_SCROLL_EL);
   const diagTitle = await cdpExec('document.title');
   const diagText  = await cdpExec('(document.body&&document.body.innerText||"").replace(/\\s+/g," ").trim().substring(0,300)');
-  const diagH     = await cdpExec('document.body ? document.body.scrollHeight : -1');
-  const diagVh    = await cdpExec('window.innerHeight');
-  log('WARN', 'READY', 'Page readiness timeout. title="' + diagTitle + '" h=' + diagH + ' vh=' + diagVh);
-  log('WARN', 'READY', 'Page text: ' + diagText);
-  broadcast('EXTENSION_LIVE_STATUS', { text: 'WARN: page did not load results. title=' + diagTitle });
+  log('WARN', 'READY', 'Timeout. title="' + diagTitle + '" metrics=' + raw2);
+  log('WARN', 'READY', 'Page text sample: ' + diagText);
+  broadcast('EXTENSION_LIVE_STATUS', { text: 'WARN: page slow — title=' + diagTitle });
   return null;
 }
 
 async function cdpScrollEngine(kw) {
   const MAX_STEPS = 55, MIN_STEPS = 6, NO_PROG_MAX = 5;
-  let step = 0, noProgress = 0, lastY = -1, scrolledAtAll = false;
+  let step = 0, noProgress = 0, lastSt = -1, scrolledAtAll = false;
   let stopReason = 'max_steps';
 
-  const ready = await waitForPageReady(12000);
+  const ready = await waitForPageReady(14000);
   broadcast('EXTENSION_LIVE_STATUS', { text: 'Scrolling: "' + kw + '"' });
 
-  // Early exit: page too small — clearly not search results
-  const initH = await cdpExec('document.body ? document.body.scrollHeight : 0');
-  const initVh = await cdpExec('window.innerHeight') || 900;
-  if (!ready && initH < initVh * 1.2) {
-    log('WARN', 'SCROLL', 'ABORT: page h=' + initH + ' too small for results (vh=' + initVh + '). Likely login/checkpoint/no-results page. Skipping keyword.');
-    broadcast('EXTENSION_LIVE_STATUS', { text: 'Skip: page empty (h=' + initH + ') — check LinkedIn login on account tab' });
+  // Check scroll container metrics
+  const initRaw = await cdpExec(FIND_SCROLL_EL);
+  let initMetrics = null;
+  try { initMetrics = initRaw ? JSON.parse(initRaw) : null; } catch(_) {}
+  if (initMetrics) log('INFO', 'SCROLL', 'Container: ' + initMetrics.sel + ' sh=' + initMetrics.sh + ' ch=' + initMetrics.ch);
+
+  // Early exit only if clearly empty (no container found with content)
+  if (!ready && initMetrics && initMetrics.sh < initMetrics.ch * 1.2) {
+    log('WARN', 'SCROLL', 'ABORT: no scrollable content found. Container=' + JSON.stringify(initMetrics));
+    broadcast('EXTENSION_LIVE_STATUS', { text: 'Skip: page has no content — check LinkedIn tab login' });
     return 'empty_page';
   }
 
@@ -185,23 +233,23 @@ async function cdpScrollEngine(kw) {
 
   while (step < MAX_STEPS && S.state === 'SCRAPING') {
     step++;
-    await cdpExec('window.scrollBy({top:Math.floor(window.innerHeight*0.85),behavior:"smooth"});window.dispatchEvent(new Event("scroll",{bubbles:true}));');
+    await cdpExec(DO_SCROLL);
     await sleep(2600 + Math.floor(Math.random() * 1200));
 
-    const y  = (await cdpExec('window.scrollY')) || 0;
-    const h  = (await cdpExec('document.body.scrollHeight')) || 0;
-    const vh = (await cdpExec('window.innerHeight')) || 900;
-    const currentY = Math.round(y);
+    const raw = await cdpExec(FIND_SCROLL_EL);
+    let m = { sh: 0, ch: 900, st: 0 };
+    try { if (raw) m = JSON.parse(raw); } catch(_) {}
+    const currentSt = Math.round(m.st);
 
-    if (Math.abs(currentY - lastY) > 60) { scrolledAtAll = true; noProgress = 0; lastY = currentY; }
+    if (Math.abs(currentSt - lastSt) > 60) { scrolledAtAll = true; noProgress = 0; lastSt = currentSt; }
     else { noProgress++; }
 
-    log('INFO', 'SCROLL', 'step=' + step + ' y=' + currentY + ' h=' + h + ' noProg=' + noProgress);
+    log('INFO', 'SCROLL', 'step=' + step + ' scrollTop=' + currentSt + ' sh=' + m.sh + ' ch=' + m.ch + ' noProg=' + noProgress);
     broadcast('EXTENSION_LIVE_STATUS', { text: S.store.size + ' found | step ' + step + '/' + MAX_STEPS });
 
     await runEval();
 
-    const atBottom = h > vh * 1.3 && (vh + currentY) >= h - 600;
+    const atBottom = m.sh > m.ch * 1.3 && (m.ch + currentSt) >= m.sh - 600;
 
     if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom)) {
       const clicked = await cdpExec(CLICK_NEXT);
