@@ -212,7 +212,12 @@ async function runKeyword() {
   if (!kw) { finalizeSession(); return; }
   log('INFO', 'KW', 'Starting keyword: ' + kw);
 
-  const url = 'https://www.linkedin.com/sea  setState('ATTACHING');
+  const url = 'https://www.linkedin.com/search/results/content/?keywords=' + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
+  setState('NAVIGATING');
+  await chrome.tabs.update(S.tabId, { url: url, active: true });
+  await waitForTabLoad(S.tabId);
+
+  setState('ATTACHING');
 
   // Verify tab is on LinkedIn before attaching
   var tabInfo = null;
@@ -221,7 +226,7 @@ async function runKeyword() {
     var tabUrl = tabInfo.url || '';
     log('INFO','TAB','URL before attach: ' + tabUrl.substring(0,80));
     if (tabUrl.length > 0 && !tabUrl.includes('linkedin.com') && !tabUrl.startsWith('about:') && !tabUrl.startsWith('chrome')) {
-      log('WARN','TAB','Tab not on LinkedIn ('+tabUrl+') — finalizing keyword early');
+      log('WARN','TAB','Tab not on LinkedIn ('+tabUrl+') — aborting keyword');
       finalizeKeyword().catch(function(ex2){ log('ERROR','KW','finalizeKeyword:'+ex2.message); });
       return;
     }
@@ -247,33 +252,25 @@ async function runKeyword() {
     try { await withTimeout(chrome.debugger.sendCommand({tabId:S.tabId},'Runtime.enable'), 4000, 'Runtime.enable'); log('INFO','CDP','Runtime.enable OK'); } catch(ex){ log('WARN','CDP','Runtime.enable: '+ex.message); }
   }
 
-  // content.js: optional network bridge — will not block scroll if it fails
+  // content.js: optional network bridge only — failure does not block CDP scroll
   try {
     await withTimeout(chrome.scripting.executeScript({target:{tabId:S.tabId},files:['content.js']}), 5000, 'executeScript');
     log('INFO','INJECT','content.js injected');
   } catch(ex) {
-    log('WARN','INJECT','content.js skipped: '+ex.message+' (CDP scroll unaffected)');
+    log('WARN','INJECT','content.js skipped: '+ex.message);
   }
 
-  log('INFO','KW','All attach steps done — entering SCRAPING');
-  setState('SCRAPING');
-s'] });
-    log('INFO', 'INJECT', 'content.js injected as network bridge');
-  } catch (e) {
-    log('WARN', 'INJECT', 'content.js inject failed (CDP network still active): ' + e.message);
-  }
-
+  log('INFO','KW','Entering SCRAPING');
   setState('SCRAPING');
   await cdpScrollEngine(kw);
 
   if (S.state === 'SCRAPING') {
-    finalizeKeyword().catch(function(e) { log('ERROR', 'KW', 'finalizeKeyword error: ' + e.message); });
+    finalizeKeyword().catch(function(e) { log('ERROR', 'KW', 'finalizeKeyword: ' + e.message); });
   }
 }
 
-
-
 // ── CDP Eval Loop ────────────────────────────────────────────────────────
+
 const EVAL = `(function(){
   var posts=[],seen={};
   function pe(s){if(!s)return null;var x=String(s).toUpperCase().replace(/,/g,'');var n=parseFloat((x.match(/[0-9.]+/)||[])[0]);if(isNaN(n))return null;if(x.indexOf('K')>-1)n*=1000;if(x.indexOf('M')>-1)n*=1000000;return Math.floor(n);}
