@@ -235,7 +235,7 @@ async function cdpScrollEngine(kw) {
   broadcast('EXTENSION_LIVE_STATUS', { text: 'Diag: ' + diag });
   const CLICK_NEXT = '(function(){var ss=[".artdeco-pagination__button--next","button[aria-label=\'Next\']","button[aria-label=\'Go to next page\']"];for(var i=0;i<ss.length;i++){var b=document.querySelector(ss[i]);if(b&&!b.disabled){b.click();return true;}}var bs=Array.from(document.querySelectorAll("button,[role=\'button\']"));var m=bs.find(function(b){return /show more|load more|see more/i.test(b.innerText||"");});if(m&&!m.disabled){m.click();return true;}return false;})()';
 
-  while (step < MAX_STEPS && S.state === 'SCRAPING') {
+  while (step < MAX_STEPS && S.state === 'SCRAPING' && S.tabId) {
     step++;
     await cdpExec(DO_SCROLL);
     await sleep(2600 + Math.floor(Math.random() * 1200));
@@ -243,6 +243,12 @@ async function cdpScrollEngine(kw) {
     const raw = await cdpExec(FIND_SCROLL_EL);
     let m = { sh: 0, ch: 900, st: 0 };
     try { if (raw) m = JSON.parse(raw); } catch(_) {}
+
+    // Hard abort if tab died (sh=0 means renderer is gone)
+    if (!S.tabId || (m.sh === 0 && step > 1)) {
+      log('WARN', 'SCROLL', 'Tab gone mid-scroll — aborting at step ' + step);
+      stopReason = 'tab_removed'; break;
+    }
     const currentSt = Math.round(m.st);
 
     if (Math.abs(currentSt - lastSt) > 60) { scrolledAtAll = true; noProgress = 0; lastSt = currentSt; }
@@ -316,7 +322,8 @@ async function runKeyword() {
   }
 
   if (S.attached) {
-    try { await withTimeout(chrome.debugger.sendCommand({tabId:S.tabId},'Network.enable'), 4000, 'Network.enable'); log('INFO','CDP','Network.enable OK'); } catch(ex){ log('WARN','CDP','Network.enable: '+ex.message); }
+    // Skip Network.enable — too heavy on LinkedIn renderer (causes Aw Snap crashes).
+    // CDP is only used for Runtime.evaluate (scroll + EVAL). Network capture via content.js only.
     try { await withTimeout(chrome.debugger.sendCommand({tabId:S.tabId},'Runtime.enable'), 4000, 'Runtime.enable'); log('INFO','CDP','Runtime.enable OK'); } catch(ex){ log('WARN','CDP','Runtime.enable: '+ex.message); }
   }
 
@@ -619,7 +626,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId !== S.tabId) return;
   log('WARN', 'TAB', 'Tab removed during session', { state: S.state });
   if (S.state === 'IDLE' || S.state === 'DONE') return;
-  stopEval(); S.attached = false; S.tabId = null;
+  stopEval();
+  S.attached = false;
+  S.tabId = null;  // ← scroll loop checks this to abort immediately
   flushAll().finally(() => setState('IDLE'));
 });
 
