@@ -86,6 +86,13 @@ chrome.runtime.onConnect.addListener((port) => {
 
 function safePortMsg(port, msg) { if (!port) return; try { port.postMessage(msg); } catch (_) {} }
 
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise(function(_, rej) { setTimeout(function() { rej(new Error(label + ' timed out after ' + ms + 'ms')); }, ms); })
+  ]);
+}
+
 // ── Start Session ────────────────────────────────────────────────────────
 async function startSession(msg, port) {
   setState('INITIALIZING');
@@ -205,34 +212,52 @@ async function runKeyword() {
   if (!kw) { finalizeSession(); return; }
   log('INFO', 'KW', 'Starting keyword: ' + kw);
 
-  const url = 'https://www.linkedin.com/search/results/content/?keywords=' + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
-  setState('NAVIGATING');
-  await chrome.tabs.update(S.tabId, { url: url, active: true });
-  await waitForTabLoad(S.tabId);
+  const url = 'https://www.linkedin.com/sea  setState('ATTACHING');
 
-  setState('ATTACHING');
-  if (!S.attached) {
-    try {
-      await chrome.debugger.attach({ tabId: S.tabId }, '1.3');
-      S.attached = true;
-      log('INFO', 'CDP', 'Debugger attached');
-    } catch (e) {
-      if (e.message && e.message.toLowerCase().includes('already')) {
-        S.attached = true;
-        log('INFO', 'CDP', 'Debugger already attached');
-      } else {
-        log('WARN', 'CDP', 'Attach failed: ' + e.message);
-      }
+  // Verify tab is on LinkedIn before attaching
+  var tabInfo = null;
+  try { tabInfo = await withTimeout(chrome.tabs.get(S.tabId), 3000, 'tabs.get'); } catch(ex) { log('WARN','TAB','tabs.get: '+ex.message); }
+  if (tabInfo) {
+    var tabUrl = tabInfo.url || '';
+    log('INFO','TAB','URL before attach: ' + tabUrl.substring(0,80));
+    if (tabUrl.length > 0 && !tabUrl.includes('linkedin.com') && !tabUrl.startsWith('about:') && !tabUrl.startsWith('chrome')) {
+      log('WARN','TAB','Tab not on LinkedIn ('+tabUrl+') — finalizing keyword early');
+      finalizeKeyword().catch(function(ex2){ log('ERROR','KW','finalizeKeyword:'+ex2.message); });
+      return;
     }
   }
-  if (S.attached) {
-    try { await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Network.enable'); } catch (_) {}
-    try { await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.enable'); } catch (_) {}
+
+  // Attach debugger with hard timeout
+  if (!S.attached) {
+    try {
+      await withTimeout(chrome.debugger.attach({tabId:S.tabId},'1.3'), 6000, 'debugger.attach');
+      S.attached = true;
+      log('INFO','CDP','Debugger attached OK');
+    } catch(ex) {
+      var em = ex.message || '';
+      if (em.includes('already') || em.includes('Another')) { S.attached = true; log('INFO','CDP','Already attached'); }
+      else { log('WARN','CDP','Attach issue: '+em+' — proceeding without debugger'); }
+    }
+  } else {
+    log('INFO','CDP','Re-using existing debugger attachment');
   }
 
-  // content.js is optional — only for network bridge, NOT for scrolling
+  if (S.attached) {
+    try { await withTimeout(chrome.debugger.sendCommand({tabId:S.tabId},'Network.enable'), 4000, 'Network.enable'); log('INFO','CDP','Network.enable OK'); } catch(ex){ log('WARN','CDP','Network.enable: '+ex.message); }
+    try { await withTimeout(chrome.debugger.sendCommand({tabId:S.tabId},'Runtime.enable'), 4000, 'Runtime.enable'); log('INFO','CDP','Runtime.enable OK'); } catch(ex){ log('WARN','CDP','Runtime.enable: '+ex.message); }
+  }
+
+  // content.js: optional network bridge — will not block scroll if it fails
   try {
-    await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] });
+    await withTimeout(chrome.scripting.executeScript({target:{tabId:S.tabId},files:['content.js']}), 5000, 'executeScript');
+    log('INFO','INJECT','content.js injected');
+  } catch(ex) {
+    log('WARN','INJECT','content.js skipped: '+ex.message+' (CDP scroll unaffected)');
+  }
+
+  log('INFO','KW','All attach steps done — entering SCRAPING');
+  setState('SCRAPING');
+s'] });
     log('INFO', 'INJECT', 'content.js injected as network bridge');
   } catch (e) {
     log('WARN', 'INJECT', 'content.js inject failed (CDP network still active): ' + e.message);
