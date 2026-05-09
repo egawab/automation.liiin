@@ -337,27 +337,32 @@ async function runKeyword() {
 
 // ── CDP Eval Loop ────────────────────────────────────────────────────────
 
-const EVAL = `(function(){
-  var posts=[],seen={};
-  function pe(s){if(!s)return null;var x=String(s).toUpperCase().replace(/,/g,'');var n=parseFloat((x.match(/[0-9.]+/)||[])[0]);if(isNaN(n))return null;if(x.indexOf('K')>-1)n*=1000;if(x.indexOf('M')>-1)n*=1000000;return Math.floor(n);}
-  function extractUrn(s){if(!s)return '';var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return 'urn:li:'+m[1]+':'+m[2];var p2=String(s).match(/activity-([0-9]{10,25})/i);if(p2)return 'urn:li:activity:'+p2[1];return '';}
-  function extractPost(urn,container,href){
-    if(!container||seen[urn])return;seen[urn]=1;
-    var ae=container.querySelector('a[href*="/in/"]');
-    var author=ae?(ae.innerText||'').trim().split('\n')[0].substring(0,100):'';
-    var txt='';
-    var sels=['[dir="ltr"]','.feed-shared-update-v2__description','.update-components-text','.break-words','.feed-shared-text','.attributed-text-segment-list__content','.feed-shared-inline-show-more-text','.feed-shared-update-v2__commentary'];
-    sels.forEach(function(sel){try{Array.from(container.querySelectorAll(sel)).forEach(function(d){var t=(d.innerText||'').trim();if(t.length>txt.length)txt=t;});}catch(e){}});
-    if(txt.length<20)txt=(container.innerText||'').replace(/\s+/g,' ').trim().substring(0,3000);
-    var likes=null,comments=null;
-    try{Array.from(container.querySelectorAll('[aria-label]')).forEach(function(el){var l=el.getAttribute('aria-label')||'';if(/[0-9]/.test(l)&&/(reaction|like)/i.test(l)&&likes===null)likes=pe(l);if(/[0-9]/.test(l)&&/comment/i.test(l)&&comments===null)comments=pe(l);});}catch(e){}
-    posts.push({urn:urn,url:href||('https://www.linkedin.com/feed/update/'+urn),text:txt.substring(0,3000),author:author,likes:likes,comments:comments});
-  }
-  function findCard(el,urn){var c=el;for(var i=0;i<20;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||'').trim().length;if(l>30&&l<20000){extractPost(urn,c,'');return;}}}
-  try{Array.from(document.querySelectorAll('a[href]')).filter(function(a){return a.href&&(a.href.indexOf('feed/update/urn:li:')>-1||a.href.indexOf('/posts/')>-1);}).forEach(function(link){var urn=extractUrn(link.href);if(!urn||seen[urn])return;var c=link;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||'').trim().length;if(l>30&&l<20000){extractPost(urn,c,link.href);break;}}});}catch(e){}
-  try{['data-urn','data-activity-urn','data-chameleon-result-urn','data-id'].forEach(function(attr){Array.from(document.querySelectorAll('['+attr+']')).forEach(function(el){var urn=extractUrn(el.getAttribute(attr)||'');if(!urn||seen[urn])return;findCard(el,urn);});});}catch(e){}
-  return JSON.stringify({posts:posts,count:posts.length});
-})()`;
+// EVAL built as joined string array — avoids ALL backtick/escape-sequence ambiguity
+const EVAL = [
+  '(function(){',
+  'var posts=[],seen={};',
+  'function pe(s){if(!s)return null;var x=String(s).toUpperCase().replace(/,/g,"");var n=parseFloat((x.match(/[0-9.]+/)||[])[0]);if(isNaN(n))return null;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
+  'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
+  'function xPost(urn,el,href){',
+  '  if(!el||seen[urn])return;seen[urn]=1;',
+  '  var ae=el.querySelector("a[href*=\\"/in/\\"]");',
+  '  var author=ae?(ae.innerText||"").trim().replace(/[\\r\\n].*/,"").substring(0,100):"";',
+  '  var txt="";',
+  '  var ss=["[dir=\\"ltr\\"]",".feed-shared-update-v2__description",".update-components-text",".break-words",".feed-shared-text",".attributed-text-segment-list__content",".feed-shared-inline-show-more-text"];',
+  '  ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length)txt=t;});}catch(e){}});',
+  '  if(txt.length<20)txt=(el.innerText||"").replace(/\\s+/g," ").trim().substring(0,3000);',
+  '  var lk=null,cm=null;',
+  '  try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){var a=x.getAttribute("aria-label")||"";if(/[0-9]/.test(a)&&/(reaction|like)/i.test(a)&&lk===null)lk=pe(a);if(/[0-9]/.test(a)&&/comment/i.test(a)&&cm===null)cm=pe(a);});}catch(e){}',
+  '  posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:txt.substring(0,3000),author:author,likes:lk,comments:cm});',
+  '}',
+  'function card(el,urn){var c=el;for(var i=0;i<20;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>40&&l<20000){xPost(urn,c,"");return;}}}',
+  // Method 1: href links
+  'try{Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).forEach(function(lnk){var urn=xUrn(lnk.href);if(!urn||seen[urn])return;var c=lnk;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>40&&l<20000){xPost(urn,c,lnk.href);break;}}});}catch(e){}',
+  // Method 2: data-urn attributes
+  'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
+  'return JSON.stringify({posts:posts,count:posts.length});',
+  '})()'
+].join('\n');
 
 
 function startEval() {
