@@ -120,15 +120,94 @@ async function stopSession() {
 }
 
 // ── Keyword Execution ────────────────────────────────────────────────────
+// CDP SCROLL ENGINE — replaces content.js scroll dependency
+// Injected into background.js via build script
+
+async function cdpExec(expr) {
+  if (!S.attached || !S.tabId) return null;
+  try {
+    const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
+      { expression: expr, returnByValue: true, awaitPromise: false, timeout: 8000 });
+    if (r && r.result && r.result.value !== undefined) return r.result.value;
+    return null;
+  } catch (_) { return null; }
+}
+
+async function waitForPageReady(maxMs) {
+  maxMs = maxMs || 15000;
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const h  = await cdpExec('document.body ? document.body.scrollHeight : 0');
+    const vh = await cdpExec('window.innerHeight');
+    const rs = await cdpExec('document.readyState');
+    if (rs === 'complete' && h > 0 && vh > 0 && h > vh * 1.3) {
+      log('INFO', 'READY', 'Page ready h=' + h + ' vh=' + vh + ' in ' + (Date.now()-start) + 'ms');
+      return { height: h, vh: vh };
+    }
+    await sleep(600);
+  }
+  log('WARN', 'READY', 'Page readiness timeout — proceeding anyway');
+  return null;
+}
+
+async function cdpScrollEngine(kw) {
+  const MAX_STEPS = 55, MIN_STEPS = 6, NO_PROG_MAX = 5;
+  let step = 0, noProgress = 0, lastY = -1, scrolledAtAll = false;
+  let stopReason = 'max_steps';
+
+  await waitForPageReady(12000);
+  broadcast('EXTENSION_LIVE_STATUS', { text: 'Scrolling: "' + kw + '"' });
+
+  const CLICK_NEXT = '(function(){var ss=[".artdeco-pagination__button--next","button[aria-label=\'Next\']","button[aria-label=\'Go to next page\']"];for(var i=0;i<ss.length;i++){var b=document.querySelector(ss[i]);if(b&&!b.disabled){b.click();return true;}}var bs=Array.from(document.querySelectorAll("button,[role=\'button\']"));var m=bs.find(function(b){return /show more|load more|see more/i.test(b.innerText||"");});if(m&&!m.disabled){m.click();return true;}return false;})()';
+
+  while (step < MAX_STEPS && S.state === 'SCRAPING') {
+    step++;
+    await cdpExec('window.scrollBy({top:Math.floor(window.innerHeight*0.85),behavior:"smooth"});window.dispatchEvent(new Event("scroll",{bubbles:true}));');
+    await sleep(2600 + Math.floor(Math.random() * 1200));
+
+    const y  = (await cdpExec('window.scrollY')) || 0;
+    const h  = (await cdpExec('document.body.scrollHeight')) || 0;
+    const vh = (await cdpExec('window.innerHeight')) || 900;
+    const currentY = Math.round(y);
+
+    if (Math.abs(currentY - lastY) > 60) { scrolledAtAll = true; noProgress = 0; lastY = currentY; }
+    else { noProgress++; }
+
+    log('INFO', 'SCROLL', 'step=' + step + ' y=' + currentY + ' h=' + h + ' noProg=' + noProgress);
+    broadcast('EXTENSION_LIVE_STATUS', { text: S.store.size + ' found | step ' + step + '/' + MAX_STEPS });
+
+    await runEval();
+
+    const atBottom = h > vh * 1.3 && (vh + currentY) >= h - 600;
+
+    if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom)) {
+      const clicked = await cdpExec(CLICK_NEXT);
+      if (clicked) { noProgress = 0; await sleep(4500); continue; }
+      stopReason = atBottom ? 'reached_bottom' : 'no_scroll_progress';
+      break;
+    }
+  }
+
+  if (step >= MAX_STEPS) stopReason = 'max_steps';
+  const summary = 'steps=' + step + ' scrolled=' + scrolledAtAll + ' reason=' + stopReason + ' posts=' + S.store.size;
+  log('INFO', 'SCROLL', 'DONE ' + summary);
+  broadcast('EXTENSION_LIVE_STATUS', { text: 'Scroll done: ' + stopReason + ' | ' + S.store.size + ' posts' });
+
+  if (!scrolledAtAll) {
+    log('WARN', 'WATCHDOG', 'Scroll position never changed — page may be blocked or empty');
+    broadcast('EXTENSION_LIVE_STATUS', { text: 'WARN: No scroll movement — check LinkedIn tab is loaded' });
+  }
+  return stopReason;
+}
+
 async function runKeyword() {
   const kw = S.kwQueue.current;
   if (!kw) { finalizeSession(); return; }
-  log('INFO', 'KW', 'Running keyword', kw);
-  broadcast('EXTENSION_LIVE_STATUS', { text: `⚡ Keyword: "${kw}"` });
+  log('INFO', 'KW', 'Starting keyword: ' + kw);
 
-  const url = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(kw)}&origin=GLOBAL_SEARCH_HEADER`;
+  const url = 'https://www.linkedin.com/search/results/content/?keywords=' + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
   setState('NAVIGATING');
-  await chrome.tabs.update(S.tabId, { url, active: true });
+  await chrome.tabs.update(S.tabId, { url: url, active: true });
   await waitForTabLoad(S.tabId);
 
   setState('ATTACHING');
@@ -136,23 +215,38 @@ async function runKeyword() {
     try {
       await chrome.debugger.attach({ tabId: S.tabId }, '1.3');
       S.attached = true;
+      log('INFO', 'CDP', 'Debugger attached');
     } catch (e) {
-      if (e.message?.toLowerCase().includes('already')) { S.attached = true; }
-      else { log('WARN', 'CDP', 'Attach failed', e.message); }
+      if (e.message && e.message.toLowerCase().includes('already')) {
+        S.attached = true;
+        log('INFO', 'CDP', 'Debugger already attached');
+      } else {
+        log('WARN', 'CDP', 'Attach failed: ' + e.message);
+      }
     }
   }
   if (S.attached) {
     try { await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Network.enable'); } catch (_) {}
+    try { await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.enable'); } catch (_) {}
+  }
+
+  // content.js is optional — only for network bridge, NOT for scrolling
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] });
+    log('INFO', 'INJECT', 'content.js injected as network bridge');
+  } catch (e) {
+    log('WARN', 'INJECT', 'content.js inject failed (CDP network still active): ' + e.message);
   }
 
   setState('SCRAPING');
-  try {
-    await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] });
-  } catch (e) { log('WARN', 'INJECT', 'content.js inject warning', e.message); }
+  await cdpScrollEngine(kw);
 
-  startEval();
-  broadcast('EXTENSION_LIVE_STATUS', { text: `🔍 Scraping: "${kw}"` });
+  if (S.state === 'SCRAPING') {
+    finalizeKeyword().catch(function(e) { log('ERROR', 'KW', 'finalizeKeyword error: ' + e.message); });
+  }
 }
+
+
 
 // ── CDP Eval Loop ────────────────────────────────────────────────────────
 const EVAL = `(function(){
@@ -249,7 +343,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.action === 'CONTENT_SCROLL_COMPLETE') {
-    if (S.state === 'SCRAPING') finalizeKeyword().catch(e => log('ERROR', 'KW', 'finalizeKeyword error', e.message));
+    // Legacy: content.js scroll complete. CDP engine now handles finalization directly.
+    log('INFO', 'MSG', 'CONTENT_SCROLL_COMPLETE received (ignored — CDP engine owns finalization)');
     sendResponse({ ok: true });
     return false;
   }
