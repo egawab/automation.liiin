@@ -229,6 +229,10 @@ async function cdpScrollEngine(kw) {
     return 'empty_page';
   }
 
+  // DOM Diagnostic — runs once at scroll start to identify what's on the page
+  const diag = await cdpExec('JSON.stringify({links:document.querySelectorAll("a[href]").length,feedLinks:Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update")>-1||a.href.indexOf("/posts/")>-1);}).length,dataUrn:document.querySelectorAll("[data-urn]").length,dataActivityUrn:document.querySelectorAll("[data-activity-urn]").length,chameleon:document.querySelectorAll("[data-chameleon-result-urn]").length,entityUrn:document.querySelectorAll("[data-entity-urn]").length,trackingUrn:document.querySelectorAll("[data-tracking-urn]").length,articles:document.querySelectorAll("article").length,searchCards:document.querySelectorAll(".reusable-search__result-container,.search-result").length,bodyTextLen:document.body.innerText.length})');
+  log('INFO', 'DIAG', 'DOM snapshot: ' + diag);
+  broadcast('EXTENSION_LIVE_STATUS', { text: 'Diag: ' + diag });
   const CLICK_NEXT = '(function(){var ss=[".artdeco-pagination__button--next","button[aria-label=\'Next\']","button[aria-label=\'Go to next page\']"];for(var i=0;i<ss.length;i++){var b=document.querySelector(ss[i]);if(b&&!b.disabled){b.click();return true;}}var bs=Array.from(document.querySelectorAll("button,[role=\'button\']"));var m=bs.find(function(b){return /show more|load more|see more/i.test(b.innerText||"");});if(m&&!m.disabled){m.click();return true;}return false;})()';
 
   while (step < MAX_STEPS && S.state === 'SCRAPING') {
@@ -368,20 +372,25 @@ async function runEval() {
   try {
     const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
       { expression: EVAL, returnByValue: true, timeout: 10000 });
+    // Log raw result on first few calls to diagnose issues
+    if (S.store.size === 0) {
+      const raw = r && r.result ? r.result.value : null;
+      const exType = r && r.exceptionDetails ? JSON.stringify(r.exceptionDetails).substring(0,200) : 'none';
+      log('INFO', 'EVAL', 'Raw result type=' + (r&&r.result?r.result.type:'null') + ' exception=' + exType + ' valueLen=' + (raw?String(raw).length:0));
+    }
     if (!r?.result?.value) return;
     const { posts } = JSON.parse(r.result.value);
+    if (S.store.size === 0) log('INFO', 'EVAL', 'EVAL returned ' + (posts||[]).length + ' posts');
     let added = 0;
     for (const p of (posts || [])) {
       if (!p.urn) continue;
       if (S.store.has(p.urn)) {
-        // Enrich existing entry — track if anything changed
         const ex = S.store.get(p.urn);
         let changed = false;
         if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; changed = true; }
         if (p.author && (!ex.author || ex.author === 'Unknown')) { ex.author = p.author; changed = true; }
         if (p.likes !== null && ex.likes === null) { ex.likes = p.likes; changed = true; }
         if (p.comments !== null && ex.comments === null) { ex.comments = p.comments; changed = true; }
-        // Re-push snapshot so the enriched version reaches the API via upsert
         if (changed) { S.batch.push({ ...ex }); added++; }
       } else {
         const post = {
@@ -396,7 +405,7 @@ async function runEval() {
       broadcast('EXTENSION_LIVE_STATUS', { text: `📦 ${S.store.size} found | 💾 ${S.totalSaved} saved` });
       flushBatch().catch(() => {});
     }
-  } catch (e) { log('WARN', 'EVAL', 'Eval error', e.message); }
+  } catch (e) { log('WARN', 'EVAL', 'Eval error: ' + e.message); }
 }
 
 // ── Network Body Ingestion ───────────────────────────────────────────────
