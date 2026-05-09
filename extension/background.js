@@ -55,6 +55,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'nexora_cmd') return;
   log('INFO', 'PORT', 'Port connected');
+  // Immediately update badge so user can see the command reached background
+  chrome.action.setBadgeText({ text: '...' }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ color: '#f59e0b' }).catch(() => {});
 
   port.onMessage.addListener(async (msg) => {
     if (msg.action === 'START') {
@@ -66,6 +69,9 @@ chrome.runtime.onConnect.addListener((port) => {
       } catch (e) {
         log('ERROR', 'PORT', 'startSession failed', e.message);
         safePortMsg(port, { type: 'ERROR', error: e.message });
+        chrome.action.setBadgeText({ text: 'ERR' }).catch(() => {});
+        chrome.action.setBadgeBackgroundColor({ color: '#ef4444' }).catch(() => {});
+        broadcast('EXTENSION_LIVE_STATUS', { text: '❌ ' + e.message });
       }
     } else if (msg.action === 'STOP') {
       await stopSession();
@@ -230,7 +236,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'KEEP_ALIVE') { sendResponse({ ok: true }); return false; }
   if (msg.action === 'GET_STATUS') {
-    sendResponse({ state: S.state, saved: S.totalSaved, kw: S.kwQueue?.current });
+    sendResponse({ running: S.state === 'SCRAPING' || S.state === 'NAVIGATING' || S.state === 'FLUSHING', state: S.state, totalSaved: S.totalSaved, keyword: S.kwQueue?.current });
     return false;
   }
 });
