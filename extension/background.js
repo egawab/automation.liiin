@@ -84,7 +84,7 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => { log('INFO', 'PORT', 'Port disconnected'); });
 });
 
-function safePortMsg(port, msg) { try { port.postMessage(msg); } catch (_) {} }
+function safePortMsg(port, msg) { if (!port) return; try { port.postMessage(msg); } catch (_) {} }
 
 // ── Start Session ────────────────────────────────────────────────────────
 async function startSession(msg, port) {
@@ -224,6 +224,26 @@ async function runEval() {
 
 // ── Network Body Ingestion ───────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // START via sendMessage (used by bridge and popup)
+  if (msg.action === 'START_ENGINE') {
+    (async () => {
+      try {
+        if (S.state !== 'IDLE' && S.state !== 'DONE') await stopSession();
+        await startSession(msg, null);
+      } catch (e) {
+        log('ERROR', 'MSG', 'START_ENGINE failed', e.message);
+        chrome.action.setBadgeText({ text: 'ERR' }).catch(() => {});
+        chrome.action.setBadgeBackgroundColor({ color: '#ef4444' }).catch(() => {});
+        broadcast('EXTENSION_LIVE_STATUS', { text: '\u274c ' + e.message });
+      }
+    })();
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (msg.action === 'STOP_ENGINE') {
+    stopSession().finally(() => sendResponse({ ok: true }));
+    return true;
+  }
   if (msg.action === 'NET_BODY') {
     ingestBody(msg.body);
     sendResponse({ ok: true });

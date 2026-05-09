@@ -53,20 +53,24 @@ document.addEventListener('DOMContentLoaded', () => {
             if (chrome.runtime.lastError || !resp) return;
             if (resp.running && resp.keyword) {
                 setRunning(resp.keyword);
-                statusSub.textContent = `⚙️ Running: "${resp.keyword}" | Saved: ${resp.totalSaved}`;
+                statusSub.textContent = `⚙️ ${resp.state} | Saved: ${resp.totalSaved}`;
+            } else {
+                setIdle();
             }
         });
     }
-    setTimeout(syncStatusFromBackground, 600); // slight delay so popup renders first
+    setTimeout(syncStatusFromBackground, 600);
+    setInterval(syncStatusFromBackground, 4000);
 
-    // ── UI States ───────────────────────────────────────────────
     function setIdle() {
         isRunning = false;
         statusIndicator.className = 'status-indicator';
         statusCard.className      = 'glass-card status-card';
         statusIcon.textContent    = '💤';
         statusTitle.textContent   = 'Ready';
-        statusSub.textContent     = 'Start from Dashboard to begin';
+        statusSub.textContent     = 'Use START button below or Dashboard';
+        const sb = document.getElementById('popupStartBtn');
+        if (sb) { sb.textContent = '🚀 START'; sb.style.background = 'var(--success)'; }
     }
 
     function setRunning(keyword) {
@@ -77,6 +81,31 @@ document.addEventListener('DOMContentLoaded', () => {
         statusTitle.textContent   = 'Engine Active';
         statusSub.textContent     = `Searching: "${keyword || '...'}"`;
         if (currentKeyword && keyword) currentKeyword.textContent = keyword;
+        const sb = document.getElementById('popupStartBtn');
+        if (sb) { sb.textContent = '⏹ STOP'; sb.style.background = 'var(--danger)'; }
+    }
+
+    // ── Direct Start/Stop from Popup ────────────────────────────
+    const popupStartBtn = document.getElementById('popupStartBtn');
+    if (popupStartBtn) {
+        popupStartBtn.addEventListener('click', () => {
+            if (isRunning) {
+                popupStartBtn.textContent = '⏳ Stopping...';
+                chrome.runtime.sendMessage({ action: 'STOP_ENGINE' }, () => { syncStatusFromBackground(); });
+            } else {
+                popupStartBtn.textContent = '⏳ Starting...';
+                chrome.storage.sync.get(['dashboardUrl', 'userId'], (cfg) => {
+                    chrome.runtime.sendMessage(
+                        { action: 'START_ENGINE', dashboardUrl: cfg.dashboardUrl, userId: cfg.userId },
+                        (resp) => {
+                            const err = chrome.runtime.lastError;
+                            if (err) { statusSub.textContent = '❌ ' + err.message; setIdle(); return; }
+                            statusSub.textContent = '⚡ Starting engine...';
+                        }
+                    );
+                });
+            }
+        });
     }
 
 
