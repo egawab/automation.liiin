@@ -156,32 +156,27 @@ async function runKeyword() {
 
 // ── CDP Eval Loop ────────────────────────────────────────────────────────
 const EVAL = `(function(){
-  var posts=[], seen={};
-  var links=Array.from(document.querySelectorAll('a[href]')).filter(function(a){
-    return a.href&&(a.href.indexOf('feed/update/urn:li:')>-1||a.href.indexOf('/posts/')>-1);
-  });
-  links.forEach(function(link){
-    var href=link.href||'';
-    var urn='';
-    var m=href.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
-    if(m) urn='urn:li:'+m[1]+':'+m[2];
-    else{var p=href.match(/activity-([0-9]{10,25})/);if(p)urn='urn:li:activity:'+p[1];}
-    if(!urn||seen[urn])return; seen[urn]=1;
-    var c=link,best=null;
-    for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||'').trim().length;if(l>30&&l<15000){best=c;break;}}
-    if(!best)return;
-    var ae=best.querySelector('a[href*="/in/"]');
-    var author=ae?(ae.innerText||'').trim().split('\\n')[0].substring(0,100):'';
+  var posts=[],seen={};
+  function pe(s){if(!s)return null;var x=String(s).toUpperCase().replace(/,/g,'');var n=parseFloat((x.match(/[0-9.]+/)||[])[0]);if(isNaN(n))return null;if(x.indexOf('K')>-1)n*=1000;if(x.indexOf('M')>-1)n*=1000000;return Math.floor(n);}
+  function extractUrn(s){if(!s)return '';var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return 'urn:li:'+m[1]+':'+m[2];var p2=String(s).match(/activity-([0-9]{10,25})/i);if(p2)return 'urn:li:activity:'+p2[1];return '';}
+  function extractPost(urn,container,href){
+    if(!container||seen[urn])return;seen[urn]=1;
+    var ae=container.querySelector('a[href*="/in/"]');
+    var author=ae?(ae.innerText||'').trim().split('\n')[0].substring(0,100):'';
     var txt='';
-    Array.from(best.querySelectorAll('[dir="ltr"],.feed-shared-update-v2__description,.update-components-text,.break-words')).forEach(function(d){var t=(d.innerText||'').trim();if(t.length>txt.length)txt=t;});
-    if(txt.length<10)txt=(best.innerText||'').replace(/\\s+/g,' ').trim().substring(0,3000);
-    function pe(s){if(!s)return null;var x=String(s).toUpperCase().replace(/,/g,'');var n=parseFloat((x.match(/[0-9.]+/)||[])[0]);if(isNaN(n))return null;if(x.indexOf('K')>-1)n*=1000;if(x.indexOf('M')>-1)n*=1000000;return Math.floor(n);}
+    var sels=['[dir="ltr"]','.feed-shared-update-v2__description','.update-components-text','.break-words','.feed-shared-text','.attributed-text-segment-list__content','.feed-shared-inline-show-more-text','.feed-shared-update-v2__commentary'];
+    sels.forEach(function(sel){try{Array.from(container.querySelectorAll(sel)).forEach(function(d){var t=(d.innerText||'').trim();if(t.length>txt.length)txt=t;});}catch(e){}});
+    if(txt.length<20)txt=(container.innerText||'').replace(/\s+/g,' ').trim().substring(0,3000);
     var likes=null,comments=null;
-    Array.from(best.querySelectorAll('[aria-label]')).forEach(function(el){var l=el.getAttribute('aria-label')||'';if(/[0-9]/.test(l)&&/(reaction|like)/i.test(l)&&likes===null)likes=pe(l);if(/[0-9]/.test(l)&&/comment/i.test(l)&&comments===null)comments=pe(l);});
-    posts.push({urn:urn,url:href,text:txt.substring(0,3000),author:author,likes:likes,comments:comments});
-  });
+    try{Array.from(container.querySelectorAll('[aria-label]')).forEach(function(el){var l=el.getAttribute('aria-label')||'';if(/[0-9]/.test(l)&&/(reaction|like)/i.test(l)&&likes===null)likes=pe(l);if(/[0-9]/.test(l)&&/comment/i.test(l)&&comments===null)comments=pe(l);});}catch(e){}
+    posts.push({urn:urn,url:href||('https://www.linkedin.com/feed/update/'+urn),text:txt.substring(0,3000),author:author,likes:likes,comments:comments});
+  }
+  function findCard(el,urn){var c=el;for(var i=0;i<20;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||'').trim().length;if(l>30&&l<20000){extractPost(urn,c,'');return;}}}
+  try{Array.from(document.querySelectorAll('a[href]')).filter(function(a){return a.href&&(a.href.indexOf('feed/update/urn:li:')>-1||a.href.indexOf('/posts/')>-1);}).forEach(function(link){var urn=extractUrn(link.href);if(!urn||seen[urn])return;var c=link;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||'').trim().length;if(l>30&&l<20000){extractPost(urn,c,link.href);break;}}});}catch(e){}
+  try{['data-urn','data-activity-urn','data-chameleon-result-urn','data-id'].forEach(function(attr){Array.from(document.querySelectorAll('['+attr+']')).forEach(function(el){var urn=extractUrn(el.getAttribute(attr)||'');if(!urn||seen[urn])return;findCard(el,urn);});});}catch(e){}
   return JSON.stringify({posts:posts,count:posts.length});
 })()`;
+
 
 function startEval() {
   stopEval();
@@ -201,18 +196,22 @@ async function runEval() {
     for (const p of (posts || [])) {
       if (!p.urn) continue;
       if (S.store.has(p.urn)) {
+        // Enrich existing entry — track if anything changed
         const ex = S.store.get(p.urn);
-        if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; }
-        if (p.author && (!ex.author || ex.author === 'Unknown')) ex.author = p.author;
-        if (p.likes !== null && ex.likes === null) ex.likes = p.likes;
-        if (p.comments !== null && ex.comments === null) ex.comments = p.comments;
+        let changed = false;
+        if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; changed = true; }
+        if (p.author && (!ex.author || ex.author === 'Unknown')) { ex.author = p.author; changed = true; }
+        if (p.likes !== null && ex.likes === null) { ex.likes = p.likes; changed = true; }
+        if (p.comments !== null && ex.comments === null) { ex.comments = p.comments; changed = true; }
+        // Re-push snapshot so the enriched version reaches the API via upsert
+        if (changed) { S.batch.push({ ...ex }); added++; }
       } else {
         const post = {
           canonicalUrn: p.urn, url: p.url, postText: p.text || '', preview: p.text || '',
           author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'eval'
         };
         S.store.set(p.urn, post);
-        S.batch.push(post); added++;
+        S.batch.push({ ...post }); added++;
       }
     }
     if (added > 0) {
@@ -314,16 +313,19 @@ function ingestBody(body) {
     let enriched = 0;
     for (const urn in postMap) {
       const p = postMap[urn];
-      if (!p.text && p.likes === null && p.comments === null) continue;
+      // No filtering — dashboard decides what to display (Q2 decision)
       if (S.store.has(urn)) {
         const ex = S.store.get(urn);
-        if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; }
-        if (p.likes !== null) ex.likes = p.likes;
-        if (p.comments !== null) ex.comments = p.comments;
-        if (p.author && p.author.length > 1) ex.author = p.author;
+        let changed = false;
+        if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; changed = true; }
+        if (p.likes !== null) { ex.likes = p.likes; changed = true; }
+        if (p.comments !== null) { ex.comments = p.comments; changed = true; }
+        if (p.author && p.author.length > 1) { ex.author = p.author; changed = true; }
+        // Re-push enriched snapshot so API receives the latest merged data
+        if (changed) { S.batch.push({ ...ex }); enriched++; }
       } else {
         const np = { canonicalUrn: urn, url: `https://www.linkedin.com/feed/update/${urn}`, postText: p.text, preview: p.text, author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'network' };
-        S.store.set(urn, np); S.batch.push(np); enriched++;
+        S.store.set(urn, np); S.batch.push({ ...np }); enriched++;
       }
     }
     if (enriched > 0) flushBatch().catch(() => {});
@@ -344,6 +346,12 @@ async function flushBatch() {
 async function flushAll() {
   stopEval();
   await runEval();
+  // Final reconciliation: push the CURRENT enriched state of every store entry.
+  // This guarantees the API receives the most hydrated version of each post,
+  // even if enrichment happened after the initial batch flush.
+  for (const [, post] of S.store) {
+    S.batch.push({ ...post });
+  }
   await flushBatch();
   // Drain retry queue with backoff
   if (S.retryQueue.length > 0) {
