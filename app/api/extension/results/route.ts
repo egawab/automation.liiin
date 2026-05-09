@@ -84,28 +84,40 @@ export async function POST(req: Request) {
       const safeAuthor  = sanitize(post.author || 'Unknown', 100);
       const safePreview = sanitize(post.postText || post.preview || '', 5000);
 
-      await prisma.savedPost.upsert({
-        where: { userId_canonicalUrn: { userId, canonicalUrn: urn } },
-        create: {
-          userId,
-          canonicalUrn: urn,
-          postUrl:      safeUrl,
-          postAuthor:   safeAuthor,
-          postPreview:  safePreview,
-          likes:        postLikes,
-          comments:     postComments,
-          keyword:      safeKeyword,
-          visited:      false,
-        },
-        update: {
-          postUrl:     safeUrl.length > 0 ? safeUrl : undefined,
-          likes:       postLikes    != null ? postLikes    : undefined,
-          comments:    postComments != null ? postComments : undefined,
-          postPreview: safePreview.length > 20 ? safePreview : undefined,
-          postAuthor:  (safeAuthor && safeAuthor !== 'Unknown') ? safeAuthor : undefined,
-          savedAt:     new Date(),
-        },
-      });
+      // Use create + catch-P2002 pattern instead of upsert
+      // (upsert generates ON CONFLICT which fails on nullable unique columns — PG 42P10)
+      try {
+        await prisma.savedPost.create({
+          data: {
+            userId,
+            canonicalUrn: urn,
+            postUrl:      safeUrl,
+            postAuthor:   safeAuthor,
+            postPreview:  safePreview,
+            likes:        postLikes,
+            comments:     postComments,
+            keyword:      safeKeyword,
+            visited:      false,
+          },
+        });
+      } catch (createErr: any) {
+        if (createErr?.code === 'P2002') {
+          // Row already exists — update it with enriched data
+          await prisma.savedPost.updateMany({
+            where: { userId, canonicalUrn: urn },
+            data: {
+              ...(safeUrl.length > 0           && { postUrl: safeUrl }),
+              ...(postLikes    != null          && { likes: postLikes }),
+              ...(postComments != null          && { comments: postComments }),
+              ...(safePreview.length > 20       && { postPreview: safePreview }),
+              ...(safeAuthor && safeAuthor !== 'Unknown' && { postAuthor: safeAuthor }),
+              savedAt: new Date(),
+            },
+          });
+        } else {
+          throw createErr;
+        }
+      }
       return 'saved';
     }));
 
