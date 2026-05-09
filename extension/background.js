@@ -349,8 +349,38 @@ async function runKeyword() {
 const EVAL = [
   '(function(){',
   'var posts=[],seen={};',
-  'function pe(s){if(!s)return null;var x=String(s).toUpperCase().replace(/,/g,"");var n=parseFloat((x.match(/[0-9.]+/)||[])[0]);if(isNaN(n))return null;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
+  // pe(): parse engagement number, ALWAYS returns integer >= 0 (never null)
+  'function pe(s){if(!s)return 0;var x=String(s).toUpperCase().replace(/,/g,"").replace(/\\./g,".");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
   'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
+  'function getEngagement(el){',
+  '  var lk=0,cm=0,found=false;',
+  '  // Strategy 1: aria-label on any element (reactions/likes/comments)',
+  '  try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){',
+  '    var a=x.getAttribute("aria-label")||"";',
+  '    if(/[0-9]/.test(a)&&/(reaction|like|reacted)/i.test(a)){lk=Math.max(lk,pe(a));found=true;}',
+  '    if(/[0-9]/.test(a)&&/comment/i.test(a)){cm=Math.max(cm,pe(a));found=true;}',
+  '  });}catch(e){}',
+  '  // Strategy 2: social count spans (new LinkedIn feed UI)',
+  '  try{Array.from(el.querySelectorAll("span[class*=social-count],span[class*=reaction-count],li[class*=social-count]")).forEach(function(x){',
+  '    var t=(x.innerText||"").trim();',
+  '    var parent=(x.closest("[aria-label]"))||x;',
+  '    var label=parent.getAttribute?parent.getAttribute("aria-label")||"": "";',
+  '    if(/(reaction|like)/i.test(label+t)){lk=Math.max(lk,pe(label||t));found=true;}',
+  '    if(/comment/i.test(label+t)){cm=Math.max(cm,pe(label||t));found=true;}',
+  '  });}catch(e){}',
+  '  // Strategy 3: button innerText with counts (e.g. "26 Likes" "4 Comments")',
+  '  try{Array.from(el.querySelectorAll("button")).forEach(function(b){',
+  '    var t=(b.innerText||"").trim();',
+  '    if(/^[0-9]/.test(t)&&/(like|reaction)/i.test(t)){lk=Math.max(lk,pe(t));found=true;}',
+  '    if(/^[0-9]/.test(t)&&/comment/i.test(t)){cm=Math.max(cm,pe(t));found=true;}',
+  '  });}catch(e){}',
+  '  // Strategy 4: social-proof text spans (search results variant)',
+  '  try{Array.from(el.querySelectorAll("span[class*=social-proof],span[class*=reactions-count]")).forEach(function(x){',
+  '    var t=(x.innerText||"").replace(/,/g,"").trim();',
+  '    if(/[0-9]/.test(t)){lk=Math.max(lk,pe(t));found=true;}',
+  '  });}catch(e){}',
+  '  return {likes:lk,comments:cm};',
+  '}',
   'function xPost(urn,el,href){',
   '  if(!el||seen[urn])return;seen[urn]=1;',
   '  var ae=el.querySelector("a[href*=\\"/in/\\"]");',
@@ -359,9 +389,9 @@ const EVAL = [
   '  var ss=["[dir=\\"ltr\\"]",".feed-shared-update-v2__description",".update-components-text",".break-words",".feed-shared-text",".attributed-text-segment-list__content",".feed-shared-inline-show-more-text"];',
   '  ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length)txt=t;});}catch(e){}});',
   '  if(txt.length<20)txt=(el.innerText||"").replace(/\\s+/g," ").trim().substring(0,3000);',
-  '  var lk=null,cm=null;',
-  '  try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){var a=x.getAttribute("aria-label")||"";if(/[0-9]/.test(a)&&/(reaction|like)/i.test(a)&&lk===null)lk=pe(a);if(/[0-9]/.test(a)&&/comment/i.test(a)&&cm===null)cm=pe(a);});}catch(e){}',
-  '  posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:txt.substring(0,3000),author:author,likes:lk,comments:cm});',
+  '  var eng=getEngagement(el);',
+  // Always push with 0 defaults — never null
+  '  posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:txt.substring(0,3000),author:author||"Unknown",likes:eng.likes,comments:eng.comments});',
   '}',
   'function card(el,urn){var c=el;for(var i=0;i<20;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>40&&l<20000){xPost(urn,c,"");return;}}}',
   // Method 1: href links
@@ -371,6 +401,7 @@ const EVAL = [
   'return JSON.stringify({posts:posts,count:posts.length});',
   '})()'
 ].join('\n');
+
 
 
 function startEval() {
@@ -397,18 +428,25 @@ async function runEval() {
     let added = 0;
     for (const p of (posts || [])) {
       if (!p.urn) continue;
+      // Normalize schema: always 0 not null
+      const likes    = typeof p.likes    === 'number' ? p.likes    : 0;
+      const comments = typeof p.comments === 'number' ? p.comments : 0;
+      const author   = p.author || 'Unknown';
+      const text     = p.text   || '';
       if (S.store.has(p.urn)) {
         const ex = S.store.get(p.urn);
         let changed = false;
-        if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; changed = true; }
-        if (p.author && (!ex.author || ex.author === 'Unknown')) { ex.author = p.author; changed = true; }
-        if (p.likes !== null && ex.likes === null) { ex.likes = p.likes; changed = true; }
-        if (p.comments !== null && ex.comments === null) { ex.comments = p.comments; changed = true; }
+        if (text.length > (ex.postText || '').length) { ex.postText = text; ex.preview = text; changed = true; }
+        if (author !== 'Unknown' && ex.author === 'Unknown') { ex.author = author; changed = true; }
+        if (likes > (ex.likes || 0)) { ex.likes = likes; changed = true; }
+        if (comments > (ex.comments || 0)) { ex.comments = comments; changed = true; }
         if (changed) { S.batch.push({ ...ex }); added++; }
       } else {
         const post = {
-          canonicalUrn: p.urn, url: p.url, postText: p.text || '', preview: p.text || '',
-          author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'eval'
+          canonicalUrn: p.urn, url: p.url,
+          postText: text, preview: text,
+          author, likes, comments,
+          source: 'eval'
         };
         S.store.set(p.urn, post);
         S.batch.push({ ...post }); added++;
