@@ -258,6 +258,8 @@ async function cdpScrollEngine(kw) {
     log('INFO', 'SCROLL', 'step=' + step + ' scrollTop=' + currentSt + ' sh=' + m.sh + ' ch=' + m.ch + ' noProg=' + noProgress);
     broadcast('EXTENSION_LIVE_STATUS', { text: S.store.size + ' found | step ' + step + '/' + MAX_STEPS });
 
+    // Extra hydration wait on step 1 — React needs time to render cards/engagement after initial load
+    if (step === 1) await sleep(2000);
     await runEval();
 
     const atBottom = m.sh > m.ch * 1.3 && (m.ch + currentSt) >= m.sh - 600;
@@ -367,37 +369,57 @@ const DIAG_PROBE = [
 // buildEval(profile): generates an account-optimized EVAL expression
 function buildEval(profile) {
   const p = profile || {};
-  // Pick engagement container: prefer specific span/li counts; fall back to aria-label scan
-  const engSel = p.socialSpans > 0 ? '"span[class*=social-count],li[class*=social-count],span[class*=reaction-count]"' :
-                 p.socialCounts > 0 ? '".social-details-social-counts [aria-label]"' :
-                 '"[aria-label]"';
-  // min card size: search result cards are smaller than full feed cards
   const minCard = (p.articleCards > 0 || p.dataUrn > 0) ? 30 : 40;
   const strategy = p._strategy || 'FEED_CLASSIC';
 
   const lines = [
     '(function(){',
-    'var posts=[],seen={};',
-    'function pe(s){if(!s)return 0;var x=String(s).toUpperCase().replace(/,/g,"");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
+    'var posts=[],seen={},debugLog=[];',
+    // Normalize Arabic-Indic → Western digits before any parsing
+    'function norm(s){return String(s||"").replace(/[\\u0660-\\u0669]/g,function(c){return c.charCodeAt(0)-0x660;}).replace(/[\\u06F0-\\u06F9]/g,function(c){return c.charCodeAt(0)-0x6F0;});}',
+    // pe(): parse any localized number, always returns int >= 0
+    'function pe(s){if(!s)return 0;var x=norm(s).toUpperCase().replace(/,/g,"").replace(/\\./g,".");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
     'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
-    // Engagement: tries priority container first, then falls back to all aria-labels, then buttons
-    'function getEng(el){var lk=0,cm=0;',
-    'try{Array.from(el.querySelectorAll(' + engSel + ')).forEach(function(x){var a=x.getAttribute("aria-label")||x.innerText||"";if(/[0-9]/.test(a)&&/(reaction|like|reacted)/i.test(a))lk=Math.max(lk,pe(a));if(/[0-9]/.test(a)&&/comment/i.test(a))cm=Math.max(cm,pe(a));});}catch(e){}',
-    'if(!lk&&!cm)try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){var a=x.getAttribute("aria-label")||"";if(/[0-9]/.test(a)&&/(reaction|like|reacted)/i.test(a))lk=Math.max(lk,pe(a));if(/[0-9]/.test(a)&&/comment/i.test(a))cm=Math.max(cm,pe(a));});}catch(e){}',
-    'if(!lk&&!cm)try{Array.from(el.querySelectorAll("button")).forEach(function(b){var t=(b.innerText||"").trim();if(/^[0-9]/.test(t)&&/(like|reaction)/i.test(t))lk=Math.max(lk,pe(t));if(/^[0-9]/.test(t)&&/comment/i.test(t))cm=Math.max(cm,pe(t));});}catch(e){}',
-    'return {likes:lk,comments:cm};}',
-    // Text extraction
-    'function getText(el){var txt="";var ss=["[dir=\\"ltr\\"]",".feed-shared-update-v2__description",".update-components-text",".break-words",".attributed-text-segment-list__content",".feed-shared-text",".feed-shared-inline-show-more-text"];ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length)txt=t;});}catch(e){}});if(txt.length<20)txt=(el.innerText||"").replace(/\\s+/g," ").trim().substring(0,3000);return txt;}',
+    // Engagement: 4-strategy locale-agnostic extraction
+    'function getEng(el){',
+    '  var lk=0,cm=0;',
+    // S1: social-details-social-counts — positional (first number = reactions, second = comments)
+    '  try{var sdc=el.querySelector(".social-details-social-counts,.update-components-social-counts");',
+    '    if(sdc){var nums=[];Array.from(sdc.querySelectorAll("span,button,li")).forEach(function(x){',
+    '      var t=norm((x.innerText||"").trim());if(/^[0-9]+$/.test(t)&&t.length<9){var n=parseInt(t,10);if(n>0&&nums.indexOf(n)<0)nums.push(n);}',
+    '    });if(nums[0])lk=nums[0];if(nums[1])cm=nums[1];}}catch(e){}',
+    // S2: aria-label scan — works for any language using norm() first
+    '  if(!lk&&!cm)try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){',
+    '    var raw=x.getAttribute("aria-label")||"";var a=norm(raw);',
+    '    if(/[0-9]/.test(a)&&/(reaction|like|reacted|تفاعل|إعجاب|\\u0631\\u062F\\u0648\\u062F)/i.test(raw))lk=Math.max(lk,pe(a));',
+    '    if(/[0-9]/.test(a)&&/(comment|تعليق)/i.test(raw))cm=Math.max(cm,pe(a));',
+    '  });}catch(e){}',
+    // S3: button text — e.g. "27 Likes" or "٢٧ إعجاب"
+    '  if(!lk&&!cm)try{Array.from(el.querySelectorAll("button")).forEach(function(b){',
+    '    var raw=(b.innerText||"").trim();var t=norm(raw);',
+    '    if(/[0-9]/.test(t)&&/(like|reaction|تفاعل|إعجاب)/i.test(raw))lk=Math.max(lk,pe(t));',
+    '    if(/[0-9]/.test(t)&&/(comment|تعليق)/i.test(raw))cm=Math.max(cm,pe(t));',
+    '  });}catch(e){}',
+    // S4: pure-number spans — any span whose entire text is digits (1–8 chars) near bottom of card
+    '  if(!lk&&!cm)try{var nums2=[];Array.from(el.querySelectorAll("span")).forEach(function(x){',
+    '    var t=norm((x.innerText||"").trim());if(/^[0-9]{1,8}$/.test(t)){var n=parseInt(t,10);if(n>0&&nums2.indexOf(n)<0)nums2.push(n);}',
+    '  });if(nums2.length>=2){lk=nums2[0];cm=nums2[1];}else if(nums2.length===1)lk=nums2[0];}catch(e){}',
+    '  return {likes:lk,comments:cm};}',
+    // Text extraction (RTL-safe: also checks dir=rtl)
+    'function getText(el){var txt="";var ss=["[dir=\\"ltr\\"]","[dir=\\"rtl\\"]",".feed-shared-update-v2__description",".update-components-text",".break-words",".attributed-text-segment-list__content",".feed-shared-text",".feed-shared-inline-show-more-text"];ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length)txt=t;});}catch(e){}});if(txt.length<20)txt=(el.innerText||"").replace(/\\s+/g," ").trim().substring(0,3000);return txt;}',
     'function getAuthor(el){var a=el.querySelector("a[href*=\\"/in/\\"]");return a?(a.innerText||"").trim().replace(/[\\r\\n].*/,"").substring(0,100):"Unknown";}',
-    'function xPost(urn,el,href){if(!el||seen[urn])return;seen[urn]=1;var eng=getEng(el);posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:getText(el).substring(0,3000),author:getAuthor(el),likes:eng.likes,comments:eng.comments});}',
+    'function xPost(urn,el,href){if(!el||seen[urn])return;seen[urn]=1;var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
+    // Per-card debug (first 3 cards only)
+    '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,ariaLabels:Array.from(el.querySelectorAll("[aria-label]")).map(function(x){return x.getAttribute("aria-label");}).filter(Boolean).slice(0,5)});',
+    '  posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
     'function card(el,urn){var c=el;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){xPost(urn,c,"");return;}}}',
     // Method 1: feed/update and /posts/ href links
     'try{Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).forEach(function(lnk){var urn=xUrn(lnk.href);if(!urn||seen[urn])return;var c=lnk;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){xPost(urn,c,lnk.href);break;}}});}catch(e){}',
-    // Method 2: data-urn attributes (SEARCH_MODERN primary)
+    // Method 2: data-urn attributes
     'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
-    // Method 3 (SEARCH_DENSE): timestamp links as URN fallback
-    strategy === 'SEARCH_DENSE' ? 'try{Array.from(document.querySelectorAll("a[href*=activity-],time a[href]")).forEach(function(a){var urn=xUrn(a.href);if(!urn||seen[urn])return;var c=a;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){xPost(urn,c,a.href);break;}}});}catch(e){}' : '',
-    'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '"});',
+    // Method 3: timestamp / activity href links (always run — catches cases where feed links are missing)
+    'try{Array.from(document.querySelectorAll("a[href*=activity-]")).forEach(function(a){var urn=xUrn(a.href);if(!urn||seen[urn])return;var c=a;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){xPost(urn,c,a.href);break;}}});}catch(e){}',
+    'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '",debug:debugLog});',
     '})()'
   ];
   return lines.filter(Boolean).join('\n');
@@ -538,8 +560,14 @@ async function runEval() {
       log('INFO', 'EVAL', 'strategy=' + (S.diagProfile?._strategy||'fallback') + ' type=' + (r&&r.result?r.result.type:'null') + ' exception=' + exType + ' valueLen=' + (raw?String(raw).length:0));
     }
     if (!r?.result?.value) return;
-    const { posts, strategy } = JSON.parse(r.result.value);
-    if (S.store.size === 0) log('INFO', 'EVAL', 'EVAL[' + (strategy||'?') + '] returned ' + (posts||[]).length + ' posts');
+    const parsed = JSON.parse(r.result.value);
+    const posts = parsed.posts || [];
+    const debugCards = parsed.debug || [];
+    if (S.store.size === 0) log('INFO', 'EVAL', 'EVAL[' + (parsed.strategy||'?') + '] returned ' + posts.length + ' posts');
+    // Log per-card debug on first run
+    if (debugCards.length > 0 && S.store.size === 0) {
+      log('INFO', 'EVAL', 'Card debug: ' + JSON.stringify(debugCards));
+    }
     let added = 0;
     for (const p of (posts || [])) {
       if (!p.urn) continue;
