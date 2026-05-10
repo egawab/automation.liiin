@@ -405,34 +405,46 @@ function buildEval(profile) {
     '    var t=norm((x.innerText||"").trim());if(/^[0-9]{1,8}$/.test(t)){var n=parseInt(t,10);if(n>0&&nums2.indexOf(n)<0)nums2.push(n);}',
     '  });if(nums2.length>=2){lk=nums2[0];cm=nums2[1];}else if(nums2.length===1)lk=nums2[0];}catch(e){}',
     '  return {likes:lk,comments:cm};}',
-    // Text extraction (RTL-safe: also checks dir=rtl)
-    'function getText(el){var txt="";var ss=["[dir=\\"ltr\\"]","[dir=\\"rtl\\"]",".feed-shared-update-v2__description",".update-components-text",".break-words",".attributed-text-segment-list__content",".feed-shared-text",".feed-shared-inline-show-more-text"];ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length)txt=t;});}catch(e){}});if(txt.length<20)txt=(el.innerText||"").replace(/\\s+/g," ").trim().substring(0,3000);return txt;}',
-    'function getAuthor(el){var a=el.querySelector("a[href*=\\"/in/\\"]");return a?(a.innerText||"").trim().replace(/[\\r\\n].*/,"").substring(0,100):"Unknown";}',
+    // getText: prioritize specific post selectors, skip video player text
+    'function getText(el){',
+    '  var txt="",skipRx=/^(Pause|Skip Forward|Skip Backward|Unmute|Current Time|Duration|Loaded:|Stream Type|Seek to live|Remaining Time|Playback Rate|Chapters|Captions|Audio Track|Picture-in-Picture|Fullscreen|Volume)/i;',
+    '  var ss=[".update-components-text",".feed-shared-update-v2__description",".attributed-text-segment-list__content",".break-words",".feed-shared-text",".feed-shared-inline-show-more-text","[dir=\\"ltr\\"]","[dir=\\"rtl\\"]"];',
+    '  ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){',
+    '    if(d.closest(\'[aria-label="Video Player"]\'))return;', // skip video player subtree
+    '    var t=(d.innerText||"").trim();if(t.length>txt.length&&!skipRx.test(t))txt=t;',
+    '  });}catch(e){}});',
+    '  if(txt.length<20){var raw=(el.innerText||"").replace(/\\s+/g," ").trim();if(!skipRx.test(raw))txt=raw.substring(0,3000);}',
+    '  return txt;}',
+    // getAuthor: try innerText, then aria-label ("View Name's profile"), then img alt
+    'function getAuthor(el){',
+    '  var a=el.querySelector("a[href*=\\"/in/\\"]");if(!a)return "Unknown";',
+    '  var name=(a.innerText||"").trim().replace(/[\\r\\n].*/,"").substring(0,100);',
+    '  if(name.length>1)return name;',
+    '  var aria=a.getAttribute("aria-label")||"";',
+    '  if(aria){var m=aria.match(/^(?:View\\s+)?(.+?)(?:\'s profile.*|\\s+Verified.*|$)/i);if(m&&m[1])return m[1].trim().substring(0,100);}',
+    '  var img=a.querySelector("img[alt]");if(img)return (img.getAttribute("alt")||"").trim().substring(0,100);',
+    '  return "Unknown";}',
     'function xPost(urn,el,href){if(!el||seen[urn])return;seen[urn]=1;var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
     '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,cls:(el.className||"").substring(0,40),ariaLabels:Array.from(el.querySelectorAll("[aria-label]")).map(function(x){return x.getAttribute("aria-label");}).filter(Boolean).slice(0,6)});',
     '  posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
     // card(): walk up, prefer container that has [aria-label] elements (engagement is always aria-labeled)
-    'function card(el,urn){',
-    '  var c=el,firstHit=null;',
-    '  for(var i=0;i<30;i++){',
-    '    c=c.parentElement;if(!c||c===document.body)break;',
-    '    var l=(c.innerText||"").trim().length;',
-    '    if(l>' + minCard + '&&l<15000){',
-    '      if(!firstHit)firstHit=c;',
-    '      if(c.querySelectorAll("[aria-label]").length>0){xPost(urn,c,"");return;}', // has engagement → use it
-    '    }',
-    '    if(l>=15000)break;', // too large = feed container, stop
-    '  }',
-    '  if(firstHit)xPost(urn,firstHit,"");', // fallback: smallest qualifying container
-    '}',
-    // Method 1: feed/update and /posts/ href links (with engagement-aware inline walker)
+    'function card(el,urn){var c=el,firstHit=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<15000){if(!firstHit)firstHit=c;if(c.querySelectorAll("[aria-label]").length>0){xPost(urn,c,"");return;}}if(l>=15000)break;}if(firstHit)xPost(urn,firstHit,"");}',
+    // Method 1: feed/update and /posts/ href links
     'try{Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).forEach(function(lnk){var urn=xUrn(lnk.href);if(!urn||seen[urn])return;var c=lnk,fh=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<15000){if(!fh)fh=c;if(c.querySelectorAll("[aria-label]").length>0){xPost(urn,c,lnk.href);fh=null;break;}}if(l>=15000)break;}if(fh)xPost(urn,fh,lnk.href);});}catch(e){}',
     // Method 2: data-urn attributes
     'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
     // Method 3: activity- href links
     'try{Array.from(document.querySelectorAll("a[href*=activity-]")).forEach(function(a){var urn=xUrn(a.href);if(!urn||seen[urn])return;card(a,urn);});}catch(e){}',
-    // Method 4: scan class-based containers for URNs embedded in innerHTML (covers React-rendered search cards with no href)
-    'try{Array.from(document.querySelectorAll("[class*=occludable],[class*=update-v2],[class*=feed-shared],[class*=search-result]")).forEach(function(el){var h=el.innerHTML||"";var m=h.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(!m)return;var urn="urn:li:"+m[1]+":"+m[2];if(seen[urn])return;var l=(el.innerText||"").trim().length;if(l>' + minCard + '&&l<15000)xPost(urn,el,"");else card(el,urn);});}catch(e){}',
+    // Method 4: author /in/ link → walk up → find URN in innerHTML (works with obfuscated CSS like "b9f1c9a1 _5e4d195b")
+    'try{var seenCards=[];Array.from(document.querySelectorAll("a[href*=\\"/in/\\"]")).forEach(function(a){',
+    '  var c=a;for(var i=0;i<20;i++){c=c.parentElement;if(!c||c===document.body)break;',
+    '    var l=(c.innerText||"").trim().length;',
+    '    if(l>200&&l<12000&&seenCards.indexOf(c)<0){',
+    '      var m=(c.innerHTML||"").match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);',
+    '      if(m){seenCards.push(c);var urn="urn:li:"+m[1]+":"+m[2];if(!seen[urn])xPost(urn,c,"");break;}',
+    '    }if(l>=12000)break;',
+    '  }',
+    '});}catch(e){}',
     'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '",debug:debugLog});',
     '})()'
   ];
