@@ -162,6 +162,8 @@ const FIND_SCROLL_EL = `(function(){
 })()`;
 
 const DO_SCROLL = `(function(){
+  // Blur focused element so video/media players don't intercept scroll
+  try{if(document.activeElement&&document.activeElement!==document.body)document.activeElement.blur();}catch(e){}
   var candidates = [
     document.querySelector('.scaffold-layout__main'),
     document.querySelector('.scaffold-layout-container__main'),
@@ -212,7 +214,7 @@ async function waitForPageReady(maxMs) {
 }
 
 async function cdpScrollEngine(kw) {
-  const MAX_STEPS = 55, MIN_STEPS = 6, NO_PROG_MAX = 5;
+  const MAX_STEPS = 55, MIN_STEPS = 6, NO_PROG_MAX = 8; // raised to 8 — give stalled scroll more time
   let step = 0, noProgress = 0, lastSt = -1, scrolledAtAll = false;
   let stopReason = 'max_steps';
 
@@ -415,13 +417,14 @@ function buildEval(profile) {
     '  });}catch(e){}});',
     '  if(txt.length<20){var raw=(el.innerText||"").replace(/\\s+/g," ").trim();if(!skipRx.test(raw))txt=raw.substring(0,3000);}',
     '  return txt;}',
-    // getAuthor: try innerText, then aria-label ("View Name's profile"), then img alt
+    // getAuthor: try innerText, then aria-label, then img alt
     'function getAuthor(el){',
     '  var a=el.querySelector("a[href*=\\"/in/\\"]");if(!a)return "Unknown";',
-    '  var name=(a.innerText||"").trim().replace(/[\\r\\n].*/,"").substring(0,100);',
+    '  var name=(a.innerText||""  ).trim().replace(/[\\r\\n].*/,"").substring(0,100);',
     '  if(name.length>1)return name;',
     '  var aria=a.getAttribute("aria-label")||"";',
-    '  if(aria){var m=aria.match(/^(?:View\\s+)?(.+?)(?:\'s profile.*|\\s+Verified.*|$)/i);if(m&&m[1])return m[1].trim().substring(0,100);}',
+    // Handle both ASCII apostrophe (') and Unicode curly apostrophe (’) that LinkedIn uses
+    '  if(aria){var m=aria.match(/^(?:View\\s+)?(.+?)(?:[\\u2019\']s\\s|[\\u2019\']s\\s*profile|\\s+Verified|\\s+Top\\s+Voice|\\s+Profile|\\s+\\d|$)/i);if(m&&m[1])return m[1].trim().substring(0,100);}',
     '  var img=a.querySelector("img[alt]");if(img)return (img.getAttribute("alt")||"").trim().substring(0,100);',
     '  return "Unknown";}',
     'function xPost(urn,el,href){if(!el||seen[urn])return;seen[urn]=1;var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
