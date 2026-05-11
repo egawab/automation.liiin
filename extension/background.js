@@ -811,6 +811,9 @@ async function pushToAPI(posts) {
   if (!posts.length) return;
   const endpoint = S.dashboardUrl + '/api/extension/results';
   log('INFO', 'API', 'POST ' + posts.length + ' posts | url=' + endpoint.substring(0,60) + ' | userId=' + (S.userId||'').substring(0,8) + '...');
+  // Debug: log the first 3 posts of the payload to verify field mapping
+  const sample = posts.slice(0, 3).map(p => ({ urn: p.canonicalUrn, author: p.author, likes: p.likes, comments: p.comments, textLen: (p.postText||'').length }));
+  log('INFO', 'PAYLOAD', 'Sample: ' + JSON.stringify(sample));
   let resp;
   try {
     resp = await fetch(endpoint, {
