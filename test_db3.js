@@ -1,0 +1,1 @@
+const { PrismaClient } = require('@prisma/client'); const prisma = new PrismaClient(); prisma.savedPost.findMany({ orderBy: { savedAt: 'desc' }, take: 10, select: { keyword: true, likes: true, comments: true, savedAt: true } }).then(posts => { console.log(posts); prisma.$disconnect(); });

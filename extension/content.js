@@ -17,7 +17,7 @@
   function onNetEvent(e) {
     const { url, body } = e.detail || {};
     if (body && body.length > 100) {
-      chrome.runtime.sendMessage({ action: 'NET_BODY', url, body }).catch(() => {});
+      if(chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'NET_BODY', url, body }).catch(() => {});
     }
   }
   window.removeEventListener('__nexora_net__', window.__nexoraNetHandler);
@@ -26,7 +26,8 @@
 
   // ── Keep-alive ping ────────────────────────────────────────────
   const keepAlive = setInterval(() => {
-    chrome.runtime.sendMessage({ action: 'KEEP_ALIVE' }).catch(() => clearInterval(keepAlive));
+    if(chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'KEEP_ALIVE' }).catch(() => clearInterval(keepAlive));
+    else clearInterval(keepAlive);
   }, 20000);
 
   // ── Scroll helpers ─────────────────────────────────────────────
@@ -84,7 +85,7 @@
     console.log('[Scroll] Page content never rendered (scrollHeight too small). Bailing.');
     clearInterval(keepAlive);
     window.removeEventListener('__nexora_net__', onNetEvent);
-    chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
+    if(chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
     window.__NexoraScrollV6 = null;
     return;
   }
@@ -135,6 +136,6 @@
   clearInterval(keepAlive);
   window.removeEventListener('__nexora_net__', onNetEvent);
   console.log('[Scroll] Complete. Steps:', step, 'Collected from:', location.href);
-  chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
+  if(chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
   window.__NexoraScrollV6 = null;
 })();

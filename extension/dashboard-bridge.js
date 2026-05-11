@@ -35,25 +35,32 @@
     if (action === 'START_ENGINE') {
       var auth = extractAuth();
       console.log('[NexoraBridge] START_ENGINE received. Auth:', auth);
-      chrome.runtime.sendMessage(
-        { action: 'START_ENGINE', dashboardUrl: auth.dashboardUrl, userId: auth.userId },
-        function (resp) {
-          var err = chrome.runtime.lastError;
-          if (err) {
-            console.error('[NexoraBridge] sendMessage failed:', err.message);
-            notifyDashboard('ENGINE_ERROR', { error: err.message });
-            return;
+      if (chrome?.runtime?.sendMessage) {
+        chrome.runtime.sendMessage(
+          { action: 'START_ENGINE', dashboardUrl: auth.dashboardUrl, userId: auth.userId },
+          function (resp) {
+            var err = chrome.runtime.lastError;
+            if (err) {
+              console.error('[NexoraBridge] sendMessage failed:', err.message);
+              notifyDashboard('ENGINE_ERROR', { error: err.message });
+              return;
+            }
+            console.log('[NexoraBridge] Background replied:', resp);
+            notifyDashboard('ENGINE_STARTED_ACK', { keyword: 'starting' });
           }
-          console.log('[NexoraBridge] Background replied:', resp);
-          notifyDashboard('ENGINE_STARTED_ACK', { keyword: 'starting' });
-        }
-      );
+        );
+      } else {
+        console.error('[NexoraBridge] chrome.runtime.sendMessage undefined.');
+        notifyDashboard('ENGINE_ERROR', { error: 'Extension disconnected. Please reload page.' });
+      }
     }
 
     if (action === 'STOP_ENGINE') {
-      chrome.runtime.sendMessage({ action: 'STOP_ENGINE' }, function () {
-        notifyDashboard('ENGINE_STOPPED_ACK');
-      });
+      if (chrome?.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({ action: 'STOP_ENGINE' }, function () {
+          notifyDashboard('ENGINE_STOPPED_ACK');
+        });
+      }
     }
   });
 

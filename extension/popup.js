@@ -49,15 +49,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Check if engine already running (started from dashboard) ────────
     function syncStatusFromBackground() {
-        chrome.runtime.sendMessage({ action: 'GET_STATUS' }, (resp) => {
-            if (chrome.runtime.lastError || !resp) return;
-            if (resp.running && resp.keyword) {
-                setRunning(resp.keyword);
-                statusSub.textContent = `⚙️ ${resp.state} | Saved: ${resp.totalSaved}`;
-            } else {
-                setIdle();
-            }
-        });
+        if (chrome?.runtime?.sendMessage) {
+            chrome.runtime.sendMessage({ action: 'GET_STATUS' }, (resp) => {
+                if (chrome.runtime.lastError || !resp) return;
+                if (resp.running && resp.keyword) {
+                    setRunning(resp.keyword);
+                    statusSub.textContent = `⚙️ ${resp.state} | Saved: ${resp.totalSaved}`;
+                } else {
+                    setIdle();
+                }
+            });
+        }
     }
     setTimeout(syncStatusFromBackground, 600);
     setInterval(syncStatusFromBackground, 4000);
@@ -91,18 +93,20 @@ document.addEventListener('DOMContentLoaded', () => {
         popupStartBtn.addEventListener('click', () => {
             if (isRunning) {
                 popupStartBtn.textContent = '⏳ Stopping...';
-                chrome.runtime.sendMessage({ action: 'STOP_ENGINE' }, () => { syncStatusFromBackground(); });
+                if (chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'STOP_ENGINE' }, () => { syncStatusFromBackground(); });
             } else {
                 popupStartBtn.textContent = '⏳ Starting...';
                 chrome.storage.sync.get(['dashboardUrl', 'userId'], (cfg) => {
-                    chrome.runtime.sendMessage(
-                        { action: 'START_ENGINE', dashboardUrl: cfg.dashboardUrl, userId: cfg.userId },
-                        (resp) => {
-                            const err = chrome.runtime.lastError;
-                            if (err) { statusSub.textContent = '❌ ' + err.message; setIdle(); return; }
-                            statusSub.textContent = '⚡ Starting engine...';
-                        }
-                    );
+                    if (chrome?.runtime?.sendMessage) {
+                        chrome.runtime.sendMessage(
+                            { action: 'START_ENGINE', dashboardUrl: cfg.dashboardUrl, userId: cfg.userId },
+                            (resp) => {
+                                const err = chrome.runtime.lastError;
+                                if (err) { statusSub.textContent = '❌ ' + err.message; setIdle(); return; }
+                                statusSub.textContent = '⚡ Starting engine...';
+                            }
+                        );
+                    }
                 });
             }
         });

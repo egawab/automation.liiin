@@ -84,7 +84,7 @@ export async function POST(req: Request) {
       const safeAuthor  = sanitize(post.author || 'Unknown', 100);
       const safePreview = sanitize(post.postText || post.preview || '', 5000);
 
-        let outcome: 'created' | 'updated' = 'created';
+        let outcome: { status: 'created' | 'updated', urn: string } = { status: 'created', urn };
         try {
           await prisma.savedPost.create({
             data: {
@@ -101,7 +101,7 @@ export async function POST(req: Request) {
           });
         } catch (createErr: any) {
           if (createErr?.code === 'P2002') {
-            outcome = 'updated';
+            outcome.status = 'updated';
             await prisma.savedPost.updateMany({
               where: { userId, canonicalUrn: urn },
               data: {
@@ -121,14 +121,19 @@ export async function POST(req: Request) {
     }));
 
     let createdCount = 0, updatedCount = 0;
+    const createdUrns: string[] = [];
+    const updatedUrns: string[] = [];
+    
     for (const r of results) {
       if (r.status === 'rejected') {
         errors.push(r.reason?.message || String(r.reason));
         console.error('[API/results] Prisma error:', r.reason?.message);
-      } else if (r.value === 'created') {
+      } else if (r.value?.status === 'created') {
         createdCount++;
-      } else if (r.value === 'updated') {
+        createdUrns.push(r.value.urn);
+      } else if (r.value?.status === 'updated') {
         updatedCount++;
+        updatedUrns.push(r.value.urn);
       }
     }
 
@@ -141,7 +146,9 @@ export async function POST(req: Request) {
       savedCount: createdCount,   // legacy field — new rows only
       createdCount,               // new posts inserted
       updatedCount,               // existing posts enriched
-      skippedCount: results.filter(r => r.status === 'fulfilled' && r.value?.startsWith('skipped')).length,
+      createdUrns,
+      updatedUrns,
+      skippedCount: 0,
       errorCount: errors.length,
       message: `Processed ${posts.length}. Created: ${createdCount}, Updated: ${updatedCount}.`,
     }, { status: 200 }));

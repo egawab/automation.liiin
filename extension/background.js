@@ -382,7 +382,14 @@ function buildEval(profile) {
     // pe(): parse any localized number, always returns int >= 0
     'function pe(s){if(!s)return 0;var x=norm(s).toUpperCase().replace(/,/g,"").replace(/\\./g,".");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
     'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
-    'function getHash(s){var h=0,l=s.length,i=0;if(l>0)while(i<l)h=(h<<5)-h+s.charCodeAt(i++)|0;return "urn:li:hash:"+Math.abs(h);}',
+    'function getHash(txt,auth,mediaStr){',
+    '  var str = auth + "|" + txt.length + "|" + txt.substring(0,300) + "|" + txt.substring(txt.length-300) + "|" + mediaStr;',
+    '  var h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;',
+    '  for(var i=0; i<str.length; i++) { var ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }',
+    '  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);',
+    '  h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);',
+    '  return { urn: "urn:li:hash:" + (h2>>>0).toString(16).padStart(8, "0") + (h1>>>0).toString(16).padStart(8, "0"), input: str };',
+    '}',
     // Engagement: 4-strategy locale-agnostic extraction
     'function getEng(el){',
     '  var lk=0,cm=0;',
@@ -430,7 +437,11 @@ function buildEval(profile) {
     '  if(name.length>1)return name;',
     '  var img=a.querySelector("img[alt]");if(img)return (img.getAttribute("alt")||"").trim().substring(0,100);',
     '  return "Unknown";}',
-    'function xPost(urn,el,href){if(!el||seen[urn])return;seen[urn]=1;var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
+    'function xPost(urn,el,href,hashInput){',
+    '  var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
+    '  var isDup=seen[urn]?true:false;',
+    '  console.log("POST DEBUG:\\n- rawTextLength: "+(el.innerText||"").length+"\\n- normalizedTextLength: "+txt.length+"\\n- author: "+auth+"\\n- extractedURN: "+(hashInput?"(none)":urn)+"\\n- generatedHashInput: "+(hashInput?hashInput:"(none)")+"\\n- generatedHash: "+(hashInput?urn:"(none)")+"\\n- dedupeDecision: "+(isDup?"DUPLICATE":"NEW")+"\\n- dedupeReason: "+(isDup?"Already seen in this cycle":"First time seen"));',
+    '  if(isDup)return;seen[urn]=1;',
     '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,cls:(el.className||"").substring(0,40),ariaLabels:Array.from(el.querySelectorAll("[aria-label]")).map(function(x){return x.getAttribute("aria-label");}).filter(Boolean).slice(0,6)});',
     '  posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
     // card(): walk up, prefer container that has [aria-label] elements (engagement is always aria-labeled)
@@ -455,11 +466,15 @@ function buildEval(profile) {
     '    seenCards.push(fc);',
     '    var h=fc.innerHTML||"";',
     '    var m=h.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);',
-    '    var urn="";',
+    '    var urn="", hashIn="";',
     '    if(m)urn="urn:li:"+m[1]+":"+m[2];',
     '    if(!urn){var p=h.match(/activity-([0-9]{10,25})/i);if(p)urn="urn:li:activity:"+p[1];}',
-    '    if(!urn){var txt=getText(fc);if(txt.length>50)urn=getHash(txt);}',
-    '    if(urn&&!seen[urn])xPost(urn,fc,"");',
+    '    if(!urn){',
+    '      var txt=getText(fc);var auth=getAuthor(fc);',
+    '      var mediaStr=Array.from(fc.querySelectorAll("img[src],video")).map(function(n){return n.src||n.poster||"";}).filter(function(s){return s&&s.indexOf("profile")<0;}).join(",");',
+    '      var hashObj=getHash(txt,auth,mediaStr); urn=hashObj.urn; hashIn=hashObj.input;',
+    '    }',
+    '    if(urn)xPost(urn,fc,"",hashIn);',
     '  }',
     '});}catch(e){}',
     'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '",debug:debugLog});',
@@ -821,6 +836,14 @@ async function pushToAPI(posts) {
   // Mark these URNs as flushed so flushAll won't re-send them
   for (const p of posts) { if (p.canonicalUrn) S.flushedUrns.add(p.canonicalUrn); }
   log('INFO', 'FLUSH', 'Saved ' + created + '/' + posts.length + ' new | total=' + S.totalSaved);
+  
+  if (data.createdUrns && data.createdUrns.length > 0) {
+    data.createdUrns.forEach(u => log('INFO', 'DB_NEW', 'DB Created URN: ' + u));
+  }
+  if (data.updatedUrns && data.updatedUrns.length > 0) {
+    data.updatedUrns.forEach(u => log('INFO', 'DB_DUP', 'DB Updated (Duplicate) URN: ' + u));
+  }
+  
   broadcast('EXTENSION_LIVE_STATUS', { text: '\u2705 Saved ' + S.totalSaved + ' posts' });
 }
 
