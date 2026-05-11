@@ -12,12 +12,13 @@
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const rand = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo));
+  const canSend = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.sendMessage;
 
   // ── Network bridge ────────────────────────────────────────────
   function onNetEvent(e) {
     const { url, body } = e.detail || {};
     if (body && body.length > 100) {
-      if(chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'NET_BODY', url, body }).catch(() => {});
+      if(canSend()) chrome.runtime.sendMessage({ action: 'NET_BODY', url, body }).catch(() => {});
     }
   }
   window.removeEventListener('__nexora_net__', window.__nexoraNetHandler);
@@ -26,7 +27,7 @@
 
   // ── Keep-alive ping ────────────────────────────────────────────
   const keepAlive = setInterval(() => {
-    if(chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'KEEP_ALIVE' }).catch(() => clearInterval(keepAlive));
+    if(canSend()) chrome.runtime.sendMessage({ action: 'KEEP_ALIVE' }).catch(() => clearInterval(keepAlive));
     else clearInterval(keepAlive);
   }, 20000);
 
@@ -85,7 +86,7 @@
     console.log('[Scroll] Page content never rendered (scrollHeight too small). Bailing.');
     clearInterval(keepAlive);
     window.removeEventListener('__nexora_net__', onNetEvent);
-    if(chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
+    if(canSend()) chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
     window.__NexoraScrollV6 = null;
     return;
   }
@@ -136,6 +137,6 @@
   clearInterval(keepAlive);
   window.removeEventListener('__nexora_net__', onNetEvent);
   console.log('[Scroll] Complete. Steps:', step, 'Collected from:', location.href);
-  if(chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
+  if(canSend()) chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
   window.__NexoraScrollV6 = null;
 })();

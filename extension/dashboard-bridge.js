@@ -1,9 +1,14 @@
-// dashboard-bridge.js v6.2
+// dashboard-bridge.js v6.3
 // Uses chrome.runtime.sendMessage (most reliable in MV3 content scripts).
 // connect() was dropped — it silently fails when SW is in certain states.
 (function () {
   if (window.__NexoraBridgeV6) return;
   window.__NexoraBridgeV6 = true;
+
+  // Safe check: chrome may not be declared at all on non-extension pages
+  function canSend() {
+    return typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage;
+  }
 
   function notifyDashboard(action, data) {
     window.postMessage(Object.assign({ source: 'NEXORA_EXTENSION', action: action }, data || {}), '*');
@@ -35,7 +40,7 @@
     if (action === 'START_ENGINE') {
       var auth = extractAuth();
       console.log('[NexoraBridge] START_ENGINE received. Auth:', auth);
-      if (chrome?.runtime?.sendMessage) {
+      if (canSend()) {
         chrome.runtime.sendMessage(
           { action: 'START_ENGINE', dashboardUrl: auth.dashboardUrl, userId: auth.userId },
           function (resp) {
@@ -50,13 +55,13 @@
           }
         );
       } else {
-        console.error('[NexoraBridge] chrome.runtime.sendMessage undefined.');
-        notifyDashboard('ENGINE_ERROR', { error: 'Extension disconnected. Please reload page.' });
+        console.error('[NexoraBridge] chrome runtime unavailable. Extension may be disconnected.');
+        notifyDashboard('ENGINE_ERROR', { error: 'Extension disconnected. Please reload the page.' });
       }
     }
 
     if (action === 'STOP_ENGINE') {
-      if (chrome?.runtime?.sendMessage) {
+      if (canSend()) {
         chrome.runtime.sendMessage({ action: 'STOP_ENGINE' }, function () {
           notifyDashboard('ENGINE_STOPPED_ACK');
         });
@@ -65,5 +70,5 @@
   });
 
   notifyDashboard('EXTENSION_READY');
-  console.log('[NexoraBridge] v6.2 ready (sendMessage mode).');
+  console.log('[NexoraBridge] v6.3 ready (sendMessage mode).');
 })();

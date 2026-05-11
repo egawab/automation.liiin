@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentDashboardUrl = '';
     let isRunning = false;
+    const canSend = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.sendMessage;
 
     // ── Load state ──────────────────────────────────────────────
     function loadInitialState() {
@@ -49,7 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Check if engine already running (started from dashboard) ────────
     function syncStatusFromBackground() {
-        if (chrome?.runtime?.sendMessage) {
+        if (canSend()) {
             chrome.runtime.sendMessage({ action: 'GET_STATUS' }, (resp) => {
                 if (chrome.runtime.lastError || !resp) return;
                 if (resp.running && resp.keyword) {
@@ -93,11 +94,11 @@ document.addEventListener('DOMContentLoaded', () => {
         popupStartBtn.addEventListener('click', () => {
             if (isRunning) {
                 popupStartBtn.textContent = '⏳ Stopping...';
-                if (chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action: 'STOP_ENGINE' }, () => { syncStatusFromBackground(); });
+                if (canSend()) chrome.runtime.sendMessage({ action: 'STOP_ENGINE' }, () => { syncStatusFromBackground(); });
             } else {
                 popupStartBtn.textContent = '⏳ Starting...';
                 chrome.storage.sync.get(['dashboardUrl', 'userId'], (cfg) => {
-                    if (chrome?.runtime?.sendMessage) {
+                    if (canSend()) {
                         chrome.runtime.sendMessage(
                             { action: 'START_ENGINE', dashboardUrl: cfg.dashboardUrl, userId: cfg.userId },
                             (resp) => {

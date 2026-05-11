@@ -956,7 +956,7 @@ function broadcast(action, data = {}) {
     chrome.action.setBadgeText({ text: `${S.totalSaved}✓` }).catch(() => {});
     chrome.action.setBadgeBackgroundColor({ color: '#3b82f6' }).catch(() => {});
   }
-  if (chrome?.runtime?.sendMessage) {
+  if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
     chrome.runtime.sendMessage({ action, ...data }).catch(() => {});
   }
 }
