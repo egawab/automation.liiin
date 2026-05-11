@@ -134,10 +134,10 @@ export async function POST(req: Request) {
       if (r.status === 'rejected') {
         errors.push(r.reason?.message || String(r.reason));
         console.error('[API/results] Prisma error:', r.reason?.message);
-      } else if (r.value?.status === 'created') {
+      } else if (typeof r.value === 'object' && r.value?.status === 'created') {
         createdCount++;
         createdUrns.push(r.value.urn);
-      } else if (r.value?.status === 'updated') {
+      } else if (typeof r.value === 'object' && r.value?.status === 'updated') {
         updatedCount++;
         updatedUrns.push(r.value.urn);
       }
