@@ -435,7 +435,7 @@ function buildEval(profile) {
     '    var cl=aria.replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/(?:[\\\'’‘´`]s\\s.*|\\s+Verified.*|\\s+Top\\s+Voice.*|\\s+Profile.*|\\s+\\d.*)$/i,"");',
     '    if(cl)return cl.trim().substring(0,100);',
     '  }',
-    '  var name=(a.innerText||"").trim().replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").split("\n")[0].trim().substring(0,100);',
+    '  var name=(a.innerText||"").trim().replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").split("\\n")[0].trim().substring(0,100);',
     '  if(name.length>1)return name;',
     '  var img=a.querySelector("img[alt]");if(img)return (img.getAttribute("alt")||"").trim().substring(0,100);',
     '  return "Unknown";}',
