@@ -383,7 +383,9 @@ function buildEval(profile) {
     'function pe(s){if(!s)return 0;var x=norm(s).toUpperCase().replace(/,/g,"").replace(/\\./g,".");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
     'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
     'function getHash(txt,auth,mediaStr){',
-    '  var str = auth + "|" + txt.length + "|" + txt.substring(0,300) + "|" + txt.substring(txt.length-300) + "|" + mediaStr;',
+    // Normalize auth: strip newlines, degree indicators, "View X's profile" prefix — ensures same post authored by same person always hashes identically
+    '  var na=auth.split("\n")[0].replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/[\\u2019\']s\\s.*$/i,"").replace(/\\s*[\\u2022\\u00B7].*$/,"").trim();',
+    '  var str = na + "|" + txt.length + "|" + txt.substring(0,300) + "|" + txt.substring(txt.length-300) + "|" + mediaStr;',
     '  var h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;',
     '  for(var i=0; i<str.length; i++) { var ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }',
     '  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);',
@@ -433,7 +435,7 @@ function buildEval(profile) {
     '    var cl=aria.replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/(?:[\\\'’‘´`]s\\s.*|\\s+Verified.*|\\s+Top\\s+Voice.*|\\s+Profile.*|\\s+\\d.*)$/i,"");',
     '    if(cl)return cl.trim().substring(0,100);',
     '  }',
-    '  var name=(a.innerText||"").trim().replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/[\\r\\n].*/,"").substring(0,100);',
+    '  var name=(a.innerText||"").trim().replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").split("\n")[0].trim().substring(0,100);',
     '  if(name.length>1)return name;',
     '  var img=a.querySelector("img[alt]");if(img)return (img.getAttribute("alt")||"").trim().substring(0,100);',
     '  return "Unknown";}',
@@ -443,7 +445,7 @@ function buildEval(profile) {
     '  console.log("POST DEBUG:\\n- rawTextLength: "+(el.innerText||"").length+"\\n- normalizedTextLength: "+txt.length+"\\n- author: "+auth+"\\n- extractedURN: "+(hashInput?"(none)":urn)+"\\n- generatedHashInput: "+(hashInput?hashInput:"(none)")+"\\n- generatedHash: "+(hashInput?urn:"(none)")+"\\n- dedupeDecision: "+(isDup?"DUPLICATE":"NEW")+"\\n- dedupeReason: "+(isDup?"Already seen in this cycle":"First time seen"));',
     '  if(isDup)return;seen[urn]=1;',
     '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,cls:(el.className||"").substring(0,40),ariaLabels:Array.from(el.querySelectorAll("[aria-label]")).map(function(x){return x.getAttribute("aria-label");}).filter(Boolean).slice(0,6)});',
-    '  posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
+    '  posts.push({urn:urn,url:href||(urn.indexOf("urn:li:hash:")<0?"https://www.linkedin.com/feed/update/"+urn:""),text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
     // card(): walk up, prefer container that has [aria-label] elements (engagement is always aria-labeled)
     'function card(el,urn){var c=el,firstHit=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<15000){if(!firstHit)firstHit=c;if(c.querySelectorAll("[aria-label]").length>0){xPost(urn,c,"");return;}}if(l>=15000)break;}if(firstHit)xPost(urn,firstHit,"");}',
     // Method 1: feed/update and /posts/ href links
