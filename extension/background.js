@@ -176,13 +176,13 @@ const DO_SCROLL = `(function(){
   for(var i=0;i<candidates.length;i++){
     var el=candidates[i];
     if(el && el.scrollHeight > el.clientHeight+100){
-      el.scrollBy({top:Math.floor(el.clientHeight*0.85),behavior:'smooth'});
+      el.scrollTop += Math.floor(el.clientHeight*0.85);
       el.dispatchEvent(new Event('scroll',{bubbles:true}));
       window.dispatchEvent(new Event('scroll',{bubbles:true}));
       return el.scrollTop;
     }
   }
-  window.scrollBy({top:Math.floor(window.innerHeight*0.85),behavior:'smooth'});
+  window.scrollBy(0, Math.floor(window.innerHeight*0.85));
   return window.scrollY;
 })()`;
 
@@ -418,14 +418,16 @@ function buildEval(profile) {
     '  });}catch(e){}});',
     '  if(txt.length<20){var raw=(el.innerText||"").replace(/\\s+/g," ").trim();if(!skipRx.test(raw))txt=raw.substring(0,3000);}',
     '  return txt;}',
-    // getAuthor: try innerText, then aria-label, then img alt
+    // getAuthor: try aria-label, then innerText, then img alt
     'function getAuthor(el){',
     '  var a=el.querySelector("a[href*=\\"/in/\\"],a[href*=\\"/company/\\"]");if(!a)return "Unknown";',
+    '  var aria=a.getAttribute("aria-label")||"";',
+    '  if(aria){',
+    '    var cl=aria.replace(/^[Vv]iew\\s+/,"").replace(/(?:[\\\'’‘´`]s\\s.*|\\s+Verified.*|\\s+Top\\s+Voice.*|\\s+Profile.*|\\s+\\d.*)$/i,"");',
+    '    if(cl)return cl.trim().substring(0,100);',
+    '  }',
     '  var name=(a.innerText||"").trim().replace(/^[Vv]iew\\s+/,"").replace(/[\\r\\n].*/,"").substring(0,100);',
     '  if(name.length>1)return name;',
-    '  var aria=a.getAttribute("aria-label")||"";',
-    // Handle both ASCII apostrophe (') and Unicode curly apostrophe (’) that LinkedIn uses
-    '  if(aria){var m=aria.match(/^(?:View\\s+)?(.+?)(?:[\\u2019\']s\\s|[\\u2019\']s\\s*profile|\\s+Verified|\\s+Top\\s+Voice|\\s+Profile|\\s+\\d|$)/i);if(m&&m[1])return m[1].trim().substring(0,100);}',
     '  var img=a.querySelector("img[alt]");if(img)return (img.getAttribute("alt")||"").trim().substring(0,100);',
     '  return "Unknown";}',
     'function xPost(urn,el,href){if(!el||seen[urn])return;seen[urn]=1;var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
