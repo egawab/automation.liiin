@@ -384,7 +384,7 @@ function buildEval(profile) {
     'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
     'function getHash(txt,auth,mediaStr){',
     // Normalize auth: strip newlines, degree indicators, "View X's profile" prefix — ensures same post authored by same person always hashes identically
-    '  var na=auth.split("\n")[0].replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/[\\u2019\']s\\s.*$/i,"").replace(/\\s*[\\u2022\\u00B7].*$/,"").trim();',
+    '  var na=auth.split("\\n")[0].replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/[\\u2019\\u0027]s\\s.*$/i,"").replace(/\\s*[\\u2022\\u00B7].*$/,"").trim();',
     '  var str = na + "|" + txt.length + "|" + txt.substring(0,300) + "|" + txt.substring(txt.length-300) + "|" + mediaStr;',
     '  var h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;',
     '  for(var i=0; i<str.length; i++) { var ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }',
