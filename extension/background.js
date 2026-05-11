@@ -382,6 +382,7 @@ function buildEval(profile) {
     // pe(): parse any localized number, always returns int >= 0
     'function pe(s){if(!s)return 0;var x=norm(s).toUpperCase().replace(/,/g,"").replace(/\\./g,".");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
     'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
+    'function getHash(s){var h=0,l=s.length,i=0;if(l>0)while(i<l)h=(h<<5)-h+s.charCodeAt(i++)|0;return "urn:li:hash:"+Math.abs(h);}',
     // Engagement: 4-strategy locale-agnostic extraction
     'function getEng(el){',
     '  var lk=0,cm=0;',
@@ -419,8 +420,8 @@ function buildEval(profile) {
     '  return txt;}',
     // getAuthor: try innerText, then aria-label, then img alt
     'function getAuthor(el){',
-    '  var a=el.querySelector("a[href*=\\"/in/\\"]");if(!a)return "Unknown";',
-    '  var name=(a.innerText||""  ).trim().replace(/[\\r\\n].*/,"").substring(0,100);',
+    '  var a=el.querySelector("a[href*=\\"/in/\\"],a[href*=\\"/company/\\"]");if(!a)return "Unknown";',
+    '  var name=(a.innerText||"").trim().replace(/^[Vv]iew\\s+/,"").replace(/[\\r\\n].*/,"").substring(0,100);',
     '  if(name.length>1)return name;',
     '  var aria=a.getAttribute("aria-label")||"";',
     // Handle both ASCII apostrophe (') and Unicode curly apostrophe (’) that LinkedIn uses
@@ -438,14 +439,25 @@ function buildEval(profile) {
     'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
     // Method 3: activity- href links
     'try{Array.from(document.querySelectorAll("a[href*=activity-]")).forEach(function(a){var urn=xUrn(a.href);if(!urn||seen[urn])return;card(a,urn);});}catch(e){}',
-    // Method 4: author /in/ link → walk up → find URN in innerHTML (works with obfuscated CSS like "b9f1c9a1 _5e4d195b")
-    'try{var seenCards=[];Array.from(document.querySelectorAll("a[href*=\\"/in/\\"]")).forEach(function(a){',
-    '  var c=a;for(var i=0;i<20;i++){c=c.parentElement;if(!c||c===document.body)break;',
+    // Method 4: author /in/ and /company/ link → walk up → find URN in innerHTML or generate Hash
+    'try{var seenCards=[];Array.from(document.querySelectorAll("a[href*=\\"/in/\\"],a[href*=\\"/company/\\"]")).forEach(function(a){',
+    '  var c=a,fh=null,firstHit=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;',
     '    var l=(c.innerText||"").trim().length;',
-    '    if(l>200&&l<12000&&seenCards.indexOf(c)<0){',
-    '      var m=(c.innerHTML||"").match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);',
-    '      if(m){seenCards.push(c);var urn="urn:li:"+m[1]+":"+m[2];if(!seen[urn])xPost(urn,c,"");break;}',
-    '    }if(l>=12000)break;',
+    '    if(l>150&&l<15000){',
+    '      if(!firstHit)firstHit=c;',
+    '      if(c.querySelectorAll("[aria-label]").length>0){fh=c;break;}',
+    '    }if(l>=15000)break;',
+    '  }',
+    '  var fc=fh||firstHit;',
+    '  if(fc&&seenCards.indexOf(fc)<0){',
+    '    seenCards.push(fc);',
+    '    var h=fc.innerHTML||"";',
+    '    var m=h.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);',
+    '    var urn="";',
+    '    if(m)urn="urn:li:"+m[1]+":"+m[2];',
+    '    if(!urn){var p=h.match(/activity-([0-9]{10,25})/i);if(p)urn="urn:li:activity:"+p[1];}',
+    '    if(!urn){var txt=getText(fc);if(txt.length>50)urn=getHash(txt);}',
+    '    if(urn&&!seen[urn])xPost(urn,fc,"");',
     '  }',
     '});}catch(e){}',
     'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '",debug:debugLog});',
