@@ -40,8 +40,15 @@ function splitByRecency(posts: SavedPost[]): SplitGroup {
 }
 
 function getValidUrl(post: SavedPost): string {
-  let url = post.postUrl;
-  if (url.startsWith('discovered:') || url.startsWith('synthetic:')) {
+  const url = post.postUrl ?? '';
+  // Internal identifiers (hash URNs, empty, discovered:, synthetic:) are not
+  // valid browser URLs — fall back to a LinkedIn keyword search instead.
+  if (
+    !url ||
+    url.startsWith('urn:') ||
+    url.startsWith('discovered:') ||
+    url.startsWith('synthetic:')
+  ) {
     return `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(post.keyword)}&origin=GLOBAL_SEARCH_HEADER`;
   }
   if (!url.startsWith('http')) return 'https://' + url.replace(/^\/*/, '');
