@@ -766,8 +766,45 @@ function ingestBody(body) {
         // Re-push enriched snapshot so API receives the latest merged data
         if (changed) { S.batch.push({ ...ex }); enriched++; }
       } else {
-        const np = { canonicalUrn: urn, url: `https://www.linkedin.com/feed/update/${urn}`, postText: p.text, preview: p.text, author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'network' };
-        S.store.set(urn, np); S.batch.push({ ...np }); enriched++;
+        // ── Network → Hash reconciliation ─────────────────────────────────
+        // Before creating a new real-URN record, check if a hash-URN entry
+        // already exists for the same post (matched by author + text snippet).
+        // If found, upgrade the existing entry instead of creating a duplicate.
+        let upgraded = false;
+        if (p.author && p.text && p.text.length > 20) {
+          function normAuth(s) {
+            return (s || '').split('\n')[0]
+              .replace(/^View\s+(?:company:\s*)?/i, '')
+              .replace(/[\u2019\u0027]s\s.*$/i, '')
+              .replace(/\s*[\u2022\u00B7].*$/, '')
+              .trim().toLowerCase();
+          }
+          const netAuth = normAuth(p.author);
+          const netSnip = p.text.replace(/\s+/g, ' ').trim().substring(0, 60).toLowerCase();
+          for (const [storeUrn, storePost] of S.store) {
+            if (!storeUrn.startsWith('urn:li:hash:')) continue;
+            const domAuth = normAuth(storePost.author);
+            if (!domAuth || domAuth === 'unknown' || domAuth !== netAuth) continue;
+            const domSnip = (storePost.postText || '').replace(/\s+/g, ' ').trim().substring(0, 60).toLowerCase();
+            if (domSnip.length < 10) continue;
+            // Require at least 30-char overlap to confirm same post
+            const overlap = netSnip.substring(0, 40);
+            if (!domSnip.includes(overlap.substring(0, 30)) && !netSnip.includes(domSnip.substring(0, 30))) continue;
+            // Match — upgrade hash entry with authoritative network engagement
+            let changed = false;
+            if (p.likes    !== null && (storePost.likes    === null || p.likes    > storePost.likes))    { storePost.likes    = p.likes;    changed = true; }
+            if (p.comments !== null && (storePost.comments === null || p.comments > storePost.comments)) { storePost.comments = p.comments; changed = true; }
+            if (p.text.length > (storePost.postText || '').length) { storePost.postText = p.text; storePost.preview = p.text; changed = true; }
+            if (p.author && p.author.length > (storePost.author || '').length && storePost.author === 'Unknown') { storePost.author = p.author; changed = true; }
+            if (changed) { S.batch.push({ ...storePost }); enriched++; }
+            upgraded = true;
+            break;
+          }
+        }
+        if (!upgraded) {
+          const np = { canonicalUrn: urn, url: `https://www.linkedin.com/feed/update/${urn}`, postText: p.text, preview: p.text, author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'network' };
+          S.store.set(urn, np); S.batch.push({ ...np }); enriched++;
+        }
       }
     }
     if (enriched > 0) flushBatch().catch(() => {});
