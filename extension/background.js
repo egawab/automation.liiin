@@ -443,7 +443,7 @@ function buildEval(profile) {
     '  var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
     '  var isDup=seen[urn]?true:false;',
     '  console.log("POST DEBUG:\\n- rawTextLength: "+(el.innerText||"").length+"\\n- normalizedTextLength: "+txt.length+"\\n- author: "+auth+"\\n- extractedURN: "+(hashInput?"(none)":urn)+"\\n- generatedHashInput: "+(hashInput?hashInput:"(none)")+"\\n- generatedHash: "+(hashInput?urn:"(none)")+"\\n- dedupeDecision: "+(isDup?"DUPLICATE":"NEW")+"\\n- dedupeReason: "+(isDup?"Already seen in this cycle":"First time seen"));',
-    '  if(isDup)return;seen[urn]=1;',
+    '  if(isDup){var dEng=getEng(el);if(dEng.likes>0||dEng.comments>0){posts.push({urn:urn,url:\'\',text:\'\',author:\'\',likes:dEng.likes,comments:dEng.comments});}return;}seen[urn]=1;',
     '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,cls:(el.className||"").substring(0,40),ariaLabels:Array.from(el.querySelectorAll("[aria-label]")).map(function(x){return x.getAttribute("aria-label");}).filter(Boolean).slice(0,6)});',
     '  posts.push({urn:urn,url:href||(urn.indexOf("urn:li:hash:")<0?"https://www.linkedin.com/feed/update/"+urn:""),text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
     // card(): walk up, prefer container that has [aria-label] elements (engagement is always aria-labeled)
@@ -464,7 +464,7 @@ function buildEval(profile) {
     '    }if(l>=15000)break;',
     '  }',
     '  var fc=fh||firstHit;',
-    '  if(fc&&seenCards.indexOf(fc)<0){',
+    '  if(fc&&!seenCards.some(function(s){return s.contains(fc)||fc.contains(s);})){',
     '    seenCards.push(fc);',
     '    var h=fc.innerHTML||"";',
     '    var m=h.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);',
