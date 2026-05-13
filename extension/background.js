@@ -371,7 +371,7 @@ const DIAG_PROBE = [
 // buildEval(profile): generates an account-optimized EVAL expression
 function buildEval(profile) {
   const p = profile || {};
-  const minCard = (p.articleCards > 0 || p.dataUrn > 0) ? 30 : 40;
+  const minCard = (p.articleCards > 0 || p.dataUrn > 0) ? 20 : 30;
   const strategy = p._strategy || 'FEED_CLASSIC';
 
   const lines = [
@@ -386,19 +386,24 @@ function buildEval(profile) {
     // Engagement: 4-strategy locale-agnostic extraction
     'function getEng(el){',
     '  var lk=0,cm=0;',
-    // S1: social-details-social-counts — positional (first number = reactions, second = comments)
+    // S0: innerText pattern — catches "27 reactions" plain-text format in Classic/Search feed
+    '  try{Array.from(el.querySelectorAll("span,div,li,a")).forEach(function(x){if(x.children.length>5)return;var raw=(x.innerText||"").trim();var n=norm(raw);var rm=n.match(/([0-9][0-9,\\.]*[KkMm]?)\\s*(reaction|like|reacted)/i);if(rm)lk=Math.max(lk,pe(rm[1]));var cm2=n.match(/([0-9][0-9,\\.]*[KkMm]?)\\s*(comment)/i);if(cm2)cm=Math.max(cm,pe(cm2[1]));});}catch(e){}',
+    // S1: social-details-social-counts — positional, handles "1,234" formatted numbers
     '  try{var sdc=el.querySelector(".social-details-social-counts,.update-components-social-counts");',
     '    if(sdc){var nums=[];Array.from(sdc.querySelectorAll("span,button,li")).forEach(function(x){',
-    '      var t=norm((x.innerText||"").trim());if(/^[0-9]+$/.test(t)&&t.length<9){var n=parseInt(t,10);if(n>0&&nums.indexOf(n)<0)nums.push(n);}',
-    '    });if(nums[0])lk=nums[0];if(nums[1])cm=nums[1];}}catch(e){}',
-    // S2: aria-label scan — works for any language using norm() first
-    '  if(!lk&&!cm)try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){',
+    '      var t=norm((x.innerText||"").trim().replace(/,/g,""));if(/^[0-9]{1,8}$/.test(t)){var n=parseInt(t,10);if(n>0&&nums.indexOf(n)<0)nums.push(n);}',
+    '    });if(nums[0])lk=Math.max(lk,nums[0]);if(nums[1])cm=Math.max(cm,nums[1]);}}catch(e){}',
+
+    // S2: aria-label scan — always run (ungated), take max values
+    '  try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){',
+
     '    var raw=x.getAttribute("aria-label")||"";var a=norm(raw);',
     '    if(/[0-9]/.test(a)&&/(reaction|like|reacted|تفاعل|إعجاب|\\u0631\\u062F\\u0648\\u062F)/i.test(raw))lk=Math.max(lk,pe(a));',
     '    if(/[0-9]/.test(a)&&/(comment|تعليق)/i.test(raw))cm=Math.max(cm,pe(a));',
     '  });}catch(e){}',
-    // S3: button text — e.g. "27 Likes" or "٢٧ إعجاب"
-    '  if(!lk&&!cm)try{Array.from(el.querySelectorAll("button")).forEach(function(b){',
+    // S3: button text — always run (ungated), take max values
+    '  try{Array.from(el.querySelectorAll("button")).forEach(function(b){',
+
     '    var raw=(b.innerText||"").trim();var t=norm(raw);',
     '    if(/[0-9]/.test(t)&&/(like|reaction|تفاعل|إعجاب)/i.test(raw))lk=Math.max(lk,pe(t));',
     '    if(/[0-9]/.test(t)&&/(comment|تعليق)/i.test(raw))cm=Math.max(cm,pe(t));',
