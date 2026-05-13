@@ -21,8 +21,9 @@ const S = {
   totalSaved: 0,
   flushedUrns: new Set(),
   sessionId: null,
-  scrollRunning: false,          // lock: prevents duplicate scroll loops
-  lastNetworkActivity: 0,        // timestamp of last network event (for idle detection)
+  scrollRunning: false,
+  lastNetworkActivity: 0,
+  runId: 0,                      // incremented each session; stale async chains check this
 };
 
 function setState(next) {
@@ -127,11 +128,15 @@ async function startSession(msg, port) {
   log("INFO", "SESSION", "Starting", { keywords: kws, sessionId: S.sessionId });
   safePortMsg(port, { type: "ACK_START", keyword: S.kwQueue.current });
   S.tabId = await resolveLinkedInTab();
-  runKeyword().catch(e => log("ERROR", "SESSION", "runKeyword crashed: " + e.message));
+  S.runId++; // new session ID
+  const sid = S.runId;
+  runKeyword(sid).catch(e => log("ERROR", "SESSION", "runKeyword crashed: " + e.message));
 }
 
 async function stopSession() {
   log("WARN", "SESSION", "Stopping", { state: S.state });
+  S.runId++; // invalidate any in-flight runKeyword() chains
+  S.scrollRunning = false;
   await safeDetach();
   S.buffer = { dom: [], network: [] };
   setState("IDLE");
@@ -338,7 +343,7 @@ function reconcile() {
 }
 
 // ── Scroll Engine — navigation only ──────────────────────────────────────────
-async function cdpScrollEngine(kw) {
+async function cdpScrollEngine(kw, sid) {
   // Scroll lock: prevent duplicate concurrent scroll loops
   if (S.scrollRunning) {
     log("WARN", "SCROLL", "cdpScrollEngine called but scroll already running — ignoring duplicate");
@@ -354,7 +359,7 @@ async function cdpScrollEngine(kw) {
     let initM = null; try { if (initRaw) initM = JSON.parse(initRaw); } catch (_) {}
     if (initM) log("INFO", "SCROLL", "Container sh=" + initM.sh + " ch=" + initM.ch);
     if (initM && initM.sh < initM.ch * 1.2) { broadcast("EXTENSION_LIVE_STATUS", { text: "Skip: no content" }); return "empty_page"; }
-    while (step < MAX_STEPS && S.state === "SCRAPING" && S.tabId) {
+    while (step < MAX_STEPS && S.state === "SCRAPING" && S.tabId && S.runId === sid) {
       step++;
       await cdpExec(DO_SCROLL);
       await sleep(2600 + Math.floor(Math.random() * 1200));
@@ -382,7 +387,8 @@ async function cdpScrollEngine(kw) {
   return stopReason;
 }
 
-async function runKeyword() {
+async function runKeyword(sid) {
+  if (S.runId !== sid) { log("WARN", "KW", "Stale runId=" + sid + " cur=" + S.runId + " — aborting"); return; }
   const kw = S.kwQueue.current;
   if (!kw) { finalizeSession(); return; }
   log("INFO", "KW", "Starting: " + kw);
@@ -413,15 +419,17 @@ async function runKeyword() {
     await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ["content.js"] });
     log("INFO", "INJECT", "content.js injected (pre-scroll)");
   } catch (ex) { log("WARN", "INJECT", "content.js inject failed: " + ex.message); }
-  await sleep(800); // give content.js time to register __nexora_net__ listener
+  await sleep(800);
+  if (S.runId !== sid) { log("WARN", "KW", "Session cancelled before SCRAPING"); return; }
   setState("SCRAPING");
   S.buffer = { dom: [], network: [] };
   S.lastNetworkActivity = 0;
-  await cdpScrollEngine(kw);
-  if (S.state === "SCRAPING") finalizeKeyword().catch(e => log("ERROR", "KW", e.message));
+  await cdpScrollEngine(kw, sid);
+  if (S.state === "SCRAPING" && S.runId === sid) finalizeKeyword(sid).catch(e => log("ERROR", "KW", e.message));
 }
 
-async function finalizeKeyword() {
+async function finalizeKeyword(sid) {
+  if (S.runId !== sid) { log("WARN", "FLUSH", "Stale session — skipping reconcile"); return; }
   setState("FLUSHING");
   // Network idle detection: wait until no new network events for IDLE_MS, max MAX_WAIT_MS
   const IDLE_MS = 1500, MAX_WAIT_MS = 8000;
@@ -444,7 +452,7 @@ async function finalizeKeyword() {
   reconcile();
   await flushAll();
   log("INFO", "KW", "Complete", S.kwQueue.status());
-  if (S.kwQueue.hasMore()) { S.kwQueue.advance(); await sleep(4000); setState("NAVIGATING"); await runKeyword(); }
+  if (S.kwQueue.hasMore()) { S.kwQueue.advance(); await sleep(4000); if (S.runId === sid) { setState("NAVIGATING"); await runKeyword(sid); } }
   else finalizeSession();
 }
 
