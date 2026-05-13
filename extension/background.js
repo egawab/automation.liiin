@@ -211,7 +211,7 @@ const DOM_COLLECTOR = `(function(){
         .trim();
       if(cl&&cl.length>1&&!/^(Unknown|View)$/i.test(cl))return cl.substring(0,100);
     }
-    var name=(a.innerText||"").trim().split("\n")[0].replace(/^[Vv]iew\s+/i,"").replace(/\s*(profile|page)\s*$/i,"").trim().substring(0,100);if(name.length>1)return name;
+    var name=(a.innerText||"").trim().split("\\n")[0].replace(/^[Vv]iew\s+/i,"").replace(/\s*(profile|page)\s*$/i,"").trim().substring(0,100);if(name.length>1)return name;
     var img=a.querySelector("img[alt]");if(img)return(img.getAttribute("alt")||"").trim().substring(0,100);return "Unknown";}
   function addRec(urn,el,href){if(!el)return;var key=urn||"";if(key&&seen[key])return;if(key)seen[key]=1;
     var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);
@@ -403,11 +403,20 @@ async function runKeyword() {
     try { await withTimeout(chrome.debugger.attach({ tabId: S.tabId }, "1.3"), 6000, "debugger.attach"); S.attached = true; }
     catch (ex) { const em = ex.message || ""; if (em.includes("already") || em.includes("Another")) S.attached = true; else log("WARN", "CDP", "Attach: " + em); }
   }
-  if (S.attached) { try { await withTimeout(chrome.debugger.sendCommand({ tabId: S.tabId }, "Runtime.enable"), 4000, "Runtime.enable"); } catch (ex) {} }
-  chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ["content.js"] }).then(() => log("INFO", "INJECT", "content.js injected")).catch(ex => log("WARN", "INJECT", ex.message));
-  await sleep(300);
+  if (S.attached) {
+    try { await withTimeout(chrome.debugger.sendCommand({ tabId: S.tabId }, "Runtime.enable"), 4000, "Runtime.enable"); } catch (ex) {}
+    // Enable Network domain so CDP fallback (loadingFinished) fires
+    try { await chrome.debugger.sendCommand({ tabId: S.tabId }, "Network.enable", {}); log("INFO", "CDP", "Network.enable OK"); } catch (ex) { log("WARN", "CDP", "Network.enable: " + ex.message); }
+  }
+  // Inject content.js BEFORE scroll starts and AWAIT it so network bridge is live
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ["content.js"] });
+    log("INFO", "INJECT", "content.js injected (pre-scroll)");
+  } catch (ex) { log("WARN", "INJECT", "content.js inject failed: " + ex.message); }
+  await sleep(800); // give content.js time to register __nexora_net__ listener
   setState("SCRAPING");
   S.buffer = { dom: [], network: [] };
+  S.lastNetworkActivity = 0;
   await cdpScrollEngine(kw);
   if (S.state === "SCRAPING") finalizeKeyword().catch(e => log("ERROR", "KW", e.message));
 }
