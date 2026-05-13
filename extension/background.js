@@ -440,14 +440,16 @@ function buildEval(profile) {
     '  var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
     '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,cls:(el.className||"").substring(0,40)});',
     '  posts.push({urn:urn,url:href||"https://www.linkedin.com/feed/update/"+urn,text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
-    // card(): walk up, prefer container that has [aria-label] elements (engagement is always aria-labeled)
-    'function card(el,urn){var c=el,firstHit=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<15000){if(!firstHit)firstHit=c;if(c.querySelectorAll("[aria-label]").length>0){xPost(urn,c,"");return;}}if(l>=15000)break;}if(firstHit)xPost(urn,firstHit,"");}',
+    // card(): prefer <li> containers (LinkedIn Search uses li.reusable-search__result-container), limit raised to 25000
+    'function card(el,urn){var c=el,firstHit=null,liHit=null;for(var i=0;i<35;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){if(!firstHit)firstHit=c;if(c.tagName==="LI"){liHit=c;break;}if(c.querySelectorAll("[aria-label]").length>0){firstHit=c;break;}}if(l>=25000)break;}xPost(urn,liHit||firstHit,"");}',
     // Method 1: feed/update and /posts/ href links
     'try{Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).forEach(function(lnk){var urn=xUrn(lnk.href);if(!urn||seen[urn])return;var c=lnk,fh=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<15000){if(!fh)fh=c;if(c.querySelectorAll("[aria-label]").length>0){xPost(urn,c,lnk.href);fh=null;break;}}if(l>=15000)break;}if(fh)xPost(urn,fh,lnk.href);});}catch(e){}',
     // Method 2: data-urn attributes
     'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
     // Method 3: activity- href links
     'try{Array.from(document.querySelectorAll("a[href*=activity-]")).forEach(function(a){var urn=xUrn(a.href);if(!urn||seen[urn])return;card(a,urn);});}catch(e){}',
+    // Method 4: safe innerHTML URN scan — finds ALL embedded URNs in DOM (search result cards, data attrs, script blocks)
+    'try{var allH=document.body.innerHTML;var urx=/urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;var m4,uq=[];while((m4=urx.exec(allH))!==null){var u="urn:li:"+m4[1]+":"+m4[2];if(!seen[u]&&uq.indexOf(u)<0)uq.push(u);}uq.forEach(function(urn){if(seen[urn])return;var aid=urn.split(":").pop();var el=document.querySelector("[href*=\'feed/update/"+urn+"\'],[data-urn*=\':"+aid+"\'],[data-entity-urn*=\':"+aid+"\'],[data-chameleon-result-urn*=\':"+aid+"\'],[href*=\'activity-"+aid+"\']");if(el)card(el,urn);});}catch(e){}',
 
     'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '",debug:debugLog});',
     '})()'
