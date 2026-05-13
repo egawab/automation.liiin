@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Nexora – LinkedIn AI Assistant",
-  "version": "6.0",
-  "version_name": "Arch-Rebuild",
-  "description": "Production-grade LinkedIn content scraper.",
+  "version": "7.0",
+  "version_name": "URSS",
+  "description": "Unified Reconciliation Scraping System — production-grade LinkedIn content scraper.",
   "permissions": [
     "storage", "alarms", "tabs", "scripting",
     "activeTab", "notifications", "cookies", "debugger"

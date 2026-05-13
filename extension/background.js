@@ -1,39 +1,34 @@
-// Nexora background.js v6 — FSM Session Manager
-// Single command channel (port only). Alarm = keep-alive only.
-console.log('[BG] Nexora v6 loaded');
+// Nexora background.js — URSS v7 (Unified Reconciliation Scraping System)
+// 3-layer: DOM Collector | Network Interceptor | Scroll Engine
+// Buffer Layer: S.buffer only. S.store: final output, written ONLY by reconcile().
+console.log("[BG] Nexora URSS v7 loaded");
 
-// ── Structured Logger ────────────────────────────────────────────────────
 const LOG = [];
 function log(level, mod, msg, data) {
   const e = { ts: Date.now(), level, mod, msg, data };
   LOG.push(e); if (LOG.length > 300) LOG.shift();
-  console[level === 'ERROR' ? 'error' : level === 'WARN' ? 'warn' : 'log'](`[${mod}] ${msg}`, data || '');
+  console[level === "ERROR" ? "error" : level === "WARN" ? "warn" : "log"](`[${mod}] ${msg}`, data || "");
 }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ── Session State (FSM) ──────────────────────────────────────────────────
-// States: IDLE | INITIALIZING | ATTACHING | NAVIGATING | SCRAPING | FLUSHING | DONE
+// ── Session State ─────────────────────────────────────────────────────────────
 const S = {
-  state: 'IDLE',
-  tabId: null,
-  attached: false,
-  dashboardUrl: '',
-  userId: '',
-  kwQueue: null,       // KeywordQueue instance
-  store: new Map(),    // URN → post record (persists across keywords)
-  batch: [],           // pending posts to flush
-  retryQueue: [],      // posts that failed API submission
+  state: "IDLE", tabId: null, attached: false,
+  dashboardUrl: "", userId: "",
+  kwQueue: null,
+  buffer: { dom: [], network: [] },  // ONLY staging area — no direct store writes
+  store: new Map(),                   // ONLY written by reconcile()
   totalSaved: 0,
-  evalTimer: null,
+  flushedUrns: new Set(),
   sessionId: null,
 };
 
 function setState(next) {
-  log('INFO', 'FSM', `${S.state} → ${next}`);
+  log("INFO", "FSM", S.state + " -> " + next);
   S.state = next;
   broadcastStatus();
 }
 
-// ── Keyword Queue ────────────────────────────────────────────────────────
 class KeywordQueue {
   constructor(kws) { this._q = [...kws]; this._done = []; this.current = null; }
   advance() { if (this.current) this._done.push(this.current); this.current = this._q.shift() || null; return this.current; }
@@ -41,834 +36,419 @@ class KeywordQueue {
   status() { return { current: this.current, remaining: this._q.length, done: this._done.length }; }
 }
 
-// ── Keep-Alive Alarm (heartbeat only) ────────────────────────────────────
-chrome.alarms.create('nexora_heartbeat', { periodInMinutes: 0.4 });
+// ── Keep-alive ────────────────────────────────────────────────────────────────
+chrome.alarms.create("nexora_heartbeat", { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== 'nexora_heartbeat') return;
-  // Keep service worker alive only. Never start/restart sessions.
-  if (S.state !== 'IDLE' && S.state !== 'DONE') {
-    log('INFO', 'HB', `Heartbeat — state=${S.state} saved=${S.totalSaved}`);
-  }
+  if (alarm.name !== "nexora_heartbeat") return;
+  if (S.state !== "IDLE" && S.state !== "DONE")
+    log("INFO", "HB", "state=" + S.state + " saved=" + S.totalSaved);
 });
 
-// ── Port Command Channel (ONLY command entry point) ──────────────────────
+// ── Port channel ──────────────────────────────────────────────────────────────
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'nexora_cmd') return;
-  log('INFO', 'PORT', 'Port connected');
-  // Immediately update badge so user can see the command reached background
-  chrome.action.setBadgeText({ text: '...' }).catch(() => {});
-  chrome.action.setBadgeBackgroundColor({ color: '#f59e0b' }).catch(() => {});
-
+  if (port.name !== "nexora_cmd") return;
   port.onMessage.addListener(async (msg) => {
-    if (msg.action === 'START') {
-      if (S.state !== 'IDLE' && S.state !== 'DONE') {
-        await stopSession();
-      }
-      try {
-        await startSession(msg, port);
-      } catch (e) {
-        log('ERROR', 'PORT', 'startSession failed', e.message);
-        safePortMsg(port, { type: 'ERROR', error: e.message });
-        chrome.action.setBadgeText({ text: 'ERR' }).catch(() => {});
-        chrome.action.setBadgeBackgroundColor({ color: '#ef4444' }).catch(() => {});
-        broadcast('EXTENSION_LIVE_STATUS', { text: '❌ ' + e.message });
-      }
-    } else if (msg.action === 'STOP') {
-      await stopSession();
-      safePortMsg(port, { type: 'ACK_STOP' });
-    } else if (msg.action === 'GET_STATUS') {
-      safePortMsg(port, { type: 'STATUS', state: S.state, saved: S.totalSaved, kw: S.kwQueue?.current });
+    if (msg.action === "START") {
+      if (S.state !== "IDLE" && S.state !== "DONE") await stopSession();
+      try { await startSession(msg, port); }
+      catch (e) { safePortMsg(port, { type: "ERROR", error: e.message }); broadcast("EXTENSION_LIVE_STATUS", { text: "ERR: " + e.message }); }
+    } else if (msg.action === "STOP") {
+      await stopSession(); safePortMsg(port, { type: "ACK_STOP" });
+    } else if (msg.action === "GET_STATUS") {
+      safePortMsg(port, { type: "STATUS", state: S.state, saved: S.totalSaved, kw: S.kwQueue?.current });
     }
   });
-
-  port.onDisconnect.addListener(() => { log('INFO', 'PORT', 'Port disconnected'); });
+  port.onDisconnect.addListener(() => log("INFO", "PORT", "disconnected"));
 });
 
 function safePortMsg(port, msg) { if (!port) return; try { port.postMessage(msg); } catch (_) {} }
-
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise(function(_, rej) { setTimeout(function() { rej(new Error(label + ' timed out after ' + ms + 'ms')); }, ms); })
-  ]);
+function withTimeout(p, ms, label) {
+  return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(label + " timed out")), ms))]);
 }
 
-// ── Start Session ────────────────────────────────────────────────────────
-async function startSession(msg, port) {
-  setState('INITIALIZING');
-  S.sessionId = Math.random().toString(36).slice(2);
-  S.totalSaved = 0;
-  S.store.clear();
-  S.batch = []; S.retryQueue = [];
-  S.flushedUrns = new Set();
-  S.diagProfile = null;   // filled by runDiagProbe()
-  S.activeEval = null;    // built by buildEval() from diagProfile
+// ── Message channel ───────────────────────────────────────────────────────────
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === "START_ENGINE") {
+    (async () => {
+      try { if (S.state !== "IDLE" && S.state !== "DONE") await stopSession(); await startSession(msg, null); }
+      catch (e) { log("ERROR", "MSG", "START_ENGINE: " + e.message); broadcast("EXTENSION_LIVE_STATUS", { text: "ERR: " + e.message }); }
+    })();
+    sendResponse({ ok: true }); return false;
+  }
+  if (msg.action === "STOP_ENGINE") { stopSession().finally(() => sendResponse({ ok: true })); return true; }
+  if (msg.action === "NET_BODY") { ingestBody(msg.body); sendResponse({ ok: true }); return false; }
+  if (msg.action === "KEEP_ALIVE") { sendResponse({ ok: true }); return false; }
+  if (msg.action === "SCROLL_STEP") { sendResponse({ ok: true }); return false; }
+  if (msg.action === "SCROLL_COMPLETE") { log("INFO", "MSG", "SCROLL_COMPLETE (content.js)"); sendResponse({ ok: true }); return false; }
+  if (msg.action === "GET_STATUS") {
+    sendResponse({ running: ["SCRAPING","NAVIGATING","FLUSHING"].includes(S.state), state: S.state, totalSaved: S.totalSaved, keyword: S.kwQueue?.current });
+    return false;
+  }
+});
 
-  const cfg = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
-  S.dashboardUrl = msg.dashboardUrl || cfg.dashboardUrl || '';
-  S.userId = msg.userId || cfg.userId || '';
-  if (!S.dashboardUrl || !S.userId) throw new Error('Not configured — set Dashboard URL and User ID first.');
+// CDP network fallback
+chrome.debugger.onEvent.addListener(async (src, method, params) => {
+  if (src.tabId !== S.tabId || S.state !== "SCRAPING") return;
+  if (method === "Network.loadingFinished") {
+    try {
+      const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, "Network.getResponseBody", { requestId: params.requestId });
+      const body = r.base64Encoded ? atob(r.body) : (r.body || "");
+      if (body.length > 200) ingestBody(body);
+    } catch (_) {}
+  }
+});
+
+// ── Session ───────────────────────────────────────────────────────────────────
+async function startSession(msg, port) {
+  setState("INITIALIZING");
+  S.sessionId = Math.random().toString(36).slice(2);
+  S.totalSaved = 0; S.store.clear();
+  S.buffer = { dom: [], network: [] };
+  S.flushedUrns = new Set();
+
+  const cfg = await chrome.storage.sync.get(["dashboardUrl", "userId"]);
+  S.dashboardUrl = msg.dashboardUrl || cfg.dashboardUrl || "";
+  S.userId = msg.userId || cfg.userId || "";
+  if (!S.dashboardUrl || !S.userId) throw new Error("Not configured — set Dashboard URL and User ID first.");
 
   const kws = await fetchKeywords(S.dashboardUrl, S.userId);
   S.kwQueue = new KeywordQueue(kws);
   S.kwQueue.advance();
-  if (!S.kwQueue.current) throw new Error('No keywords configured in dashboard.');
+  if (!S.kwQueue.current) throw new Error("No keywords configured in dashboard.");
 
-  log('INFO', 'SESSION', 'Starting', { keywords: kws, sessionId: S.sessionId });
-  safePortMsg(port, { type: 'ACK_START', keyword: S.kwQueue.current });
-
+  log("INFO", "SESSION", "Starting", { keywords: kws, sessionId: S.sessionId });
+  safePortMsg(port, { type: "ACK_START", keyword: S.kwQueue.current });
   S.tabId = await resolveLinkedInTab();
-  runKeyword().catch(e => log('ERROR', 'SESSION', 'runKeyword crashed', e.message));
+  runKeyword().catch(e => log("ERROR", "SESSION", "runKeyword crashed: " + e.message));
 }
 
 async function stopSession() {
-  log('WARN', 'SESSION', 'Stopping session', { state: S.state });
-  stopEval();
+  log("WARN", "SESSION", "Stopping", { state: S.state });
   await safeDetach();
-  S.batch = []; S.retryQueue = [];
-  setState('IDLE');
+  S.buffer = { dom: [], network: [] };
+  setState("IDLE");
 }
 
-// ── Keyword Execution ────────────────────────────────────────────────────
-// CDP SCROLL ENGINE — replaces content.js scroll dependency
-// Injected into background.js via build script
-
+// ── CDP Helpers ───────────────────────────────────────────────────────────────
 async function cdpExec(expr) {
   if (!S.attached || !S.tabId) return null;
   try {
-    const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
+    const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, "Runtime.evaluate",
       { expression: expr, returnByValue: true, awaitPromise: false, timeout: 8000 });
     if (r && r.result && r.result.value !== undefined) return r.result.value;
     return null;
   } catch (_) { return null; }
 }
 
-// Finds LinkedIn's actual scrollable container (body:overflow:hidden, content scrolls inside)
 const FIND_SCROLL_EL = `(function(){
-  var candidates = [
-    document.querySelector('.scaffold-layout__main'),
-    document.querySelector('.scaffold-layout-container__main'),
-    document.querySelector('main'),
-    document.querySelector('[class*="scaffold"][class*="main"]'),
-    document.querySelector('.application-outlet'),
-    document.scrollingElement,
-    document.documentElement
-  ];
-  for(var i=0;i<candidates.length;i++){
-    var el=candidates[i];
-    if(el && el.scrollHeight > el.clientHeight+100){return JSON.stringify({sh:el.scrollHeight,ch:el.clientHeight,st:el.scrollTop,sel:el.tagName+(el.className?'.'+el.className.trim().split(' ')[0]:'')});}
-  }
-  return JSON.stringify({sh:document.body.scrollHeight,ch:window.innerHeight,st:window.scrollY,sel:'body-fallback'});
+  var cs=[document.querySelector('.scaffold-layout__main'),document.querySelector('.scaffold-layout-container__main'),document.querySelector('main'),document.scrollingElement,document.documentElement];
+  for(var i=0;i<cs.length;i++){var el=cs[i];if(el&&el.scrollHeight>el.clientHeight+100){return JSON.stringify({sh:el.scrollHeight,ch:el.clientHeight,st:el.scrollTop,sel:el.tagName});}}
+  return JSON.stringify({sh:document.body.scrollHeight,ch:window.innerHeight,st:window.scrollY,sel:'body'});
 })()`;
 
 const DO_SCROLL = `(function(){
-  // Blur focused element so video/media players don't intercept scroll
   try{if(document.activeElement&&document.activeElement!==document.body)document.activeElement.blur();}catch(e){}
-  var candidates = [
-    document.querySelector('.scaffold-layout__main'),
-    document.querySelector('.scaffold-layout-container__main'),
-    document.querySelector('main'),
-    document.querySelector('[class*="scaffold"][class*="main"]'),
-    document.querySelector('.application-outlet'),
-    document.scrollingElement,
-    document.documentElement
-  ];
-  for(var i=0;i<candidates.length;i++){
-    var el=candidates[i];
-    if(el && el.scrollHeight > el.clientHeight+100){
-      el.scrollTop += Math.floor(el.clientHeight*0.85);
-      el.dispatchEvent(new Event('scroll',{bubbles:true}));
-      window.dispatchEvent(new Event('scroll',{bubbles:true}));
-      return el.scrollTop;
-    }
-  }
-  window.scrollBy(0, Math.floor(window.innerHeight*0.85));
-  return window.scrollY;
+  var cs=[document.querySelector('.scaffold-layout__main'),document.querySelector('.scaffold-layout-container__main'),document.querySelector('main'),document.scrollingElement,document.documentElement];
+  for(var i=0;i<cs.length;i++){var el=cs[i];if(el&&el.scrollHeight>el.clientHeight+100){el.scrollTop+=Math.floor(el.clientHeight*0.85);el.dispatchEvent(new Event('scroll',{bubbles:true}));window.dispatchEvent(new Event('scroll',{bubbles:true}));return el.scrollTop;}}
+  window.scrollBy(0,Math.floor(window.innerHeight*0.85));return window.scrollY;
+})()`;
+
+const CLICK_NEXT = `(function(){
+  var ss=['.artdeco-pagination__button--next','button[aria-label="Next"]','button[aria-label="Go to next page"]'];
+  for(var i=0;i<ss.length;i++){var b=document.querySelector(ss[i]);if(b&&!b.disabled){b.click();return true;}}
+  var m=Array.from(document.querySelectorAll('button,[role="button"]')).find(function(b){return /show more|load more|see more/i.test(b.innerText||'');});
+  if(m&&!m.disabled){m.click();return true;}return false;
 })()`;
 
 async function waitForPageReady(maxMs) {
-  maxMs = maxMs || 15000;
+  maxMs = maxMs || 14000;
   const start = Date.now();
   while (Date.now() - start < maxMs) {
     const raw = await cdpExec(FIND_SCROLL_EL);
-    const rs  = await cdpExec('document.readyState');
-    if (raw) {
-      try {
-        const m = JSON.parse(raw);
-        if (rs === 'complete' && m.sh > m.ch * 1.3) {
-          log('INFO', 'READY', 'Page ready via ' + m.sel + ' sh=' + m.sh + ' ch=' + m.ch + ' in ' + (Date.now()-start) + 'ms');
-          return m;
-        }
-      } catch(_) {}
-    }
+    const rs = await cdpExec("document.readyState");
+    if (raw) { try { const m = JSON.parse(raw); if (rs === "complete" && m.sh > m.ch * 1.3) { log("INFO","READY","sh="+m.sh); return m; } } catch(_){} }
     await sleep(600);
   }
-  // Timeout — diagnose
-  const raw2 = await cdpExec(FIND_SCROLL_EL);
-  const diagTitle = await cdpExec('document.title');
-  const diagText  = await cdpExec('(document.body&&document.body.innerText||"").replace(/\\s+/g," ").trim().substring(0,300)');
-  log('WARN', 'READY', 'Timeout. title="' + diagTitle + '" metrics=' + raw2);
-  log('WARN', 'READY', 'Page text sample: ' + diagText);
-  broadcast('EXTENSION_LIVE_STATUS', { text: 'WARN: page slow — title=' + diagTitle });
+  log("WARN", "READY", "Timeout title=" + await cdpExec("document.title"));
   return null;
 }
 
-async function cdpScrollEngine(kw) {
-  const MAX_STEPS = 55, MIN_STEPS = 6, NO_PROG_MAX = 8; // raised to 8 — give stalled scroll more time
-  let step = 0, noProgress = 0, lastSt = -1, scrolledAtAll = false;
-  let stopReason = 'max_steps';
+// ── LAYER 1: DOM Collector — writes ONLY to S.buffer.dom ─────────────────────
+// Uses backtick template literal to safely embed inner JS with double-quotes.
+const DOM_COLLECTOR = `(function(){
+  var records=[],seen={};
+  function norm(s){return String(s||"").replace(/[\u0660-\u0669]/g,function(c){return c.charCodeAt(0)-0x660;}).replace(/[\u06F0-\u06F9]/g,function(c){return c.charCodeAt(0)-0x6F0;});}
+  function pe(s){if(!s)return 0;var x=norm(s).toUpperCase().replace(/,/g,"");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}
+  function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}
+  function stableKey(a,t){return encodeURIComponent((a||"").toLowerCase().trim())+"::"+((t||"").substring(0,80).toLowerCase().replace(/\\s+/g,"_"));}
+  function getEng(el){var lk=0,cm=0;
+    try{Array.from(el.querySelectorAll("span,div,li,a")).forEach(function(x){if(x.children.length>5)return;var n=norm((x.innerText||"").trim());var r=n.match(/([0-9][0-9,.]*[KkMm]?)\\s*(reaction|like|reacted)/i);if(r)lk=Math.max(lk,pe(r[1]));var c2=n.match(/([0-9][0-9,.]*[KkMm]?)\\s*(comment)/i);if(c2)cm=Math.max(cm,pe(c2[1]));});}catch(e){}
+    try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){var a=norm(x.getAttribute("aria-label")||"");if(/[0-9]/.test(a)&&/(reaction|like|reacted)/i.test(a))lk=Math.max(lk,pe(a));if(/[0-9]/.test(a)&&/(comment)/i.test(a))cm=Math.max(cm,pe(a));});}catch(e){}
+    try{Array.from(el.querySelectorAll("button")).forEach(function(b){var t=norm((b.innerText||"").trim());if(/[0-9]/.test(t)&&/(like|reaction)/i.test(t))lk=Math.max(lk,pe(t));if(/[0-9]/.test(t)&&/(comment)/i.test(t))cm=Math.max(cm,pe(t));});}catch(e){}
+    try{var sdc=el.querySelector(".social-details-social-counts,.update-components-social-counts");if(sdc){var nums=[];Array.from(sdc.querySelectorAll("span,button,li")).forEach(function(x){var t=norm((x.innerText||"").trim().replace(/,/g,""));if(/^[0-9]{1,8}$/.test(t)){var n=parseInt(t,10);if(n>0&&nums.indexOf(n)<0)nums.push(n);}});if(nums[0])lk=Math.max(lk,nums[0]);if(nums[1])cm=Math.max(cm,nums[1]);}}catch(e){}
+    return {likes:lk,comments:cm};}
+  function getText(el){var txt="";var skip=/^(Pause|Skip Forward|Skip Backward|Unmute|Current Time|Duration)/i;
+    var ss=[".update-components-text",".feed-shared-update-v2__description",".attributed-text-segment-list__content",".break-words",".feed-shared-text"];
+    ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length&&!skip.test(t))txt=t;});}catch(e){}});
+    try{Array.from(el.querySelectorAll("[dir]")).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length&&!skip.test(t))txt=t;});}catch(e){}
+    if(txt.length<20){var raw=(el.innerText||"").replace(/\\s+/g," ").trim();if(!skip.test(raw))txt=raw.substring(0,3000);}return txt;}
+  function getAuthor(el){var a=el.querySelector('a[href*="/in/"],a[href*="/company/"]');if(!a)return "Unknown";
+    var aria=a.getAttribute("aria-label")||"";
+    if(aria){var cl=aria.replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/(['\\u2019\\u2018]s\\s.*|\\s+Verified.*|\\s+Top\\s+Voice.*|\\s+\\d.*)$/i,"");if(cl)return cl.trim().substring(0,100);}
+    var name=(a.innerText||"").trim().split("\\n")[0].trim().substring(0,100);if(name.length>1)return name;
+    var img=a.querySelector("img[alt]");if(img)return(img.getAttribute("alt")||"").trim().substring(0,100);return "Unknown";}
+  function addRec(urn,el,href){if(!el)return;var key=urn||"";if(key&&seen[key])return;if(key)seen[key]=1;
+    var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);
+    if(!urn&&auth&&txt){key="STABLE::"+stableKey(auth,txt);if(seen[key])return;seen[key]=1;}
+    if(!key)return;
+    records.push({urn:urn||null,stableKey:key,url:href||(urn?"https://www.linkedin.com/feed/update/"+urn:""),text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments,source:"dom"});}
+  function walkCard(el,urn,href){var c=el,fh=null,li=null;for(var i=0;i<35;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>20&&l<25000){if(!fh)fh=c;if(c.tagName==="LI"){li=c;break;}}if(l>=25000)break;}addRec(urn,li||fh,href||"");}
+  try{Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).forEach(function(lnk){var urn=xUrn(lnk.href);if(!urn||seen[urn])return;walkCard(lnk,urn,lnk.href);});}catch(e){}
+  try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;walkCard(el,urn,"");});});}catch(e){}
+  try{var allH=document.body.innerHTML;var urx=/urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;var m4,uq=[];while((m4=urx.exec(allH))!==null){var u="urn:li:"+m4[1]+":"+m4[2];if(!seen[u]&&uq.indexOf(u)<0)uq.push(u);}uq.forEach(function(urn){if(seen[urn])return;var aid=urn.split(":").pop();var el=document.querySelector("[data-urn*=':"+aid+"'],[data-entity-urn*=':"+aid+"'],[href*='activity-"+aid+"']");if(el)walkCard(el,urn,"");});}catch(e){}
+  return JSON.stringify({records:records,count:records.length});
+})()`;
 
-  const ready = await waitForPageReady(14000);
-  broadcast('EXTENSION_LIVE_STATUS', { text: 'Scrolling: "' + kw + '"' });
+async function collectDOM() {
+  if (!S.attached || !S.tabId || S.state !== "SCRAPING") return;
+  try {
+    const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, "Runtime.evaluate",
+      { expression: DOM_COLLECTOR, returnByValue: true, timeout: 12000 });
+    if (!r?.result?.value) return;
+    const parsed = JSON.parse(r.result.value);
+    const recs = parsed.records || [];
+    for (const rec of recs) S.buffer.dom.push(rec);  // ONLY writes to buffer.dom
+    log("INFO", "DOM", "Collected " + recs.length + " records (buffer.dom=" + S.buffer.dom.length + ")");
+    broadcast("EXTENSION_LIVE_STATUS", { text: "DOM:" + recs.length + " Net:" + S.buffer.network.length });
+  } catch (e) { log("WARN", "DOM", "collectDOM error: " + e.message); }
+}
 
-  // Check scroll container metrics
-  const initRaw = await cdpExec(FIND_SCROLL_EL);
-  let initMetrics = null;
-  try { initMetrics = initRaw ? JSON.parse(initRaw) : null; } catch(_) {}
-  if (initMetrics) log('INFO', 'SCROLL', 'Container: ' + initMetrics.sel + ' sh=' + initMetrics.sh + ' ch=' + initMetrics.ch);
-
-  // Early exit only if clearly empty (no container found with content)
-  if (!ready && initMetrics && initMetrics.sh < initMetrics.ch * 1.2) {
-    log('WARN', 'SCROLL', 'ABORT: no scrollable content found. Container=' + JSON.stringify(initMetrics));
-    broadcast('EXTENSION_LIVE_STATUS', { text: 'Skip: page has no content — check LinkedIn tab login' });
-    return 'empty_page';
+// ── LAYER 1: Network Ingestor — writes ONLY to S.buffer.network ───────────────
+function ingestBody(body) {
+  if (!body) return;
+  const fc = body.trimStart()[0];
+  if (fc !== "{" && fc !== "[") return;
+  let json; try { json = JSON.parse(body); } catch (_) { return; }
+  function pe(s) {
+    if (s == null) return null;
+    const x = String(s).toUpperCase().replace(/,/g, "");
+    const n = parseFloat((x.match(/[0-9.]+/) || [])[0]);
+    if (isNaN(n)) return null;
+    if (x.includes("K")) return Math.floor(n * 1000);
+    if (x.includes("M")) return Math.floor(n * 1000000);
+    return Math.floor(n);
   }
+  function walk(obj) {
+    if (!obj || typeof obj !== "object") return;
+    const rawUrn = String(obj.entityUrn || obj.updateUrn || obj.urn || "");
+    const m = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+    if (m) {
+      const urn = "urn:li:" + m[1] + ":" + m[2];
+      const txt = typeof obj.commentary?.text?.text === "string" ? obj.commentary.text.text :
+                  typeof obj.commentary?.text === "string" ? obj.commentary.text :
+                  typeof obj.text === "string" ? obj.text :
+                  typeof obj.summary === "string" ? obj.summary : "";
+      const auth = String(obj.actor?.name?.text || obj.actor?.nameV2?.text || obj.actor?.fullName || "");
+      const soc = obj.socialDetail || obj.totalSocialActivityCounts || {};
+      const lk = pe(soc.numLikes != null ? soc.numLikes : obj.numLikes != null ? obj.numLikes : null);
+      const cm = pe(soc.numComments != null ? soc.numComments : obj.numComments != null ? obj.numComments : null);
+      S.buffer.network.push({ urn, text: txt.substring(0, 5000), author: auth.substring(0, 100), likes: lk, comments: cm, source: "network" });
+    }
+    if (Array.isArray(obj)) { for (const item of obj) walk(item); }
+    else { for (const k of Object.keys(obj)) { if (typeof obj[k] === "object" && k !== "paging") walk(obj[k]); } }
+  }
+  walk(json);
+}
 
-  // ── Compatibility Probe: detect layout, score strategies, build optimized extractor ──
-  await runDiagProbe();
-  const CLICK_NEXT = '(function(){var ss=[".artdeco-pagination__button--next","button[aria-label=\'Next\']","button[aria-label=\'Go to next page\']"];for(var i=0;i<ss.length;i++){var b=document.querySelector(ss[i]);if(b&&!b.disabled){b.click();return true;}}var bs=Array.from(document.querySelectorAll("button,[role=\'button\']"));var m=bs.find(function(b){return /show more|load more|see more/i.test(b.innerText||"");});if(m&&!m.disabled){m.click();return true;}return false;})()';
+// ── Reconciliation Engine — ONLY writer to S.store ────────────────────────────
+function reconcile() {
+  log("INFO", "RECONCILE", "Start dom=" + S.buffer.dom.length + " network=" + S.buffer.network.length);
+  const netByUrn = new Map();
+  for (const rec of S.buffer.network) {
+    if (!rec.urn) continue;
+    const ex = netByUrn.get(rec.urn);
+    if (!ex) { netByUrn.set(rec.urn, { ...rec }); continue; }
+    if (rec.likes !== null && (ex.likes === null || rec.likes > ex.likes)) ex.likes = rec.likes;
+    if (rec.comments !== null && (ex.comments === null || rec.comments > ex.comments)) ex.comments = rec.comments;
+    if (rec.text && rec.text.length > ex.text.length) ex.text = rec.text;
+    if (rec.author && rec.author.length > 1 && ex.author.length < 2) ex.author = rec.author;
+  }
+  const domByUrn = new Map();
+  const domByStable = new Map();
+  for (const rec of S.buffer.dom) {
+    if (rec.urn) {
+      const ex = domByUrn.get(rec.urn);
+      if (!ex) { domByUrn.set(rec.urn, { ...rec }); continue; }
+      if (rec.likes > (ex.likes || 0)) ex.likes = rec.likes;
+      if (rec.comments > (ex.comments || 0)) ex.comments = rec.comments;
+      if (rec.text && rec.text.length > ex.text.length) ex.text = rec.text;
+      if (rec.author && rec.author !== "Unknown" && ex.author === "Unknown") ex.author = rec.author;
+    } else if (rec.stableKey) {
+      const ex = domByStable.get(rec.stableKey);
+      if (!ex) { domByStable.set(rec.stableKey, { ...rec }); continue; }
+      if (rec.likes > (ex.likes || 0)) ex.likes = rec.likes;
+      if (rec.comments > (ex.comments || 0)) ex.comments = rec.comments;
+      if (rec.text && rec.text.length > ex.text.length) ex.text = rec.text;
+    }
+  }
+  const allUrns = new Set([...netByUrn.keys(), ...domByUrn.keys()]);
+  for (const urn of allUrns) {
+    const net = netByUrn.get(urn); const dom = domByUrn.get(urn);
+    let likes = (S.store.get(urn)?.likes) || 0;
+    let comments = (S.store.get(urn)?.comments) || 0;
+    if (dom) { if (dom.likes > likes) likes = dom.likes; if (dom.comments > comments) comments = dom.comments; }
+    if (net) {
+      if (net.likes !== null && net.likes >= 0) likes = Math.max(likes, net.likes);
+      if (net.comments !== null && net.comments >= 0) comments = Math.max(comments, net.comments);
+    }
+    const texts = [dom?.text || "", net?.text || "", S.store.get(urn)?.postText || ""];
+    const postText = texts.reduce((a, b) => b.length > a.length ? b : a, "");
+    let author = S.store.get(urn)?.author || "Unknown";
+    if (dom?.author && dom.author !== "Unknown") author = dom.author;
+    if (net?.author && net.author.length > 1) author = net.author;
+    const url = S.store.get(urn)?.url || dom?.url || ("https://www.linkedin.com/feed/update/" + urn);
+    S.store.set(urn, { canonicalUrn: urn, url, postText: postText.substring(0, 3000), preview: postText.substring(0, 3000), author, likes: likes > 0 ? likes : null, comments: comments > 0 ? comments : null, source: net ? "network+dom" : "dom" });
+  }
+  for (const [stableKey, rec] of domByStable) {
+    if (S.store.has(stableKey)) continue;
+    S.store.set(stableKey, { canonicalUrn: null, stableKey, url: rec.url || "", postText: (rec.text || "").substring(0, 3000), preview: (rec.text || "").substring(0, 3000), author: rec.author || "Unknown", likes: rec.likes > 0 ? rec.likes : null, comments: rec.comments > 0 ? rec.comments : null, source: "dom-stable" });
+  }
+  log("INFO", "RECONCILE", "Done S.store=" + S.store.size);
+  S.buffer = { dom: [], network: [] };
+}
 
-  while (step < MAX_STEPS && S.state === 'SCRAPING' && S.tabId) {
+// ── Scroll Engine — navigation only ──────────────────────────────────────────
+async function cdpScrollEngine(kw) {
+  const MAX_STEPS = 55, MIN_STEPS = 6, NO_PROG_MAX = 8;
+  let step = 0, noProgress = 0, lastSt = -1, scrolledAtAll = false, stopReason = "max_steps";
+  await waitForPageReady(14000);
+  broadcast("EXTENSION_LIVE_STATUS", { text: "Scrolling: " + kw });
+  const initRaw = await cdpExec(FIND_SCROLL_EL);
+  let initM = null; try { if (initRaw) initM = JSON.parse(initRaw); } catch (_) {}
+  if (initM) log("INFO", "SCROLL", "Container sh=" + initM.sh + " ch=" + initM.ch);
+  if (initM && initM.sh < initM.ch * 1.2) { broadcast("EXTENSION_LIVE_STATUS", { text: "Skip: no content" }); return "empty_page"; }
+  while (step < MAX_STEPS && S.state === "SCRAPING" && S.tabId) {
     step++;
     await cdpExec(DO_SCROLL);
     await sleep(2600 + Math.floor(Math.random() * 1200));
-
     const raw = await cdpExec(FIND_SCROLL_EL);
-    let m = { sh: 0, ch: 900, st: 0 };
-    try { if (raw) m = JSON.parse(raw); } catch(_) {}
-
-    // Hard abort if tab died (sh=0 means renderer is gone)
-    if (!S.tabId || (m.sh === 0 && step > 1)) {
-      log('WARN', 'SCROLL', 'Tab gone mid-scroll — aborting at step ' + step);
-      stopReason = 'tab_removed'; break;
-    }
-    const currentSt = Math.round(m.st);
-
-    if (Math.abs(currentSt - lastSt) > 60) { scrolledAtAll = true; noProgress = 0; lastSt = currentSt; }
-    else { noProgress++; }
-
-    log('INFO', 'SCROLL', 'step=' + step + ' scrollTop=' + currentSt + ' sh=' + m.sh + ' ch=' + m.ch + ' noProg=' + noProgress);
-    broadcast('EXTENSION_LIVE_STATUS', { text: S.store.size + ' found | step ' + step + '/' + MAX_STEPS });
-
-    // Extra hydration wait on step 1 — React needs time to render cards/engagement after initial load
-    if (step === 1) await sleep(2000);
-    await runEval();
-
-    const atBottom = m.sh > m.ch * 1.3 && (m.ch + currentSt) >= m.sh - 600;
-
+    let m = { sh: 0, ch: 900, st: 0 }; try { if (raw) m = JSON.parse(raw); } catch (_) {}
+    if (!S.tabId || (m.sh === 0 && step > 1)) { stopReason = "tab_removed"; break; }
+    const st = Math.round(m.st);
+    if (Math.abs(st - lastSt) > 60) { scrolledAtAll = true; noProgress = 0; lastSt = st; } else { noProgress++; }
+    log("INFO", "SCROLL", "step=" + step + " st=" + st + " noProg=" + noProgress);
+    broadcast("EXTENSION_LIVE_STATUS", { text: "DOM:" + S.buffer.dom.length + " Net:" + S.buffer.network.length + " | step " + step + "/" + MAX_STEPS });
+    await collectDOM();
+    const atBottom = m.sh > m.ch * 1.3 && (m.ch + st) >= m.sh - 600;
     if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom)) {
       const clicked = await cdpExec(CLICK_NEXT);
       if (clicked) { noProgress = 0; await sleep(4500); continue; }
-      stopReason = atBottom ? 'reached_bottom' : 'no_scroll_progress';
-      break;
+      stopReason = atBottom ? "reached_bottom" : "no_scroll_progress"; break;
     }
   }
-
-  if (step >= MAX_STEPS) stopReason = 'max_steps';
-  const summary = 'steps=' + step + ' scrolled=' + scrolledAtAll + ' reason=' + stopReason + ' posts=' + S.store.size;
-  log('INFO', 'SCROLL', 'DONE ' + summary);
-  broadcast('EXTENSION_LIVE_STATUS', { text: 'Scroll done: ' + stopReason + ' | ' + S.store.size + ' posts' });
-
-  if (!scrolledAtAll) {
-    log('WARN', 'WATCHDOG', 'Scroll position never changed — page may be blocked or empty');
-    broadcast('EXTENSION_LIVE_STATUS', { text: 'WARN: No scroll movement — check LinkedIn tab is loaded' });
-  }
+  if (step >= MAX_STEPS) stopReason = "max_steps";
+  log("INFO", "SCROLL", "DONE steps=" + step + " scrolled=" + scrolledAtAll + " reason=" + stopReason);
+  broadcast("EXTENSION_LIVE_STATUS", { text: "Scroll done: " + stopReason });
   return stopReason;
 }
 
 async function runKeyword() {
   const kw = S.kwQueue.current;
   if (!kw) { finalizeSession(); return; }
-  log('INFO', 'KW', 'Starting keyword: ' + kw);
-
-  const url = 'https://www.linkedin.com/search/results/content/?keywords=' + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
-  setState('NAVIGATING');
-  await chrome.tabs.update(S.tabId, { url: url, active: true });
+  log("INFO", "KW", "Starting: " + kw);
+  const url = "https://www.linkedin.com/search/results/content/?keywords=" + encodeURIComponent(kw) + "&origin=GLOBAL_SEARCH_HEADER";
+  setState("NAVIGATING");
+  await chrome.tabs.update(S.tabId, { url, active: true });
   await waitForTabLoad(S.tabId);
-
-  setState('ATTACHING');
-
-  // Verify tab is on LinkedIn before attaching
-  var tabInfo = null;
-  try { tabInfo = await withTimeout(chrome.tabs.get(S.tabId), 3000, 'tabs.get'); } catch(ex) { log('WARN','TAB','tabs.get: '+ex.message); }
+  setState("ATTACHING");
+  let tabInfo = null;
+  try { tabInfo = await withTimeout(chrome.tabs.get(S.tabId), 3000, "tabs.get"); } catch (ex) {}
   if (tabInfo) {
-    var tabUrl = tabInfo.url || '';
-    log('INFO','TAB','URL before attach: ' + tabUrl.substring(0,80));
-    if (tabUrl.length > 0 && !tabUrl.includes('linkedin.com') && !tabUrl.startsWith('about:') && !tabUrl.startsWith('chrome')) {
-      log('WARN','TAB','Tab not on LinkedIn ('+tabUrl+') — aborting keyword');
-      finalizeKeyword().catch(function(ex2){ log('ERROR','KW','finalizeKeyword:'+ex2.message); });
-      return;
+    const tabUrl = tabInfo.url || "";
+    if (tabUrl.length > 0 && !tabUrl.includes("linkedin.com") && !tabUrl.startsWith("about:") && !tabUrl.startsWith("chrome")) {
+      log("WARN", "TAB", "Not on LinkedIn"); finalizeKeyword().catch(ex => log("ERROR", "KW", ex.message)); return;
     }
   }
-
-  // Attach debugger with hard timeout
   if (!S.attached) {
-    try {
-      await withTimeout(chrome.debugger.attach({tabId:S.tabId},'1.3'), 6000, 'debugger.attach');
-      S.attached = true;
-      log('INFO','CDP','Debugger attached OK');
-    } catch(ex) {
-      var em = ex.message || '';
-      if (em.includes('already') || em.includes('Another')) { S.attached = true; log('INFO','CDP','Already attached'); }
-      else { log('WARN','CDP','Attach issue: '+em+' — proceeding without debugger'); }
-    }
-  } else {
-    log('INFO','CDP','Re-using existing debugger attachment');
+    try { await withTimeout(chrome.debugger.attach({ tabId: S.tabId }, "1.3"), 6000, "debugger.attach"); S.attached = true; }
+    catch (ex) { const em = ex.message || ""; if (em.includes("already") || em.includes("Another")) S.attached = true; else log("WARN", "CDP", "Attach: " + em); }
   }
-
-  if (S.attached) {
-    // Skip Network.enable — too heavy on LinkedIn renderer (causes Aw Snap crashes).
-    // CDP is only used for Runtime.evaluate (scroll + EVAL). Network capture via content.js only.
-    try { await withTimeout(chrome.debugger.sendCommand({tabId:S.tabId},'Runtime.enable'), 4000, 'Runtime.enable'); log('INFO','CDP','Runtime.enable OK'); } catch(ex){ log('WARN','CDP','Runtime.enable: '+ex.message); }
-  }
-
-  // content.js: fire-and-forget network bridge — do NOT await (it's a long-running async IIFE)
-  chrome.scripting.executeScript({target:{tabId:S.tabId},files:['content.js']})
-    .then(function(){ log('INFO','INJECT','content.js injected'); })
-    .catch(function(ex){ log('WARN','INJECT','content.js skipped: '+ex.message); });
-  await sleep(300); // brief pause so content.js registers its listeners
-
-  log('INFO','KW','Entering SCRAPING');
-  setState('SCRAPING');
+  if (S.attached) { try { await withTimeout(chrome.debugger.sendCommand({ tabId: S.tabId }, "Runtime.enable"), 4000, "Runtime.enable"); } catch (ex) {} }
+  chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ["content.js"] }).then(() => log("INFO", "INJECT", "content.js injected")).catch(ex => log("WARN", "INJECT", ex.message));
+  await sleep(300);
+  setState("SCRAPING");
+  S.buffer = { dom: [], network: [] };
   await cdpScrollEngine(kw);
-
-  if (S.state === 'SCRAPING') {
-    finalizeKeyword().catch(function(e) { log('ERROR', 'KW', 'finalizeKeyword: ' + e.message); });
-  }
+  if (S.state === "SCRAPING") finalizeKeyword().catch(e => log("ERROR", "KW", e.message));
 }
 
-// ── Compatibility Probe + Adaptive EVAL Builder ─────────────────────────
-
-// DIAG_PROBE: runs once to detect layout/selector availability
-const DIAG_PROBE = [
-  '(function(){',
-  'function c(s){try{return document.querySelectorAll(s).length;}catch(e){return 0;}}',
-  'var feedLinks=Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).length;',
-  'var dataUrn=c("[data-urn]"),dataEntityUrn=c("[data-entity-urn]"),dataChameleon=c("[data-chameleon-result-urn]");',
-  'var feedCards=c(".feed-shared-update-v2,.update-components-update-v2");',
-  'var articleCards=c("article,.reusable-search__result-container");',
-  'var socialSpans=c("span[class*=social-count],li[class*=social-count],span[class*=reaction-count]");',
-  'var socialCounts=c(".social-details-social-counts");',
-  'var engAria=Array.from(document.querySelectorAll("[aria-label]")).filter(function(x){var a=x.getAttribute("aria-label")||"";return /[0-9]/.test(a)&&/(reaction|like|comment)/i.test(a);}).length;',
-  'var engButtons=Array.from(document.querySelectorAll("button")).filter(function(b){var t=(b.innerText||"").trim();return /^[0-9]/.test(t)&&/(like|reaction|comment)/i.test(t);}).length;',
-  'var textLtr=c("[dir=\\"ltr\\"]"),textBreak=c(".break-words"),textFeed=c(".feed-shared-update-v2__description"),textUpdate=c(".update-components-text");',
-  'var bodyLen=document.body.innerText.length;',
-  'var sample="";try{var fc=document.querySelector("[data-urn],[data-entity-urn],.feed-shared-update-v2,article");if(fc)sample=(fc.innerText||"").trim().substring(0,100);}catch(e){}',
-  'return JSON.stringify({feedLinks:feedLinks,dataUrn:dataUrn,dataEntityUrn:dataEntityUrn,dataChameleon:dataChameleon,feedCards:feedCards,articleCards:articleCards,socialSpans:socialSpans,socialCounts:socialCounts,engAria:engAria,engButtons:engButtons,textLtr:textLtr,textBreak:textBreak,textFeed:textFeed,textUpdate:textUpdate,bodyLen:bodyLen,sample:sample});',
-  '})()'
-].join('\n');
-
-// buildEval(profile): generates an account-optimized EVAL expression
-function buildEval(profile) {
-  const p = profile || {};
-  const minCard = (p.articleCards > 0 || p.dataUrn > 0) ? 20 : 30;
-  const strategy = p._strategy || 'FEED_CLASSIC';
-
-  const lines = [
-    '(function(){',
-    'var posts=[],seen={},seenEls=new WeakSet(),debugLog=[];',
-    // Normalize Arabic-Indic → Western digits before any parsing
-    'function norm(s){return String(s||"").replace(/[\\u0660-\\u0669]/g,function(c){return c.charCodeAt(0)-0x660;}).replace(/[\\u06F0-\\u06F9]/g,function(c){return c.charCodeAt(0)-0x6F0;});}',
-    // pe(): parse any localized number, always returns int >= 0
-    'function pe(s){if(!s)return 0;var x=norm(s).toUpperCase().replace(/,/g,"").replace(/\\./g,".");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
-    'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
-
-    // Engagement: 4-strategy locale-agnostic extraction
-    'function getEng(el){',
-    '  var lk=0,cm=0;',
-    // S0: innerText pattern — catches "27 reactions" plain-text format in Classic/Search feed
-    '  try{Array.from(el.querySelectorAll("span,div,li,a")).forEach(function(x){if(x.children.length>5)return;var raw=(x.innerText||"").trim();var n=norm(raw);var rm=n.match(/([0-9][0-9,\\.]*[KkMm]?)\\s*(reaction|like|reacted)/i);if(rm)lk=Math.max(lk,pe(rm[1]));var cm2=n.match(/([0-9][0-9,\\.]*[KkMm]?)\\s*(comment)/i);if(cm2)cm=Math.max(cm,pe(cm2[1]));});}catch(e){}',
-    // S1: social-details-social-counts — positional, handles "1,234" formatted numbers
-    '  try{var sdc=el.querySelector(".social-details-social-counts,.update-components-social-counts");',
-    '    if(sdc){var nums=[];Array.from(sdc.querySelectorAll("span,button,li")).forEach(function(x){',
-    '      var t=norm((x.innerText||"").trim().replace(/,/g,""));if(/^[0-9]{1,8}$/.test(t)){var n=parseInt(t,10);if(n>0&&nums.indexOf(n)<0)nums.push(n);}',
-    '    });if(nums[0])lk=Math.max(lk,nums[0]);if(nums[1])cm=Math.max(cm,nums[1]);}}catch(e){}',
-
-    // S2: aria-label scan — always run (ungated), take max values
-    '  try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){',
-
-    '    var raw=x.getAttribute("aria-label")||"";var a=norm(raw);',
-    '    if(/[0-9]/.test(a)&&/(reaction|like|reacted|تفاعل|إعجاب|\\u0631\\u062F\\u0648\\u062F)/i.test(raw))lk=Math.max(lk,pe(a));',
-    '    if(/[0-9]/.test(a)&&/(comment|تعليق)/i.test(raw))cm=Math.max(cm,pe(a));',
-    '  });}catch(e){}',
-    // S3: button text — always run (ungated), take max values
-    '  try{Array.from(el.querySelectorAll("button")).forEach(function(b){',
-
-    '    var raw=(b.innerText||"").trim();var t=norm(raw);',
-    '    if(/[0-9]/.test(t)&&/(like|reaction|تفاعل|إعجاب)/i.test(raw))lk=Math.max(lk,pe(t));',
-    '    if(/[0-9]/.test(t)&&/(comment|تعليق)/i.test(raw))cm=Math.max(cm,pe(t));',
-    '  });}catch(e){}',
-    // S4: pure-number spans — any span whose entire text is digits (1–8 chars) near bottom of card
-    '  if(!lk&&!cm)try{var nums2=[];Array.from(el.querySelectorAll("span")).forEach(function(x){',
-    '    var t=norm((x.innerText||"").trim());if(/^[0-9]{1,8}$/.test(t)){var n=parseInt(t,10);if(n>0&&nums2.indexOf(n)<0)nums2.push(n);}',
-    '  });if(nums2.length>=2){lk=nums2[0];cm=nums2[1];}else if(nums2.length===1)lk=nums2[0];}catch(e){}',
-    '  return {likes:lk,comments:cm};}',
-    // getText: prioritize specific post selectors, skip video player text
-    'function getText(el){',
-    '  var txt="",skipRx=/^(Pause|Skip Forward|Skip Backward|Unmute|Current Time|Duration|Loaded:|Stream Type|Seek to live|Remaining Time|Playback Rate|Chapters|Captions|Audio Track|Picture-in-Picture|Fullscreen|Volume)/i;',
-    '  var ss=[".update-components-text",".feed-shared-update-v2__description",".attributed-text-segment-list__content",".break-words",".feed-shared-text",".feed-shared-inline-show-more-text","[dir=\\"ltr\\"]","[dir=\\"rtl\\"]"];',
-    '  ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){',
-    '    if(d.closest(\'[aria-label="Video Player"]\'))return;', // skip video player subtree
-    '    var t=(d.innerText||"").trim();if(t.length>txt.length&&!skipRx.test(t))txt=t;',
-    '  });}catch(e){}});',
-    '  if(txt.length<20){var raw=(el.innerText||"").replace(/\\s+/g," ").trim();if(!skipRx.test(raw))txt=raw.substring(0,3000);}',
-    '  return txt;}',
-    // getAuthor: try aria-label, then innerText, then img alt
-    'function getAuthor(el){',
-    '  var a=el.querySelector("a[href*=\\"/in/\\"],a[href*=\\"/company/\\"]");if(!a)return "Unknown";',
-    '  var aria=a.getAttribute("aria-label")||"";',
-    '  if(aria){',
-    '    var cl=aria.replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/(?:[\\\'’‘´`]s\\s.*|\\s+Verified.*|\\s+Top\\s+Voice.*|\\s+Profile.*|\\s+\\d.*)$/i,"");',
-    '    if(cl)return cl.trim().substring(0,100);',
-    '  }',
-    '  var name=(a.innerText||"").trim().replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").split("\\n")[0].trim().substring(0,100);',
-    '  if(name.length>1)return name;',
-    '  var img=a.querySelector("img[alt]");if(img)return (img.getAttribute("alt")||"").trim().substring(0,100);',
-    '  return "Unknown";}',
-    'function xPost(urn,el,href){',
-    '  if(!urn||seen[urn]||seenEls.has(el))return;seen[urn]=1;seenEls.add(el);',
-    '  var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
-    '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,cls:(el.className||"").substring(0,40)});',
-    '  posts.push({urn:urn,url:href||"https://www.linkedin.com/feed/update/"+urn,text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
-    // card(): prefer <li> containers (LinkedIn Search uses li.reusable-search__result-container), limit raised to 25000
-    'function card(el,urn){var c=el,firstHit=null,liHit=null;for(var i=0;i<35;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<25000){if(!firstHit)firstHit=c;if(c.tagName==="LI"){liHit=c;break;}if(c.querySelectorAll("[aria-label]").length>0){firstHit=c;break;}}if(l>=25000)break;}xPost(urn,liHit||firstHit,"");}',
-    // Method 1: feed/update and /posts/ href links
-    'try{Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).forEach(function(lnk){var urn=xUrn(lnk.href);if(!urn||seen[urn])return;var c=lnk,fh=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<15000){if(!fh)fh=c;if(c.querySelectorAll("[aria-label]").length>0){xPost(urn,c,lnk.href);fh=null;break;}}if(l>=15000)break;}if(fh)xPost(urn,fh,lnk.href);});}catch(e){}',
-    // Method 2: data-urn attributes
-    'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
-    // Method 3: activity- href links
-    'try{Array.from(document.querySelectorAll("a[href*=activity-]")).forEach(function(a){var urn=xUrn(a.href);if(!urn||seen[urn])return;card(a,urn);});}catch(e){}',
-    // Method 4: safe innerHTML URN scan — finds ALL embedded URNs in DOM (search result cards, data attrs, script blocks)
-    'try{var allH=document.body.innerHTML;var urx=/urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;var m4,uq=[];while((m4=urx.exec(allH))!==null){var u="urn:li:"+m4[1]+":"+m4[2];if(!seen[u]&&uq.indexOf(u)<0)uq.push(u);}uq.forEach(function(urn){if(seen[urn])return;var aid=urn.split(":").pop();var el=document.querySelector("[href*=\'feed/update/"+urn+"\'],[data-urn*=\':"+aid+"\'],[data-entity-urn*=\':"+aid+"\'],[data-chameleon-result-urn*=\':"+aid+"\'],[href*=\'activity-"+aid+"\']");if(el)card(el,urn);});}catch(e){}',
-
-    'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '",debug:debugLog});',
-    '})()'
-  ];
-  return lines.filter(Boolean).join('\n');
+async function finalizeKeyword() {
+  setState("FLUSHING");
+  log("INFO", "RECONCILE", "Stabilization window 4000ms...");
+  await sleep(4000);
+  reconcile();
+  await flushAll();
+  log("INFO", "KW", "Complete", S.kwQueue.status());
+  if (S.kwQueue.hasMore()) { S.kwQueue.advance(); await sleep(4000); setState("NAVIGATING"); await runKeyword(); }
+  else finalizeSession();
 }
 
-// scoreAndSelectStrategy(profile): pick best extraction approach
-function scoreAndSelectStrategy(p) {
-  const scores = {
-    FEED_CLASSIC:   (p.feedLinks * 15) + (p.feedCards * 12) + (p.engAria * 4) + (p.textFeed * 6),
-    SEARCH_MODERN:  (p.dataUrn * 15)   + (p.dataEntityUrn * 15) + (p.dataChameleon * 12) + (p.socialSpans * 8),
-    SEARCH_DENSE:   (p.articleCards * 10) + (p.feedLinks * 6)   + (p.dataUrn * 6) + (p.engButtons * 5),
-  };
-  // Guarantee a minimum so FEED_CLASSIC wins when all counts are 0
-  scores.FEED_CLASSIC = Math.max(scores.FEED_CLASSIC, 5);
-  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-  return { strategy: sorted[0][0], scores };
-}
-
-// runDiagProbe(): full compatibility analysis — sets S.diagProfile and S.activeEval
-async function runDiagProbe() {
-  try {
-    const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
-      { expression: DIAG_PROBE, returnByValue: true, timeout: 8000 });
-    if (!r?.result?.value) { log('WARN', 'PROBE', 'Probe returned no value'); S.activeEval = buildEval(null); return; }
-    const profile = JSON.parse(r.result.value);
-    const { strategy, scores } = scoreAndSelectStrategy(profile);
-    profile._strategy = strategy;
-    S.diagProfile = profile;
-    S.activeEval = buildEval(profile);
-
-    // ── Structured Diagnostic Report ──────────────────────────────────────
-    const issues = [];
-    if (profile.feedLinks < 2 && profile.dataUrn < 2 && profile.dataChameleon < 2) issues.push('LOW_URN_SIGNALS: few post identifiers found — may capture fewer posts');
-    if (profile.engAria === 0 && profile.socialSpans === 0 && profile.engButtons === 0) issues.push('NO_ENGAGEMENT_ELEMENTS: engagement counts not visible in DOM');
-    if (profile.bodyLen < 2000) issues.push('LOW_BODY_TEXT: page may not be fully loaded');
-    if (!profile.sample) issues.push('NO_SAMPLE_POST: no post card detected at probe time');
-
-    const report = {
-      strategy, scores,
-      selectors: {
-        feedLinks: profile.feedLinks, dataUrn: profile.dataUrn,
-        dataEntityUrn: profile.dataEntityUrn, dataChameleon: profile.dataChameleon,
-        feedCards: profile.feedCards, articleCards: profile.articleCards,
-        socialSpans: profile.socialSpans, socialCounts: profile.socialCounts,
-        engAria: profile.engAria, engButtons: profile.engButtons,
-        textLtr: profile.textLtr, textBreak: profile.textBreak,
-      },
-      bodyLen: profile.bodyLen,
-      samplePost: profile.sample || '(none)',
-      issues: issues.length ? issues : ['none'],
-    };
-    log('INFO', 'PROBE', 'NEXORA COMPATIBILITY REPORT\n' + JSON.stringify(report, null, 2));
-    broadcast('EXTENSION_LIVE_STATUS', { text: '🔬 Strategy: ' + strategy });
-  } catch (e) {
-    log('WARN', 'PROBE', 'Probe failed: ' + e.message + ' — using default EVAL');
-    S.activeEval = buildEval(null);
-  }
-}
-
-// ── CDP Eval Loop ────────────────────────────────────────────────────────
-
-// Fallback EVAL (FEED_CLASSIC baseline — used if probe hasn't run yet)
-const EVAL = [
-  '(function(){',
-  'var posts=[],seen={};',
-  // pe(): parse engagement number, ALWAYS returns integer >= 0 (never null)
-  'function pe(s){if(!s)return 0;var x=String(s).toUpperCase().replace(/,/g,"").replace(/\\./g,".");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
-  'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
-  'function getEngagement(el){',
-  '  var lk=0,cm=0,found=false;',
-  '  // Strategy 1: aria-label on any element (reactions/likes/comments)',
-  '  try{Array.from(el.querySelectorAll("[aria-label]")).forEach(function(x){',
-  '    var a=x.getAttribute("aria-label")||"";',
-  '    if(/[0-9]/.test(a)&&/(reaction|like|reacted)/i.test(a)){lk=Math.max(lk,pe(a));found=true;}',
-  '    if(/[0-9]/.test(a)&&/comment/i.test(a)){cm=Math.max(cm,pe(a));found=true;}',
-  '  });}catch(e){}',
-  '  // Strategy 2: social count spans (new LinkedIn feed UI)',
-  '  try{Array.from(el.querySelectorAll("span[class*=social-count],span[class*=reaction-count],li[class*=social-count]")).forEach(function(x){',
-  '    var t=(x.innerText||"").trim();',
-  '    var parent=(x.closest("[aria-label]"))||x;',
-  '    var label=parent.getAttribute?parent.getAttribute("aria-label")||"": "";',
-  '    if(/(reaction|like)/i.test(label+t)){lk=Math.max(lk,pe(label||t));found=true;}',
-  '    if(/comment/i.test(label+t)){cm=Math.max(cm,pe(label||t));found=true;}',
-  '  });}catch(e){}',
-  '  // Strategy 3: button innerText with counts (e.g. "26 Likes" "4 Comments")',
-  '  try{Array.from(el.querySelectorAll("button")).forEach(function(b){',
-  '    var t=(b.innerText||"").trim();',
-  '    if(/^[0-9]/.test(t)&&/(like|reaction)/i.test(t)){lk=Math.max(lk,pe(t));found=true;}',
-  '    if(/^[0-9]/.test(t)&&/comment/i.test(t)){cm=Math.max(cm,pe(t));found=true;}',
-  '  });}catch(e){}',
-  '  // Strategy 4: social-proof text spans (search results variant)',
-  '  try{Array.from(el.querySelectorAll("span[class*=social-proof],span[class*=reactions-count]")).forEach(function(x){',
-  '    var t=(x.innerText||"").replace(/,/g,"").trim();',
-  '    if(/[0-9]/.test(t)){lk=Math.max(lk,pe(t));found=true;}',
-  '  });}catch(e){}',
-  '  return {likes:lk,comments:cm};',
-  '}',
-  'function xPost(urn,el,href){',
-  '  if(!el||seen[urn])return;seen[urn]=1;',
-  '  var ae=el.querySelector("a[href*=\\"/in/\\"]");',
-  '  var author=ae?(ae.innerText||"").trim().replace(/[\\r\\n].*/,"").substring(0,100):"";',
-  '  var txt="";',
-  '  var ss=["[dir=\\"ltr\\"]",".feed-shared-update-v2__description",".update-components-text",".break-words",".feed-shared-text",".attributed-text-segment-list__content",".feed-shared-inline-show-more-text"];',
-  '  ss.forEach(function(s){try{Array.from(el.querySelectorAll(s)).forEach(function(d){var t=(d.innerText||"").trim();if(t.length>txt.length)txt=t;});}catch(e){}});',
-  '  if(txt.length<20)txt=(el.innerText||"").replace(/\\s+/g," ").trim().substring(0,3000);',
-  '  var eng=getEngagement(el);',
-  // Always push with 0 defaults — never null
-  '  posts.push({urn:urn,url:href||("https://www.linkedin.com/feed/update/"+urn),text:txt.substring(0,3000),author:author||"Unknown",likes:eng.likes,comments:eng.comments});',
-  '}',
-  'function card(el,urn){var c=el;for(var i=0;i<20;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>40&&l<20000){xPost(urn,c,"");return;}}}',
-  // Method 1: href links
-  'try{Array.from(document.querySelectorAll("a[href]")).filter(function(a){return a.href&&(a.href.indexOf("feed/update/urn:li:")>-1||a.href.indexOf("/posts/")>-1);}).forEach(function(lnk){var urn=xUrn(lnk.href);if(!urn||seen[urn])return;var c=lnk;for(var i=0;i<25;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>40&&l<20000){xPost(urn,c,lnk.href);break;}}});}catch(e){}',
-  // Method 2: data-urn attributes
-  'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
-  'return JSON.stringify({posts:posts,count:posts.length});',
-  '})()'
-].join('\n');
-
-
-
-function startEval() {
-  stopEval();
-  runEval();
-  S.evalTimer = setInterval(runEval, 3500);
-}
-function stopEval() { if (S.evalTimer) { clearInterval(S.evalTimer); S.evalTimer = null; } }
-
-async function runEval() {
-  if (!S.attached || !S.tabId || S.state !== 'SCRAPING') return;
-  if (S.evalRunning) return;
-  S.evalRunning = true;
-  const expr = S.activeEval || EVAL;  // use probe-optimized EVAL if available
-  try {
-    const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
-      { expression: expr, returnByValue: true, timeout: 10000 });
-    // Log raw result on first few calls to diagnose issues
-    if (S.store.size === 0) {
-      const raw = r && r.result ? r.result.value : null;
-      const exType = r && r.exceptionDetails ? JSON.stringify(r.exceptionDetails).substring(0,200) : 'none';
-      log('INFO', 'EVAL', 'strategy=' + (S.diagProfile?._strategy||'fallback') + ' type=' + (r&&r.result?r.result.type:'null') + ' exception=' + exType + ' valueLen=' + (raw?String(raw).length:0));
-    }
-    if (!r?.result?.value) return;
-    const parsed = JSON.parse(r.result.value);
-    const posts = parsed.posts || [];
-    const debugCards = parsed.debug || [];
-    if (S.store.size === 0) log('INFO', 'EVAL', 'EVAL[' + (parsed.strategy||'?') + '] returned ' + posts.length + ' posts');
-    // Log per-card debug on first run
-    if (debugCards.length > 0 && S.store.size === 0) {
-      log('INFO', 'EVAL', 'Card debug: ' + JSON.stringify(debugCards));
-    }
-    let added = 0;
-    for (const p of (posts || [])) {
-      if (!p.urn) continue;
-      // Normalize schema: always 0 not null
-      const likes    = (typeof p.likes    === 'number' && p.likes    > 0) ? p.likes    : null;
-      const comments = (typeof p.comments === 'number' && p.comments > 0) ? p.comments : null;
-      const author   = p.author || 'Unknown';
-      const text     = p.text   || '';
-      if (S.store.has(p.urn)) {
-        const ex = S.store.get(p.urn);
-        let changed = false;
-        if (text.length > (ex.postText || '').length + 100) { ex.postText = text; ex.preview = text; changed = true; }
-        if (author !== 'Unknown' && ex.author === 'Unknown') { ex.author = author; changed = true; }
-        if (likes    != null && likes    > (ex.likes    || 0)) { ex.likes    = likes;    changed = true; }
-        if (comments != null && comments > (ex.comments || 0)) { ex.comments = comments; changed = true; }
-        if (changed) { S.batch.push({ ...ex }); added++; }
-      } else {
-        const post = {
-          canonicalUrn: p.urn, url: p.url,
-          postText: text, preview: text,
-          author, likes, comments,
-          source: 'eval'
-        };
-        S.store.set(p.urn, post);
-        S.batch.push({ ...post }); added++;
-      }
-    }
-    if (added > 0) {
-      broadcast('EXTENSION_LIVE_STATUS', { text: `📦 ${S.store.size} found | 💾 ${S.totalSaved} saved` });
-      flushBatch().catch(() => {});
-    }
-  } catch (e) { log('WARN', 'EVAL', 'Eval error: ' + e.message); } finally { S.evalRunning = false; }
-}
-
-// ── Network Body Ingestion ───────────────────────────────────────────────
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // START via sendMessage (used by bridge and popup)
-  if (msg.action === 'START_ENGINE') {
-    (async () => {
-      try {
-        if (S.state !== 'IDLE' && S.state !== 'DONE') await stopSession();
-        await startSession(msg, null);
-      } catch (e) {
-        log('ERROR', 'MSG', 'START_ENGINE failed', e.message);
-        chrome.action.setBadgeText({ text: 'ERR' }).catch(() => {});
-        chrome.action.setBadgeBackgroundColor({ color: '#ef4444' }).catch(() => {});
-        broadcast('EXTENSION_LIVE_STATUS', { text: '\u274c ' + e.message });
-      }
-    })();
-    sendResponse({ ok: true });
-    return false;
-  }
-  if (msg.action === 'STOP_ENGINE') {
-    stopSession().finally(() => sendResponse({ ok: true }));
-    return true;
-  }
-  if (msg.action === 'NET_BODY') {
-    ingestBody(msg.body);
-    sendResponse({ ok: true });
-    return false;
-  }
-  if (msg.action === 'CONTENT_SCROLL_COMPLETE') {
-    // Legacy: content.js scroll complete. CDP engine now handles finalization directly.
-    log('INFO', 'MSG', 'CONTENT_SCROLL_COMPLETE received (ignored — CDP engine owns finalization)');
-    sendResponse({ ok: true });
-    return false;
-  }
-  if (msg.action === 'KEEP_ALIVE') { sendResponse({ ok: true }); return false; }
-  if (msg.action === 'GET_STATUS') {
-    sendResponse({ running: S.state === 'SCRAPING' || S.state === 'NAVIGATING' || S.state === 'FLUSHING', state: S.state, totalSaved: S.totalSaved, keyword: S.kwQueue?.current });
-    return false;
-  }
-});
-
-// Also handle CDP network events (debugger)
-chrome.debugger.onEvent.addListener(async (src, method, params) => {
-  if (src.tabId !== S.tabId || S.state !== 'SCRAPING') return;
-  if (method === 'Network.loadingFinished') {
-    try {
-      const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Network.getResponseBody', { requestId: params.requestId });
-      const body = r.base64Encoded ? atob(r.body) : (r.body || '');
-      if (body.length > 100) ingestBody(body);
-    } catch (_) {}
-  }
-});
-
-function ingestBody(body) {
-  if (!body) return;
-  const fc = body.trimStart()[0];
-  if (fc !== '{' && fc !== '[') return;
-  try {
-    const json = JSON.parse(body);
-    const postMap = {};
-    function pe(s) {
-      if (s == null) return null;
-      const x = String(s).toUpperCase().replace(/,/g, '');
-      const n = parseFloat((x.match(/[0-9.]+/) || [])[0]);
-      if (isNaN(n)) return null;
-      if (x.includes('K')) return Math.floor(n * 1000);
-      if (x.includes('M')) return Math.floor(n * 1000000);
-      return Math.floor(n);
-    }
-    function walk(obj) {
-      if (!obj || typeof obj !== 'object') return;
-      const rawUrn = String(obj.entityUrn || obj.updateUrn || obj.urn || '');
-      const m = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
-      if (m) {
-        const urn = `urn:li:${m[1]}:${m[2]}`;
-        if (!postMap[urn]) postMap[urn] = { urn, text: '', author: '', likes: null, comments: null };
-        const p = postMap[urn];
-        const txt = obj.commentary?.text?.text || obj.commentary?.text || obj.text || obj.summary || '';
-        if (typeof txt === 'string' && txt.length > p.text.length) p.text = txt.substring(0, 5000);
-        const auth = obj.actor?.name?.text || obj.actor?.nameV2?.text || obj.actor?.fullName || '';
-        if (typeof auth === 'string' && auth.length > p.author.length) p.author = auth.substring(0, 100);
-        const soc = obj.socialDetail || obj.totalSocialActivityCounts || {};
-        if (soc.numLikes != null && p.likes === null) p.likes = pe(soc.numLikes);
-        if (soc.numComments != null && p.comments === null) p.comments = pe(soc.numComments);
-        if (obj.numLikes != null && p.likes === null) p.likes = pe(obj.numLikes);
-        if (obj.numComments != null && p.comments === null) p.comments = pe(obj.numComments);
-      }
-      if (Array.isArray(obj)) { for (const item of obj) walk(item); }
-      else { for (const k of Object.keys(obj)) { if (typeof obj[k] === 'object' && k !== 'paging') walk(obj[k]); } }
-    }
-    walk(json);
-    let enriched = 0;
-    for (const urn in postMap) {
-      const p = postMap[urn];
-      // No filtering — dashboard decides what to display (Q2 decision)
-      if (S.store.has(urn)) {
-        const ex = S.store.get(urn);
-        let changed = false;
-        if (p.text && p.text.length > (ex.postText || '').length) { ex.postText = p.text; ex.preview = p.text; changed = true; }
-        if (p.likes !== null) { ex.likes = p.likes; changed = true; }
-        if (p.comments !== null) { ex.comments = p.comments; changed = true; }
-        if (p.author && p.author.length > 1) { ex.author = p.author; changed = true; }
-        // Re-push enriched snapshot so API receives the latest merged data
-        if (changed) { S.batch.push({ ...ex }); enriched++; }
-      } else {
-          const np = { canonicalUrn: urn, url: `https://www.linkedin.com/feed/update/${urn}`, postText: p.text, preview: p.text, author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'network' };
-          S.store.set(urn, np); S.batch.push({ ...np }); enriched++;
-      }
-    }
-    if (enriched > 0) flushBatch().catch(() => {});
-  } catch (_) {}
-}
-
-// ── Persistence ──────────────────────────────────────────────────────────
-async function flushBatch() {
-  log('INFO', 'FLUSH', 'flushBatch called — batch=' + S.batch.length);
-  if (!S.batch.length) return;
-  const chunk = S.batch.splice(0, S.batch.length);
-  log('INFO', 'FLUSH', 'Flushing ' + chunk.length + ' posts to API...');
-  try {
-    await pushToAPI(chunk);
-  } catch (e) {
-    log('ERROR', 'FLUSH', 'flushBatch FAILED: ' + e.message + ' — ' + chunk.length + ' posts to retry');
-    S.retryQueue.push(...chunk);
-  }
+function finalizeSession() {
+  setState("DONE");
+  log("INFO", "SESSION", "All done", { totalSaved: S.totalSaved });
+  broadcast("SCRAPER_COMPLETE", { totalSaved: S.totalSaved });
+  broadcast("EXTENSION_LIVE_STATUS", { text: "Done! " + S.totalSaved + " posts saved." });
+  safeDetach(); setState("IDLE");
 }
 
 async function flushAll() {
-  stopEval();
-  log('INFO', 'FLUSH', 'flushAll start — store=' + S.store.size + ' batch=' + S.batch.length + ' retry=' + S.retryQueue.length + ' flushed=' + S.flushedUrns.size);
-  // Only push posts that haven’t been flushed yet (new enrichments or network-only posts)
-  for (const [urn, post] of S.store) {
-    if (!S.flushedUrns.has(urn)) S.batch.push({ ...post });
-  }
-  log('INFO', 'FLUSH', 'flushAll after reconcile — batch=' + S.batch.length);
-  await flushBatch();
-  // Drain retry queue with backoff
-  if (S.retryQueue.length > 0) {
-    log('WARN', 'FLUSH', 'Retrying ' + S.retryQueue.length + ' failed posts...');
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      await sleep(attempt * 2000);
-      const retry = S.retryQueue.splice(0, S.retryQueue.length);
-      try { await pushToAPI(retry); log('INFO', 'FLUSH', 'Retry attempt ' + attempt + ' succeeded'); break; }
-      catch (e) { log('WARN', 'FLUSH', 'Retry attempt ' + attempt + ' failed: ' + e.message); S.retryQueue.push(...retry); }
+  log("INFO", "FLUSH", "start store=" + S.store.size);
+  const toFlush = [];
+  for (const [key, post] of S.store) { if (!S.flushedUrns.has(key)) toFlush.push({ ...post }); }
+  if (!toFlush.length) { log("INFO", "FLUSH", "Nothing new"); return; }
+  await flushBatch(toFlush);
+}
+
+async function flushBatch(chunk) {
+  if (!chunk || !chunk.length) return;
+  try { await pushToAPI(chunk); }
+  catch (e) {
+    for (let i = 1; i <= 3; i++) {
+      await sleep(i * 2000);
+      try { await pushToAPI(chunk); log("INFO", "FLUSH", "Retry " + i + " OK"); return; }
+      catch (e2) { log("WARN", "FLUSH", "Retry " + i + " failed: " + e2.message); }
     }
   }
 }
 
 async function pushToAPI(posts) {
   if (!posts.length) return;
-  const endpoint = S.dashboardUrl + '/api/extension/results';
-  log('INFO', 'API', 'POST ' + posts.length + ' posts | url=' + endpoint.substring(0,60) + ' | userId=' + (S.userId||'').substring(0,8) + '...');
-  // Debug: log the first 3 posts of the payload to verify field mapping
-  const sample = posts.slice(0, 3).map(p => ({ urn: p.canonicalUrn, author: p.author, likes: p.likes, comments: p.comments, textLen: (p.postText||'').length }));
-  log('INFO', 'PAYLOAD', 'Sample: ' + JSON.stringify(sample));
+  const endpoint = S.dashboardUrl + "/api/extension/results";
+  const sample = posts.slice(0, 3).map(p => ({ urn: p.canonicalUrn, author: p.author, likes: p.likes, comments: p.comments, textLen: (p.postText || "").length }));
+  log("INFO", "API", "POST " + posts.length + ". Sample: " + JSON.stringify(sample));
   let resp;
-  try {
-    resp = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
-      body: JSON.stringify({ posts, keyword: S.kwQueue?.current || '', source: 'nexora_v6' })
-    });
-  } catch (netErr) {
-    log('WARN', 'API', 'Network error: ' + netErr.message);
-    throw netErr;
-  }
-  log('INFO', 'API', 'Response: HTTP ' + resp.status + ' ' + resp.statusText);
-  if (!resp.ok) {
-    const errBody = await resp.text().catch(() => '(no body)');
-    const msg = 'HTTP ' + resp.status + ': ' + errBody.substring(0, 300);
-    log('WARN', 'API', 'API error: ' + msg);
-    throw new Error(msg);
-  }
+  try { resp = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", "x-extension-token": S.userId }, body: JSON.stringify({ posts, keyword: S.kwQueue?.current || "", source: "nexora_urss_v7" }) }); }
+  catch (netErr) { throw netErr; }
+  if (!resp.ok) { const errBody = await resp.text().catch(() => "(no body)"); throw new Error("HTTP " + resp.status + ": " + errBody.substring(0, 300)); }
   const data = await resp.json().catch(() => ({}));
-  // Use createdCount (new rows only) so re-flushes of enriched posts don't inflate totalSaved
   const created = data.createdCount ?? data.savedCount ?? posts.length;
   S.totalSaved += created;
-  // Mark these URNs as flushed so flushAll won't re-send them
-  for (const p of posts) { if (p.canonicalUrn) S.flushedUrns.add(p.canonicalUrn); }
-  log('INFO', 'FLUSH', 'Saved ' + created + '/' + posts.length + ' new | total=' + S.totalSaved);
-  
-  if (data.createdUrns && data.createdUrns.length > 0) {
-    data.createdUrns.forEach(u => log('INFO', 'DB_NEW', 'DB Created URN: ' + u));
-  }
-  if (data.updatedUrns && data.updatedUrns.length > 0) {
-    data.updatedUrns.forEach(u => log('INFO', 'DB_DUP', 'DB Updated (Duplicate) URN: ' + u));
-  }
-  
-  broadcast('EXTENSION_LIVE_STATUS', { text: '\u2705 Saved ' + S.totalSaved + ' posts' });
+  for (const p of posts) { const key = p.canonicalUrn || p.stableKey; if (key) S.flushedUrns.add(key); }
+  log("INFO", "FLUSH", "Saved " + created + "/" + posts.length + " total=" + S.totalSaved);
+  if (data.createdUrns?.length) data.createdUrns.forEach(u => log("INFO", "DB_NEW", u));
+  broadcast("EXTENSION_LIVE_STATUS", { text: "Saved " + S.totalSaved + " posts" });
 }
 
-
-// ── Keyword Lifecycle ────────────────────────────────────────────────────
-async function finalizeKeyword() {
-  setState('FLUSHING');
-  stopEval();
-  await sleep(1500);
-  await flushAll();
-  log('INFO', 'KW', 'Keyword complete', S.kwQueue.status());
-  if (S.kwQueue.hasMore()) {
-    S.kwQueue.advance();
-    await sleep(4000);
-    setState('NAVIGATING');
-    await runKeyword();
-  } else {
-    finalizeSession();
-  }
-}
-
-function finalizeSession() {
-  setState('DONE');
-  log('INFO', 'SESSION', 'All keywords done', { totalSaved: S.totalSaved });
-  broadcast('SCRAPER_COMPLETE', { totalSaved: S.totalSaved });
-  broadcast('EXTENSION_LIVE_STATUS', { text: `✅ Done! ${S.totalSaved} posts saved.` });
-  safeDetach();
-  setState('IDLE');
-}
-
-// ── Tab + CDP Lifecycle ───────────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId !== S.tabId) return;
-  log('WARN', 'TAB', 'Tab removed during session', { state: S.state });
-  if (S.state === 'IDLE' || S.state === 'DONE') return;
-  stopEval();
-  S.attached = false;
-  S.tabId = null;  // ← scroll loop checks this to abort immediately
-  flushAll().finally(() => setState('IDLE'));
+  if (S.state === "IDLE" || S.state === "DONE") return;
+  S.attached = false; S.tabId = null;
+  reconcile(); flushAll().finally(() => setState("IDLE"));
 });
 
 chrome.debugger.onDetach.addListener((src, reason) => {
   if (src.tabId !== S.tabId) return;
-  log('WARN', 'CDP', 'Debugger detached', reason);
-  S.attached = false;
-  if (S.state === 'SCRAPING') stopEval();
+  log("WARN", "CDP", "Detached: " + reason); S.attached = false;
 });
 
 async function safeDetach() {
@@ -877,71 +457,54 @@ async function safeDetach() {
   S.attached = false;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
 async function resolveLinkedInTab() {
   const wins = await chrome.windows.getAll({ populate: false });
   const fwId = wins.find(w => w.focused)?.id;
-  if (fwId) {
-    const [t] = await chrome.tabs.query({ active: true, windowId: fwId, url: '*://*.linkedin.com/*' });
-    if (t) return t.id;
-  }
-  const [t2] = await chrome.tabs.query({ active: true, url: '*://*.linkedin.com/*' });
-  if (t2) return t2.id;
-  const [t3] = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
-  if (t3) return t3.id;
-  const t4 = await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/', active: true });
-  await waitForTabLoad(t4.id, 15000);
-  return t4.id;
+  if (fwId) { const [t] = await chrome.tabs.query({ active: true, windowId: fwId, url: "*://*.linkedin.com/*" }); if (t) return t.id; }
+  const [t2] = await chrome.tabs.query({ active: true, url: "*://*.linkedin.com/*" }); if (t2) return t2.id;
+  const [t3] = await chrome.tabs.query({ url: "*://*.linkedin.com/*" }); if (t3) return t3.id;
+  const t4 = await chrome.tabs.create({ url: "https://www.linkedin.com/feed/", active: true });
+  await waitForTabLoad(t4.id, 15000); return t4.id;
 }
 
 function waitForTabLoad(tabId, maxMs = 25000) {
   return new Promise(resolve => {
     const t = setTimeout(() => { chrome.tabs.onUpdated.removeListener(fn); resolve(); }, maxMs);
     function fn(id, info) {
-      if (id !== tabId || info.status !== 'complete') return;
-      chrome.tabs.onUpdated.removeListener(fn); clearTimeout(t);
-      setTimeout(resolve, 5000); // extra settle time for LinkedIn SPA
+      if (id !== tabId || info.status !== "complete") return;
+      chrome.tabs.onUpdated.removeListener(fn); clearTimeout(t); setTimeout(resolve, 5000);
     }
     chrome.tabs.onUpdated.addListener(fn);
   });
 }
 
 async function fetchKeywords(dashUrl, userId) {
-  const resp = await fetch(`${dashUrl}/api/extension/jobs`, { headers: { 'x-extension-token': userId } });
-  if (!resp.ok) throw new Error(`Jobs API ${resp.status}`);
+  const resp = await fetch(dashUrl + "/api/extension/jobs", { headers: { "x-extension-token": userId } });
+  if (!resp.ok) throw new Error("Jobs API " + resp.status);
   const jobs = await resp.json();
-  if (!jobs.active) throw new Error(jobs.message || 'System inactive in dashboard.');
+  if (!jobs.active) throw new Error(jobs.message || "System inactive.");
   let kws = [];
   if (jobs.settings?.searchConfigJson) {
-    try {
-      const cfg = JSON.parse(jobs.settings.searchConfigJson);
-      if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
-    } catch (_) {}
+    try { const cfg = JSON.parse(jobs.settings.searchConfigJson); if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === "string" && k.trim()).map(k => k.trim())); } catch (_) {}
   }
   const searchOnly = jobs.settings?.searchOnlyMode !== false;
   if (!searchOnly || kws.length === 0) {
     if (Array.isArray(jobs.keywords)) kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
   }
-  if (kws.length === 0) throw new Error('No keywords configured. Add keywords in dashboard settings.');
+  if (kws.length === 0) throw new Error("No keywords configured.");
   return [...new Set(kws)];
 }
 
 function broadcast(action, data = {}) {
-  if (action === 'EXTENSION_LIVE_STATUS') {
-    chrome.action.setBadgeText({ text: S.totalSaved > 0 ? String(S.totalSaved) : '⚡' }).catch(() => {});
-    chrome.action.setBadgeBackgroundColor({ color: '#10b981' }).catch(() => {});
+  if (action === "EXTENSION_LIVE_STATUS") {
+    chrome.action.setBadgeText({ text: S.totalSaved > 0 ? String(S.totalSaved) : "ON" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: "#10b981" }).catch(() => {});
   }
-  if (action === 'SCRAPER_COMPLETE') {
-    chrome.action.setBadgeText({ text: `${S.totalSaved}✓` }).catch(() => {});
-    chrome.action.setBadgeBackgroundColor({ color: '#3b82f6' }).catch(() => {});
+  if (action === "SCRAPER_COMPLETE") {
+    chrome.action.setBadgeText({ text: S.totalSaved + "OK" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: "#3b82f6" }).catch(() => {});
   }
-  if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
-    chrome.runtime.sendMessage({ action, ...data }).catch(() => {});
-  }
+  if (typeof chrome !== "undefined" && chrome?.runtime?.sendMessage) chrome.runtime.sendMessage({ action, ...data }).catch(() => {});
 }
 
-function broadcastStatus() {
-  broadcast('EXTENSION_LIVE_STATUS', { text: `State: ${S.state}` });
-}
-
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+function broadcastStatus() { broadcast("EXTENSION_LIVE_STATUS", { text: "State: " + S.state }); }

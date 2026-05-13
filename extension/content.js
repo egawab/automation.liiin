@@ -1,142 +1,101 @@
-// content.js v6.3 — Pure scroll engine.
-// Fixes: longer settle, MIN_STEPS guard, page-readiness wait, robust atBottom.
+// content.js — URSS Scroll Engine (navigation only, zero data collection)
+// Layer: Scroll Engine. Responsibilities: scroll, paginate, signal completion.
 (async function () {
-  if (window.__NexoraScrollV6) {
-    if (window.__NexoraScrollV6 === location.href) {
-      // Already running on this URL — do nothing, let it finish
-      return;
-    }
-    // Different URL — allow re-run
+  if (window.__NexoraURSS_Scroll) {
+    if (window.__NexoraURSS_Scroll === location.href) return;
   }
-  window.__NexoraScrollV6 = location.href;
+  window.__NexoraURSS_Scroll = location.href;
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const rand = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo));
   const canSend = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.sendMessage;
 
-  // ── Network bridge ────────────────────────────────────────────
-  function onNetEvent(e) {
-    const { url, body } = e.detail || {};
-    if (body && body.length > 100) {
-      if(canSend()) chrome.runtime.sendMessage({ action: 'NET_BODY', url, body }).catch(() => {});
+  function getScrollEl() {
+    const candidates = [
+      document.querySelector('.scaffold-layout__main'),
+      document.querySelector('.scaffold-layout-container__main'),
+      document.querySelector('main'),
+      document.scrollingElement,
+      document.documentElement
+    ];
+    for (const el of candidates) {
+      if (el && el.scrollHeight > el.clientHeight + 100) return el;
     }
+    return document.documentElement;
   }
-  window.removeEventListener('__nexora_net__', window.__nexoraNetHandler);
-  window.__nexoraNetHandler = onNetEvent;
-  window.addEventListener('__nexora_net__', onNetEvent);
 
-  // ── Keep-alive ping ────────────────────────────────────────────
-  const keepAlive = setInterval(() => {
-    if(canSend()) chrome.runtime.sendMessage({ action: 'KEEP_ALIVE' }).catch(() => clearInterval(keepAlive));
-    else clearInterval(keepAlive);
-  }, 20000);
-
-  // ── Scroll helpers ─────────────────────────────────────────────
   function doScroll() {
-    window.scrollBy({ top: Math.floor(window.innerHeight * 0.85), behavior: 'smooth' });
+    const el = getScrollEl();
+    el.scrollTop += Math.floor(el.clientHeight * 0.85);
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
     window.dispatchEvent(new Event('scroll', { bubbles: true }));
+    return el.scrollTop;
   }
 
   function atBottom() {
-    const sh = document.body.scrollHeight;
-    const ih = window.innerHeight;
-    const sy = window.scrollY;
-    // Only trust "at bottom" if page has meaningfully rendered (height > 1.5x viewport)
-    if (sh < ih * 1.5) return false;
-    return (ih + sy) >= sh - 500;
+    const el = getScrollEl();
+    if (el.scrollHeight < el.clientHeight * 1.3) return false;
+    return (el.scrollTop + el.clientHeight) >= el.scrollHeight - 600;
   }
 
   function pageHasContent() {
-    // Page is considered ready if scrollHeight > 1.5x viewport
-    return document.body.scrollHeight > window.innerHeight * 1.5;
+    const el = getScrollEl();
+    return el.scrollHeight > el.clientHeight * 1.5;
   }
 
-  function clickNextOrMore() {
-    const candidates = [
+  function clickNext() {
+    const sels = [
       '.artdeco-pagination__button--next',
       'button[aria-label="Next"]',
-      'button[aria-label="Go to next page"]',
+      'button[aria-label="Go to next page"]'
     ];
-    for (const sel of candidates) {
-      const btn = document.querySelector(sel);
-      if (btn && !btn.disabled) {
-        btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        btn.click();
-        console.log('[Scroll] Clicked pagination button:', sel);
-        return true;
-      }
+    for (const s of sels) {
+      const b = document.querySelector(s);
+      if (b && !b.disabled) { b.click(); return true; }
     }
-    const allBtns = [...document.querySelectorAll('button, [role="button"]')];
-    const more = allBtns.find(b => /show more|load more|see more results/i.test(b.innerText || ''));
-    if (more && !more.disabled) { more.click(); console.log('[Scroll] Clicked "show more"'); return true; }
+    const more = [...document.querySelectorAll('button,[role="button"]')]
+      .find(b => /show more|load more|see more/i.test(b.innerText || ''));
+    if (more && !more.disabled) { more.click(); return true; }
     return false;
   }
 
-  // ── Wait for page content to render ────────────────────────────
-  // LinkedIn SPA can take 4-8s after tab.update "complete" to render search results.
-  const MAX_WAIT_MS = 10000;
-  const POLL_MS = 500;
+  // Wait for page content
+  const MAX_WAIT = 12000;
   let waited = 0;
-  await sleep(3000); // base settle time
-  while (!pageHasContent() && waited < MAX_WAIT_MS) {
-    await sleep(POLL_MS);
-    waited += POLL_MS;
+  await sleep(2500);
+  while (!pageHasContent() && waited < MAX_WAIT) {
+    await sleep(500);
+    waited += 500;
   }
   if (!pageHasContent()) {
-    console.log('[Scroll] Page content never rendered (scrollHeight too small). Bailing.');
-    clearInterval(keepAlive);
-    window.removeEventListener('__nexora_net__', onNetEvent);
-    if(canSend()) chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
-    window.__NexoraScrollV6 = null;
+    if (canSend()) chrome.runtime.sendMessage({ action: 'SCROLL_COMPLETE', reason: 'empty_page' }).catch(() => {});
+    window.__NexoraURSS_Scroll = null;
     return;
   }
-  console.log('[Scroll] Page ready. scrollHeight=', document.body.scrollHeight, 'waited=', waited, 'ms');
 
-  // ── Main scroll loop ───────────────────────────────────────────
-  const MAX_STEPS = 60;
-  const MIN_STEPS = 6; // Never exit early before this many steps
-  let step = 0;
-  let noProgressCount = 0;
-  let lastScrollY = -1;
+  const MAX_STEPS = 55, MIN_STEPS = 6, NO_PROG_MAX = 8;
+  let step = 0, noProgress = 0, lastTop = -1;
+  let stopReason = 'max_steps';
 
   while (step < MAX_STEPS) {
     step++;
-    doScroll();
-    await sleep(rand(2200, 3800));
+    const st = doScroll();
+    await sleep(2600 + Math.floor(Math.random() * 1200));
 
-    const currentY = Math.round(window.scrollY);
-    if (Math.abs(currentY - lastScrollY) < 80) {
-      noProgressCount++;
-    } else {
-      noProgressCount = 0;
-      lastScrollY = currentY;
-    }
+    if (Math.abs(st - lastTop) > 60) { noProgress = 0; lastTop = st; }
+    else { noProgress++; }
 
-    // No-progress exit — but only after MIN_STEPS
-    if (step >= MIN_STEPS && noProgressCount >= 5) {
-      if (clickNextOrMore()) {
-        noProgressCount = 0;
-        await sleep(4000);
-        continue;
-      }
-      console.log('[Scroll] No progress — stopping at step', step);
-      break;
-    }
+    // Signal each step so background can collect DOM
+    if (canSend()) chrome.runtime.sendMessage({ action: 'SCROLL_STEP', step }).catch(() => {});
 
-    // Bottom check — only after MIN_STEPS
-    if (step >= MIN_STEPS && atBottom()) {
-      if (!clickNextOrMore()) {
-        console.log('[Scroll] Hit bottom — stopping at step', step);
+    if (step >= MIN_STEPS) {
+      if (noProgress >= NO_PROG_MAX || atBottom()) {
+        if (clickNext()) { noProgress = 0; await sleep(4500); continue; }
+        stopReason = atBottom() ? 'reached_bottom' : 'no_progress';
         break;
       }
-      noProgressCount = 0;
-      await sleep(4000);
     }
   }
 
-  clearInterval(keepAlive);
-  window.removeEventListener('__nexora_net__', onNetEvent);
-  console.log('[Scroll] Complete. Steps:', step, 'Collected from:', location.href);
-  if(canSend()) chrome.runtime.sendMessage({ action: 'CONTENT_SCROLL_COMPLETE' }).catch(() => {});
-  window.__NexoraScrollV6 = null;
+  if (canSend()) chrome.runtime.sendMessage({ action: 'SCROLL_COMPLETE', reason: stopReason, steps: step }).catch(() => {});
+  window.__NexoraURSS_Scroll = null;
 })();

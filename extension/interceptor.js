@@ -1,9 +1,9 @@
-// interceptor.js — MAIN world, document_start (declared in manifest.json)
-// Hooks XHR + fetch before LinkedIn makes any requests.
-// Dispatches __nexora_net__ CustomEvent to content.js (ISOLATED world).
+// interceptor.js — URSS Network Interceptor (data only, no merging)
+// Layer: Network Interceptor. Captures raw LinkedIn API responses.
+// Dispatches __nexora_net__ to content.js (ISOLATED world) which forwards to background.
 (function () {
-  if (window.__NexoraInterceptorV6) return;
-  window.__NexoraInterceptorV6 = true;
+  if (window.__NexoraURSS_Interceptor) return;
+  window.__NexoraURSS_Interceptor = true;
 
   function isTarget(url) {
     if (!url || typeof url !== 'string') return false;
@@ -19,9 +19,9 @@
   }
 
   function dispatch(url, body) {
-    if (!body || body.length < 100) return;
-    const first = body.trimStart()[0];
-    if (first !== '{' && first !== '[') return;
+    if (!body || body.length < 200) return;
+    const fc = body.trimStart()[0];
+    if (fc !== '{' && fc !== '[') return;
     try {
       window.dispatchEvent(new CustomEvent('__nexora_net__', { detail: { url, body } }));
     } catch (_) {}
@@ -62,5 +62,5 @@
     return resp;
   };
 
-  console.log('[Nexora] Interceptor v6 active (MAIN world)');
+  console.log('[Nexora] URSS Interceptor active');
 })();
