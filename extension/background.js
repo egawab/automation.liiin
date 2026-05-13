@@ -376,22 +376,13 @@ function buildEval(profile) {
 
   const lines = [
     '(function(){',
-    'var posts=[],seen={},debugLog=[];',
+    'var posts=[],seen={},seenEls=new WeakSet(),debugLog=[];',
     // Normalize Arabic-Indic → Western digits before any parsing
     'function norm(s){return String(s||"").replace(/[\\u0660-\\u0669]/g,function(c){return c.charCodeAt(0)-0x660;}).replace(/[\\u06F0-\\u06F9]/g,function(c){return c.charCodeAt(0)-0x6F0;});}',
     // pe(): parse any localized number, always returns int >= 0
     'function pe(s){if(!s)return 0;var x=norm(s).toUpperCase().replace(/,/g,"").replace(/\\./g,".");var n=parseFloat((x.match(/[0-9]+\\.?[0-9]*/)||[])[0]);if(isNaN(n))return 0;if(x.indexOf("K")>-1)n*=1000;if(x.indexOf("M")>-1)n*=1000000;return Math.floor(n);}',
     'function xUrn(s){if(!s)return "";var m=String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];var p=String(s).match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}',
-    'function getHash(txt,auth,mediaStr){',
-    // Normalize auth: strip newlines, degree indicators, "View X's profile" prefix — ensures same post authored by same person always hashes identically
-    '  var na=auth.split("\\n")[0].replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/[\\u2019\\u0027]s\\s.*$/i,"").replace(/\\s*[\\u2022\\u00B7].*$/,"").trim();',
-    '  var nt=txt.replace(/\\s+/g," ").trim(); var str = na + "|" + nt.substring(0,150) + "|" + mediaStr;',
-    '  var h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;',
-    '  for(var i=0; i<str.length; i++) { var ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }',
-    '  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);',
-    '  h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);',
-    '  return { urn: "urn:li:hash:" + (h2>>>0).toString(16).padStart(8, "0") + (h1>>>0).toString(16).padStart(8, "0"), input: str };',
-    '}',
+
     // Engagement: 4-strategy locale-agnostic extraction
     'function getEng(el){',
     '  var lk=0,cm=0;',
@@ -439,13 +430,11 @@ function buildEval(profile) {
     '  if(name.length>1)return name;',
     '  var img=a.querySelector("img[alt]");if(img)return (img.getAttribute("alt")||"").trim().substring(0,100);',
     '  return "Unknown";}',
-    'function xPost(urn,el,href,hashInput){',
+    'function xPost(urn,el,href){',
+    '  if(!urn||seen[urn]||seenEls.has(el))return;seen[urn]=1;seenEls.add(el);',
     '  var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);',
-    '  var isDup=seen[urn]?true:false;',
-    '  console.log("POST DEBUG:\\n- rawTextLength: "+(el.innerText||"").length+"\\n- normalizedTextLength: "+txt.length+"\\n- author: "+auth+"\\n- extractedURN: "+(hashInput?"(none)":urn)+"\\n- generatedHashInput: "+(hashInput?hashInput:"(none)")+"\\n- generatedHash: "+(hashInput?urn:"(none)")+"\\n- dedupeDecision: "+(isDup?"DUPLICATE":"NEW")+"\\n- dedupeReason: "+(isDup?"Already seen in this cycle":"First time seen"));',
-    '  if(isDup){var dEng=getEng(el);if(dEng.likes>0||dEng.comments>0){posts.push({urn:urn,url:\'\',text:\'\',author:\'\',likes:dEng.likes,comments:dEng.comments});}return;}seen[urn]=1;',
-    '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,cls:(el.className||"").substring(0,40),ariaLabels:Array.from(el.querySelectorAll("[aria-label]")).map(function(x){return x.getAttribute("aria-label");}).filter(Boolean).slice(0,6)});',
-    '  posts.push({urn:urn,url:href||(urn.indexOf("urn:li:hash:")<0?"https://www.linkedin.com/feed/update/"+urn:""),text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
+    '  if(debugLog.length<3)debugLog.push({urn:urn.slice(-12),textLen:txt.length,author:auth.substring(0,20),likes:eng.likes,comments:eng.comments,cls:(el.className||"").substring(0,40)});',
+    '  posts.push({urn:urn,url:href||"https://www.linkedin.com/feed/update/"+urn,text:txt.substring(0,3000),author:auth,likes:eng.likes,comments:eng.comments});}',
     // card(): walk up, prefer container that has [aria-label] elements (engagement is always aria-labeled)
     'function card(el,urn){var c=el,firstHit=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;var l=(c.innerText||"").trim().length;if(l>' + minCard + '&&l<15000){if(!firstHit)firstHit=c;if(c.querySelectorAll("[aria-label]").length>0){xPost(urn,c,"");return;}}if(l>=15000)break;}if(firstHit)xPost(urn,firstHit,"");}',
     // Method 1: feed/update and /posts/ href links
@@ -454,31 +443,7 @@ function buildEval(profile) {
     'try{["data-urn","data-activity-urn","data-chameleon-result-urn","data-entity-urn","data-id"].forEach(function(attr){Array.from(document.querySelectorAll("["+attr+"]")).forEach(function(el){var urn=xUrn(el.getAttribute(attr)||"");if(!urn||seen[urn])return;card(el,urn);});});}catch(e){}',
     // Method 3: activity- href links
     'try{Array.from(document.querySelectorAll("a[href*=activity-]")).forEach(function(a){var urn=xUrn(a.href);if(!urn||seen[urn])return;card(a,urn);});}catch(e){}',
-    // Method 4: author /in/ and /company/ link → walk up → find URN in innerHTML or generate Hash
-    'try{var seenCards=[];Array.from(document.querySelectorAll("a[href*=\\"/in/\\"],a[href*=\\"/company/\\"]")).forEach(function(a){',
-    '  var c=a,fh=null,firstHit=null;for(var i=0;i<30;i++){c=c.parentElement;if(!c||c===document.body)break;',
-    '    var l=(c.innerText||"").trim().length;',
-    '    if(l>150&&l<15000){',
-    '      if(!firstHit)firstHit=c;',
-    '      if(c.querySelectorAll("[aria-label]").length>0){fh=c;break;}',
-    '    }if(l>=15000)break;',
-    '  }',
-    '  var fc=fh||firstHit;',
-    '  if(fc&&!seenCards.some(function(s){return s.contains(fc)||fc.contains(s);})){',
-    '    seenCards.push(fc);',
-    '    var h=fc.innerHTML||"";',
-    '    var m=h.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);',
-    '    var urn="", hashIn="";',
-    '    if(m)urn="urn:li:"+m[1]+":"+m[2];',
-    '    if(!urn){var p=h.match(/activity-([0-9]{10,25})/i);if(p)urn="urn:li:activity:"+p[1];}',
-    '    if(!urn){',
-    '      var txt=getText(fc);var auth=getAuthor(fc);',
-    '      var mediaStr=Array.from(fc.querySelectorAll("img[src],video")).map(function(n){return n.src||n.poster||"";}).filter(function(s){return s&&s.indexOf("profile")<0;}).join(",");',
-    '      var hashObj=getHash(txt,auth,mediaStr); urn=hashObj.urn; hashIn=hashObj.input;',
-    '    }',
-    '    if(urn)xPost(urn,fc,"",hashIn);',
-    '  }',
-    '});}catch(e){}',
+
     'return JSON.stringify({posts:posts,count:posts.length,strategy:"' + strategy + '",debug:debugLog});',
     '})()'
   ];
@@ -609,6 +574,8 @@ function stopEval() { if (S.evalTimer) { clearInterval(S.evalTimer); S.evalTimer
 
 async function runEval() {
   if (!S.attached || !S.tabId || S.state !== 'SCRAPING') return;
+  if (S.evalRunning) return;
+  S.evalRunning = true;
   const expr = S.activeEval || EVAL;  // use probe-optimized EVAL if available
   try {
     const r = await chrome.debugger.sendCommand({ tabId: S.tabId }, 'Runtime.evaluate',
@@ -639,7 +606,7 @@ async function runEval() {
       if (S.store.has(p.urn)) {
         const ex = S.store.get(p.urn);
         let changed = false;
-        if (text.length > (ex.postText || '').length) { ex.postText = text; ex.preview = text; changed = true; }
+        if (text.length > (ex.postText || '').length + 100) { ex.postText = text; ex.preview = text; changed = true; }
         if (author !== 'Unknown' && ex.author === 'Unknown') { ex.author = author; changed = true; }
         if (likes    != null && likes    > (ex.likes    || 0)) { ex.likes    = likes;    changed = true; }
         if (comments != null && comments > (ex.comments || 0)) { ex.comments = comments; changed = true; }
@@ -659,7 +626,7 @@ async function runEval() {
       broadcast('EXTENSION_LIVE_STATUS', { text: `📦 ${S.store.size} found | 💾 ${S.totalSaved} saved` });
       flushBatch().catch(() => {});
     }
-  } catch (e) { log('WARN', 'EVAL', 'Eval error: ' + e.message); }
+  } catch (e) { log('WARN', 'EVAL', 'Eval error: ' + e.message); } finally { S.evalRunning = false; }
 }
 
 // ── Network Body Ingestion ───────────────────────────────────────────────
@@ -766,45 +733,8 @@ function ingestBody(body) {
         // Re-push enriched snapshot so API receives the latest merged data
         if (changed) { S.batch.push({ ...ex }); enriched++; }
       } else {
-        // ── Network → Hash reconciliation ─────────────────────────────────
-        // Before creating a new real-URN record, check if a hash-URN entry
-        // already exists for the same post (matched by author + text snippet).
-        // If found, upgrade the existing entry instead of creating a duplicate.
-        let upgraded = false;
-        if (p.author && p.text && p.text.length > 20) {
-          function normAuth(s) {
-            return (s || '').split('\n')[0]
-              .replace(/^View\s+(?:company:\s*)?/i, '')
-              .replace(/[\u2019\u0027]s\s.*$/i, '')
-              .replace(/\s*[\u2022\u00B7].*$/, '')
-              .trim().toLowerCase();
-          }
-          const netAuth = normAuth(p.author);
-          const netSnip = p.text.replace(/\s+/g, ' ').trim().substring(0, 60).toLowerCase();
-          for (const [storeUrn, storePost] of S.store) {
-            if (!storeUrn.startsWith('urn:li:hash:')) continue;
-            const domAuth = normAuth(storePost.author);
-            if (!domAuth || domAuth === 'unknown' || domAuth !== netAuth) continue;
-            const domSnip = (storePost.postText || '').replace(/\s+/g, ' ').trim().substring(0, 60).toLowerCase();
-            if (domSnip.length < 10) continue;
-            // Require at least 30-char overlap to confirm same post
-            const overlap = netSnip.substring(0, 40);
-            if (!domSnip.includes(overlap.substring(0, 30)) && !netSnip.includes(domSnip.substring(0, 30))) continue;
-            // Match — upgrade hash entry with authoritative network engagement
-            let changed = false;
-            if (p.likes    !== null && (storePost.likes    === null || p.likes    > storePost.likes))    { storePost.likes    = p.likes;    changed = true; }
-            if (p.comments !== null && (storePost.comments === null || p.comments > storePost.comments)) { storePost.comments = p.comments; changed = true; }
-            if (p.text.length > (storePost.postText || '').length) { storePost.postText = p.text; storePost.preview = p.text; changed = true; }
-            if (p.author && p.author.length > (storePost.author || '').length && storePost.author === 'Unknown') { storePost.author = p.author; changed = true; }
-            if (changed) { S.batch.push({ ...storePost }); enriched++; }
-            upgraded = true;
-            break;
-          }
-        }
-        if (!upgraded) {
           const np = { canonicalUrn: urn, url: `https://www.linkedin.com/feed/update/${urn}`, postText: p.text, preview: p.text, author: p.author || 'Unknown', likes: p.likes, comments: p.comments, source: 'network' };
           S.store.set(urn, np); S.batch.push({ ...np }); enriched++;
-        }
       }
     }
     if (enriched > 0) flushBatch().catch(() => {});
