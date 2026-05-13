@@ -385,7 +385,7 @@ function buildEval(profile) {
     'function getHash(txt,auth,mediaStr){',
     // Normalize auth: strip newlines, degree indicators, "View X's profile" prefix — ensures same post authored by same person always hashes identically
     '  var na=auth.split("\\n")[0].replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/[\\u2019\\u0027]s\\s.*$/i,"").replace(/\\s*[\\u2022\\u00B7].*$/,"").trim();',
-    '  var str = na + "|" + txt.length + "|" + txt.substring(0,300) + "|" + txt.substring(txt.length-300) + "|" + mediaStr;',
+    '  var nt=txt.replace(/\\s+/g," ").trim(); var str = na + "|" + nt.substring(0,150) + "|" + mediaStr;',
     '  var h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;',
     '  for(var i=0; i<str.length; i++) { var ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }',
     '  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);',
@@ -632,8 +632,8 @@ async function runEval() {
     for (const p of (posts || [])) {
       if (!p.urn) continue;
       // Normalize schema: always 0 not null
-      const likes    = typeof p.likes    === 'number' ? p.likes    : 0;
-      const comments = typeof p.comments === 'number' ? p.comments : 0;
+      const likes    = (typeof p.likes    === 'number' && p.likes    > 0) ? p.likes    : null;
+      const comments = (typeof p.comments === 'number' && p.comments > 0) ? p.comments : null;
       const author   = p.author || 'Unknown';
       const text     = p.text   || '';
       if (S.store.has(p.urn)) {
@@ -641,8 +641,8 @@ async function runEval() {
         let changed = false;
         if (text.length > (ex.postText || '').length) { ex.postText = text; ex.preview = text; changed = true; }
         if (author !== 'Unknown' && ex.author === 'Unknown') { ex.author = author; changed = true; }
-        if (likes > (ex.likes || 0)) { ex.likes = likes; changed = true; }
-        if (comments > (ex.comments || 0)) { ex.comments = comments; changed = true; }
+        if (likes    != null && likes    > (ex.likes    || 0)) { ex.likes    = likes;    changed = true; }
+        if (comments != null && comments > (ex.comments || 0)) { ex.comments = comments; changed = true; }
         if (changed) { S.batch.push({ ...ex }); added++; }
       } else {
         const post = {

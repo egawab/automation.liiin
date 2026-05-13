@@ -112,8 +112,8 @@ export async function POST(req: Request) {
               where: { userId, canonicalUrn: urn },
               data: {
                 ...(safeUrl.length > 0           && { postUrl: safeUrl }),
-                ...(postLikes    != null          && { likes: postLikes }),
-                ...(postComments != null          && { comments: postComments }),
+                ...(postLikes    != null && postLikes    > 0n && { likes: postLikes    }),
+                ...(postComments != null && postComments > 0n && { comments: postComments }),
                 ...(safePreview.length > 20       && { postPreview: safePreview }),
                 ...(safeAuthor && safeAuthor !== 'Unknown' && { postAuthor: safeAuthor }),
                 savedAt: new Date(),
