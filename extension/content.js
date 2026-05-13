@@ -324,10 +324,11 @@
   if (!isActive()) { console.log('[CS] Aborted during page wait (stale runId)'); return; }
   const el = getScrollEl();
   if (el.scrollHeight <= el.clientHeight * 1.3) {
-    console.log('[CS] Page appears empty — flushing what we have');
+    console.warn('[CS] Page appears empty — sending empty FLUSH_POSTS runId=' + runId);
     window.removeEventListener('__nexora_net__', onNetEvent);
     window.__nexoraNetHandler = null;
-    if (canSend()) chrome.runtime.sendMessage({ action: 'FLUSH_POSTS', posts: [] }).catch(() => {});
+    window.__nexoraRunId = null;
+    if (canSend()) chrome.runtime.sendMessage({ action: 'FLUSH_POSTS', posts: [], runId }).catch(() => {});
     return;
   }
 
@@ -372,14 +373,17 @@
   window.removeEventListener('__nexora_net__', onNetEvent);
   window.__nexoraNetHandler = null;
 
+  // Release the run lock BEFORE sending so that if background rejects us,
+  // a new injection for the same page can still start cleanly.
+  window.__nexoraRunId = null;
+
   const posts = Object.values(postsMap);
-  console.log('[CS] Flushing posts=' + posts.length + ' kw="' + keyword + '"');
+  console.log('[CS] Flushing posts=' + posts.length + ' kw="' + keyword + '" runId=' + runId);
 
   if (canSend()) {
-    chrome.runtime.sendMessage({ action: 'FLUSH_POSTS', posts })
-      .then(r => console.log('[CS] FLUSH_POSTS ACK:', r))
-      .catch(e => console.warn('[CS] FLUSH_POSTS failed:', e?.message));
+    // Include runId so background can reject stale sessions
+    chrome.runtime.sendMessage({ action: 'FLUSH_POSTS', posts, runId })
+      .then(r  => console.log('[CS] FLUSH_POSTS ACK:', JSON.stringify(r)))
+      .catch(e => console.warn('[CS] FLUSH_POSTS send failed:', e?.message));
   }
-
-  window.__nexoraRunId = null;
 })();

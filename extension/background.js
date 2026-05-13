@@ -1,11 +1,11 @@
-// background.js — Nexora v8 (Content-Script-Centric, NO CDP)
+// background.js — Nexora v8.1 (Session Lock + Trace)
 // Responsibilities: START/STOP, tab navigation, script injection, API flush.
 // Scraping logic (scroll, DOM, network, reconciliation) lives entirely in content.js.
-console.log('[BG] Nexora v8 loaded');
+console.log('[BG] Nexora v8.1 loaded');
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const S = {
-  state: 'IDLE',      // IDLE | RUNNING | DONE
+  state: 'IDLE',      // IDLE | STARTING | RUNNING | DONE
   tabId: null,
   runId: 0,           // incremented each session; content.js checks this to self-abort
   totalSaved: 0,
@@ -14,25 +14,38 @@ const S = {
   keywords: [],
   kwIndex: 0,
 };
+// NOTE: STARTING is a new intermediate state that blocks duplicate STARTs during
+// the async setup phase (fetchKeywords, resolveLinkedInTab). This closes the
+// race window where a second START arrived before S.state became 'RUNNING'.
 
 // ── Keep-alive (service worker won't go idle during a session) ────────────────
 chrome.alarms.create('nexora_hb', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== 'nexora_hb') return;
-  if (S.state === 'RUNNING')
-    console.log('[BG] hb state=RUNNING saved=' + S.totalSaved + ' kw=' + (S.keywords[S.kwIndex] || ''));
+  if (S.state === 'RUNNING' || S.state === 'STARTING')
+    console.log('[BG] hb state=' + S.state + ' saved=' + S.totalSaved + ' kw=' + (S.keywords[S.kwIndex] || ''));
 });
 
 // ── Single message handler ────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+
   if (msg.action === 'START_ENGINE') {
+    // ── HARD SESSION LOCK ──────────────────────────────────────────────────────
+    // If already starting or running, refuse entirely. Do NOT call stopSession().
+    // This prevents dashboard + popup firing simultaneously from cascading.
+    if (S.state === 'STARTING' || S.state === 'RUNNING') {
+      console.warn('[LOCK] Ignoring duplicate START_ENGINE — state=' + S.state
+        + ' runId=' + S.runId + ' kw=' + (S.keywords[S.kwIndex] || ''));
+      sendResponse({ ok: false, reason: 'already_running' });
+      return false;
+    }
     (async () => {
       try {
-        if (S.state === 'RUNNING') await stopSession();
         await startSession(msg);
         sendResponse({ ok: true });
       } catch (e) {
-        console.error('[BG] START_ENGINE:', e.message);
+        console.error('[BG] START_ENGINE fatal:', e.message);
+        S.state = 'IDLE';  // reset from STARTING if setup threw
         broadcastStatus('ERR: ' + e.message);
         sendResponse({ ok: false, error: e.message });
       }
@@ -41,15 +54,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === 'STOP_ENGINE') {
-    stopSession().finally(() => sendResponse({ ok: true }));
+    stopSession('user_stop').finally(() => sendResponse({ ok: true }));
     return true;
   }
 
-  // content.js calls this when scroll + extraction is complete for one keyword
+  // content.js sends this when scroll + extraction is complete for one keyword.
+  // GUARD: validate runId to reject stale content.js from a previous session.
   if (msg.action === 'FLUSH_POSTS') {
+    const msgRunId = msg.runId;
+    if (S.state !== 'RUNNING') {
+      console.warn('[LOCK] FLUSH_POSTS ignored — state=' + S.state + ' (session not running)');
+      sendResponse({ ok: false, reason: 'not_running' });
+      return false;
+    }
+    if (msgRunId !== undefined && msgRunId !== S.runId) {
+      console.warn('[LOCK] FLUSH_POSTS ignored — stale runId=' + msgRunId + ' current=' + S.runId);
+      sendResponse({ ok: false, reason: 'stale_runid' });
+      return false;
+    }
     (async () => {
       const posts = msg.posts || [];
-      console.log('[BG] FLUSH_POSTS count=' + posts.length + ' kw=' + (S.keywords[S.kwIndex] || ''));
+      console.log('[BG] FLUSH_POSTS count=' + posts.length + ' kw=' + (S.keywords[S.kwIndex] || '') + ' runId=' + S.runId);
       try { await pushToAPI(posts); } catch (e) { console.warn('[BG] API flush failed:', e.message); }
       sendResponse({ ok: true });
       advanceKeyword();
@@ -59,7 +84,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === 'GET_STATUS') {
     sendResponse({
-      running: S.state === 'RUNNING',
+      running: S.state === 'RUNNING' || S.state === 'STARTING',
       state: S.state,
       totalSaved: S.totalSaved,
       keyword: S.keywords[S.kwIndex] || null,
@@ -72,9 +97,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 // ── Session lifecycle ─────────────────────────────────────────────────────────
 async function startSession(msg) {
+  // Immediately claim the lock with STARTING — blocks any concurrent START
+  S.state = 'STARTING';
   S.runId++;
   S.totalSaved = 0;
   S.kwIndex = 0;
+  console.log('[BG] startSession BEGIN runId=' + S.runId);
 
   const cfg = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
   S.dashboardUrl = msg.dashboardUrl || cfg.dashboardUrl || '';
@@ -87,72 +115,91 @@ async function startSession(msg) {
   S.tabId = await resolveLinkedInTab();
   S.state = 'RUNNING';
   broadcastStatus('Starting: ' + S.keywords[0]);
+  console.log('[BG] startSession RUNNING runId=' + S.runId + ' keywords=' + JSON.stringify(S.keywords));
   await runKeyword();
 }
 
-async function stopSession() {
-  console.log('[BG] stopSession state=' + S.state);
-  S.runId++;          // invalidates any in-flight content.js execution
+async function stopSession(reason) {
+  reason = reason || 'unknown';
+  console.warn('[BG] stopSession reason=' + reason + ' state=' + S.state + ' runId=' + S.runId);
+  console.trace('[TRACE] stopSession called');      // temporary — identifies caller
+  S.runId++;          // invalidates any in-flight content.js
   S.state = 'IDLE';
-  broadcastStatus('Stopped');
+  broadcastStatus('Stopped (' + reason + ')');
   setBadge('', '#6b7280');
 }
 
 // ── Keyword loop ──────────────────────────────────────────────────────────────
 async function runKeyword() {
-  if (S.state !== 'RUNNING') return;
+  if (S.state !== 'RUNNING') {
+    console.warn('[BG] runKeyword aborted — state=' + S.state);
+    return;
+  }
   const kw = S.keywords[S.kwIndex];
   if (!kw) { finalizeSession(); return; }
 
-  console.log('[BG] runKeyword index=' + S.kwIndex + ' kw=' + kw);
+  console.log('[BG] runKeyword index=' + S.kwIndex + ' kw=' + kw + ' runId=' + S.runId);
   const url = 'https://www.linkedin.com/search/results/content/?keywords='
     + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
+
+  // Capture the runId at this moment; check it before every async step
+  const myRunId = S.runId;
 
   try {
     await chrome.tabs.update(S.tabId, { url, active: true });
   } catch (e) {
-    // Tab may have been closed; try to resolve a new one
     console.warn('[BG] tabs.update failed:', e.message);
-    try { S.tabId = await resolveLinkedInTab(); await chrome.tabs.update(S.tabId, { url, active: true }); }
-    catch (e2) { console.error('[BG] Cannot get LinkedIn tab:', e2.message); finalizeSession(); return; }
+    try {
+      S.tabId = await resolveLinkedInTab();
+      await chrome.tabs.update(S.tabId, { url, active: true });
+    } catch (e2) {
+      console.error('[BG] Cannot get LinkedIn tab:', e2.message);
+      await stopSession('no_tab');
+      return;
+    }
   }
 
   await waitForTabLoad(S.tabId);
 
-  if (S.state !== 'RUNNING') return;   // may have been stopped during load
+  // Check if session was stopped or superseded during the tab load
+  if (S.state !== 'RUNNING' || S.runId !== myRunId) {
+    console.warn('[BG] runKeyword: session changed during tab load — aborting kw=' + kw);
+    return;
+  }
 
   broadcastStatus('Scraping: ' + kw);
   setBadge('ON', '#10b981');
 
-  // Step 1: stamp the runId into the page so content.js can read it
-  const runId = S.runId;
+  // Step 1: stamp runId + config into the page
   try {
     await chrome.scripting.executeScript({
       target: { tabId: S.tabId },
       func: (cfg) => { window.__nexoraCfg = cfg; },
-      args: [{ runId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length }],
+      args: [{ runId: myRunId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length }],
     });
   } catch (e) { console.warn('[BG] config inject failed:', e.message); }
 
-  // Step 2: inject content.js (it reads window.__nexoraCfg on start)
+  // Step 2: inject content.js — it reads window.__nexoraCfg on start
   try {
     await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] });
-    console.log('[BG] content.js injected for kw=' + kw);
+    console.log('[BG] content.js injected kw=' + kw + ' runId=' + myRunId);
   } catch (e) {
     console.error('[BG] content.js inject failed:', e.message);
-    // Skip this keyword and advance
-    advanceKeyword();
+    advanceKeyword();  // skip this keyword, move on
   }
-  // content.js drives itself; it will sendMessage(FLUSH_POSTS) when done.
+  // content.js now drives itself; sends FLUSH_POSTS(runId) when done.
 }
 
 function advanceKeyword() {
-  if (S.state !== 'RUNNING') return;
+  if (S.state !== 'RUNNING') {
+    console.warn('[BG] advanceKeyword skipped — state=' + S.state);
+    return;
+  }
   S.kwIndex++;
   if (S.kwIndex >= S.keywords.length) {
     finalizeSession();
   } else {
-    console.log('[BG] advancing to keyword index=' + S.kwIndex);
+    console.log('[BG] advancing to keyword index=' + S.kwIndex + ' kw=' + S.keywords[S.kwIndex]);
     setTimeout(() => {
       if (S.state === 'RUNNING') runKeyword().catch(e => console.error('[BG] runKeyword:', e.message));
     }, 4000);
@@ -260,12 +307,9 @@ function waitForTabLoad(tabId, maxMs = 25000) {
 
 chrome.tabs.onRemoved.addListener(tabId => {
   if (tabId !== S.tabId) return;
-  if (S.state === 'RUNNING') {
+  if (S.state === 'RUNNING' || S.state === 'STARTING') {
     console.warn('[BG] LinkedIn tab closed during session');
-    S.runId++;
-    S.state = 'IDLE';
-    S.tabId = null;
-    broadcastStatus('Stopped: tab closed');
+    stopSession('tab_closed');
   }
 });
 
