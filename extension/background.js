@@ -21,6 +21,8 @@ const S = {
   totalSaved: 0,
   flushedUrns: new Set(),
   sessionId: null,
+  scrollRunning: false,          // lock: prevents duplicate scroll loops
+  lastNetworkActivity: 0,        // timestamp of last network event (for idle detection)
 };
 
 function setState(next) {
@@ -76,7 +78,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true }); return false;
   }
   if (msg.action === "STOP_ENGINE") { stopSession().finally(() => sendResponse({ ok: true })); return true; }
-  if (msg.action === "NET_BODY") { ingestBody(msg.body); sendResponse({ ok: true }); return false; }
+  if (msg.action === "NET_BODY") {
+    log("INFO", "NET", "[BG] network message received url=" + (msg.url || "").substring(0, 60) + " len=" + (msg.body || "").length);
+    ingestBody(msg.body);
+    S.lastNetworkActivity = Date.now();
+    log("INFO", "NET", "[BG] network buffered buffer.network.length=" + S.buffer.network.length);
+    sendResponse({ ok: true }); return false;
+  }
   if (msg.action === "KEEP_ALIVE") { sendResponse({ ok: true }); return false; }
   if (msg.action === "SCROLL_STEP") { sendResponse({ ok: true }); return false; }
   if (msg.action === "SCROLL_COMPLETE") { log("INFO", "MSG", "SCROLL_COMPLETE (content.js)"); sendResponse({ ok: true }); return false; }
@@ -194,8 +202,16 @@ const DOM_COLLECTOR = `(function(){
     if(txt.length<20){var raw=(el.innerText||"").replace(/\\s+/g," ").trim();if(!skip.test(raw))txt=raw.substring(0,3000);}return txt;}
   function getAuthor(el){var a=el.querySelector('a[href*="/in/"],a[href*="/company/"]');if(!a)return "Unknown";
     var aria=a.getAttribute("aria-label")||"";
-    if(aria){var cl=aria.replace(/^[Vv]iew\\s+(?:company:\\s*)?/i,"").replace(/(['\\u2019\\u2018]s\\s.*|\\s+Verified.*|\\s+Top\\s+Voice.*|\\s+\\d.*)$/i,"");if(cl)return cl.trim().substring(0,100);}
-    var name=(a.innerText||"").trim().split("\\n")[0].trim().substring(0,100);if(name.length>1)return name;
+    if(aria){
+      var cl=aria
+        .replace(/^[Vv]iew\s+(?:company:\s*)?/i,"")
+        .replace(/\s*[''\u2019\u2018\u02BC]s\s.*/i,"")
+        .replace(/\s*(profile|page|company)\s*$/i,"")
+        .replace(/\s+(Verified|Top Voice|\d.*)$/i,"")
+        .trim();
+      if(cl&&cl.length>1&&!/^(Unknown|View)$/i.test(cl))return cl.substring(0,100);
+    }
+    var name=(a.innerText||"").trim().split("\n")[0].replace(/^[Vv]iew\s+/i,"").replace(/\s*(profile|page)\s*$/i,"").trim().substring(0,100);if(name.length>1)return name;
     var img=a.querySelector("img[alt]");if(img)return(img.getAttribute("alt")||"").trim().substring(0,100);return "Unknown";}
   function addRec(urn,el,href){if(!el)return;var key=urn||"";if(key&&seen[key])return;if(key)seen[key]=1;
     var eng=getEng(el);var txt=getText(el);var auth=getAuthor(el);
@@ -263,6 +279,10 @@ function ingestBody(body) {
 // ── Reconciliation Engine — ONLY writer to S.store ────────────────────────────
 function reconcile() {
   log("INFO", "RECONCILE", "Start dom=" + S.buffer.dom.length + " network=" + S.buffer.network.length);
+  if (S.buffer.network.length === 0) {
+    log("WARN", "RECONCILE", "[WARN] Network layer inactive — running DOM-only fallback. Check: interceptor.js loaded in MAIN world? content.js __nexora_net__ listener registered?");
+    broadcast("EXTENSION_LIVE_STATUS", { text: "⚠️ Network inactive — DOM-only mode" });
+  }
   const netByUrn = new Map();
   for (const rec of S.buffer.network) {
     if (!rec.urn) continue;
@@ -319,36 +339,46 @@ function reconcile() {
 
 // ── Scroll Engine — navigation only ──────────────────────────────────────────
 async function cdpScrollEngine(kw) {
+  // Scroll lock: prevent duplicate concurrent scroll loops
+  if (S.scrollRunning) {
+    log("WARN", "SCROLL", "cdpScrollEngine called but scroll already running — ignoring duplicate");
+    return "duplicate_ignored";
+  }
+  S.scrollRunning = true;
   const MAX_STEPS = 55, MIN_STEPS = 6, NO_PROG_MAX = 8;
   let step = 0, noProgress = 0, lastSt = -1, scrolledAtAll = false, stopReason = "max_steps";
-  await waitForPageReady(14000);
-  broadcast("EXTENSION_LIVE_STATUS", { text: "Scrolling: " + kw });
-  const initRaw = await cdpExec(FIND_SCROLL_EL);
-  let initM = null; try { if (initRaw) initM = JSON.parse(initRaw); } catch (_) {}
-  if (initM) log("INFO", "SCROLL", "Container sh=" + initM.sh + " ch=" + initM.ch);
-  if (initM && initM.sh < initM.ch * 1.2) { broadcast("EXTENSION_LIVE_STATUS", { text: "Skip: no content" }); return "empty_page"; }
-  while (step < MAX_STEPS && S.state === "SCRAPING" && S.tabId) {
-    step++;
-    await cdpExec(DO_SCROLL);
-    await sleep(2600 + Math.floor(Math.random() * 1200));
-    const raw = await cdpExec(FIND_SCROLL_EL);
-    let m = { sh: 0, ch: 900, st: 0 }; try { if (raw) m = JSON.parse(raw); } catch (_) {}
-    if (!S.tabId || (m.sh === 0 && step > 1)) { stopReason = "tab_removed"; break; }
-    const st = Math.round(m.st);
-    if (Math.abs(st - lastSt) > 60) { scrolledAtAll = true; noProgress = 0; lastSt = st; } else { noProgress++; }
-    log("INFO", "SCROLL", "step=" + step + " st=" + st + " noProg=" + noProgress);
-    broadcast("EXTENSION_LIVE_STATUS", { text: "DOM:" + S.buffer.dom.length + " Net:" + S.buffer.network.length + " | step " + step + "/" + MAX_STEPS });
-    await collectDOM();
-    const atBottom = m.sh > m.ch * 1.3 && (m.ch + st) >= m.sh - 600;
-    if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom)) {
-      const clicked = await cdpExec(CLICK_NEXT);
-      if (clicked) { noProgress = 0; await sleep(4500); continue; }
-      stopReason = atBottom ? "reached_bottom" : "no_scroll_progress"; break;
+  try {
+    await waitForPageReady(14000);
+    broadcast("EXTENSION_LIVE_STATUS", { text: "Scrolling: " + kw });
+    const initRaw = await cdpExec(FIND_SCROLL_EL);
+    let initM = null; try { if (initRaw) initM = JSON.parse(initRaw); } catch (_) {}
+    if (initM) log("INFO", "SCROLL", "Container sh=" + initM.sh + " ch=" + initM.ch);
+    if (initM && initM.sh < initM.ch * 1.2) { broadcast("EXTENSION_LIVE_STATUS", { text: "Skip: no content" }); return "empty_page"; }
+    while (step < MAX_STEPS && S.state === "SCRAPING" && S.tabId) {
+      step++;
+      await cdpExec(DO_SCROLL);
+      await sleep(2600 + Math.floor(Math.random() * 1200));
+      const raw = await cdpExec(FIND_SCROLL_EL);
+      let m = { sh: 0, ch: 900, st: 0 }; try { if (raw) m = JSON.parse(raw); } catch (_) {}
+      if (!S.tabId || (m.sh === 0 && step > 1)) { stopReason = "tab_removed"; break; }
+      const st = Math.round(m.st);
+      if (Math.abs(st - lastSt) > 60) { scrolledAtAll = true; noProgress = 0; lastSt = st; } else { noProgress++; }
+      log("INFO", "SCROLL", "step=" + step + " st=" + st + " noProg=" + noProgress + " net=" + S.buffer.network.length);
+      broadcast("EXTENSION_LIVE_STATUS", { text: "DOM:" + S.buffer.dom.length + " Net:" + S.buffer.network.length + " | step " + step + "/" + MAX_STEPS });
+      await collectDOM();
+      const atBottom = m.sh > m.ch * 1.3 && (m.ch + st) >= m.sh - 600;
+      if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom)) {
+        const clicked = await cdpExec(CLICK_NEXT);
+        if (clicked) { noProgress = 0; await sleep(4500); continue; }
+        stopReason = atBottom ? "reached_bottom" : "no_scroll_progress"; break;
+      }
     }
+    if (step >= MAX_STEPS) stopReason = "max_steps";
+    log("INFO", "SCROLL", "DONE steps=" + step + " scrolled=" + scrolledAtAll + " reason=" + stopReason);
+    broadcast("EXTENSION_LIVE_STATUS", { text: "Scroll done: " + stopReason });
+  } finally {
+    S.scrollRunning = false; // always release lock
   }
-  if (step >= MAX_STEPS) stopReason = "max_steps";
-  log("INFO", "SCROLL", "DONE steps=" + step + " scrolled=" + scrolledAtAll + " reason=" + stopReason);
-  broadcast("EXTENSION_LIVE_STATUS", { text: "Scroll done: " + stopReason });
   return stopReason;
 }
 
@@ -384,8 +414,24 @@ async function runKeyword() {
 
 async function finalizeKeyword() {
   setState("FLUSHING");
-  log("INFO", "RECONCILE", "Stabilization window 4000ms...");
-  await sleep(4000);
+  // Network idle detection: wait until no new network events for IDLE_MS, max MAX_WAIT_MS
+  const IDLE_MS = 1500, MAX_WAIT_MS = 8000;
+  const waitStart = Date.now();
+  S.lastNetworkActivity = S.lastNetworkActivity || 0;
+  log("INFO", "RECONCILE", "Waiting for network idle (idle=" + IDLE_MS + "ms max=" + MAX_WAIT_MS + "ms)...");
+  while (Date.now() - waitStart < MAX_WAIT_MS) {
+    await sleep(300);
+    const idleFor = Date.now() - S.lastNetworkActivity;
+    if (S.lastNetworkActivity > 0 && idleFor >= IDLE_MS) {
+      log("INFO", "RECONCILE", "Network idle for " + idleFor + "ms — proceeding");
+      break;
+    }
+    if (S.lastNetworkActivity === 0 && (Date.now() - waitStart) > 2000) {
+      log("WARN", "RECONCILE", "No network activity detected at all after 2s — proceeding with DOM-only");
+      break;
+    }
+  }
+  log("INFO", "RECONCILE", "Stabilization complete. dom=" + S.buffer.dom.length + " network=" + S.buffer.network.length);
   reconcile();
   await flushAll();
   log("INFO", "KW", "Complete", S.kwQueue.status());

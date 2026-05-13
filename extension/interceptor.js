@@ -1,6 +1,5 @@
-// interceptor.js — URSS Network Interceptor (data only, no merging)
-// Layer: Network Interceptor. Captures raw LinkedIn API responses.
-// Dispatches __nexora_net__ to content.js (ISOLATED world) which forwards to background.
+// interceptor.js — URSS Network Interceptor (MAIN world, document_start)
+// Captures LinkedIn API XHR/fetch responses and dispatches to content.js (ISOLATED world).
 (function () {
   if (window.__NexoraURSS_Interceptor) return;
   window.__NexoraURSS_Interceptor = true;
@@ -22,9 +21,13 @@
     if (!body || body.length < 200) return;
     const fc = body.trimStart()[0];
     if (fc !== '{' && fc !== '[') return;
+    console.log('[INT] captured', url.substring(0, 80), 'len=', body.length);
     try {
+      console.log('[INT] dispatching __nexora_net__');
       window.dispatchEvent(new CustomEvent('__nexora_net__', { detail: { url, body } }));
-    } catch (_) {}
+    } catch (e) {
+      console.warn('[INT] dispatch error:', e);
+    }
   }
 
   // XHR hook
@@ -38,7 +41,7 @@
     xhr.send = function () {
       if (isTarget(_url)) {
         xhr.addEventListener('load', function () {
-          try { dispatch(_url, xhr.responseText); } catch (_) {}
+          try { dispatch(_url, xhr.responseText); } catch (e) { console.warn('[INT] XHR dispatch err:', e); }
         });
       }
       return origSend.apply(xhr, arguments);
@@ -56,11 +59,11 @@
       const url = typeof resource === 'string' ? resource
         : (resource instanceof Request ? resource.url : '');
       if (isTarget(url)) {
-        resp.clone().text().then(body => dispatch(url, body)).catch(() => {});
+        resp.clone().text().then(body => dispatch(url, body)).catch(e => console.warn('[INT] fetch text err:', e));
       }
-    } catch (_) {}
+    } catch (e) { console.warn('[INT] fetch hook err:', e); }
     return resp;
   };
 
-  console.log('[Nexora] URSS Interceptor active');
+  console.log('[INT] URSS Interceptor v7.1 active (MAIN world) on', location.href);
 })();
