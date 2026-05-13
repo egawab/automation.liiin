@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Nexora – LinkedIn AI Assistant",
-  "version": "7.0",
-  "version_name": "URSS",
-  "description": "Unified Reconciliation Scraping System — production-grade LinkedIn content scraper.",
+  "version": "8.0",
+  "version_name": "Content-Script-Centric",
+  "description": "Stable, deterministic LinkedIn content scraper. No CDP. Single execution context.",
   "permissions": [
     "storage", "alarms", "tabs", "scripting",
-    "activeTab", "notifications", "cookies", "debugger"
+    "activeTab", "notifications", "cookies"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
