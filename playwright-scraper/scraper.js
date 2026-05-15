@@ -193,7 +193,7 @@ const DOM_FN = `() => {
     // Fallback: use textContent (works even when innerText returns empty)
     if (txt.length < 20) {
       try {
-        const raw = (el.textContent || '').replace(/[\r\n\t]+/g, ' ').replace(/ {2,}/g, ' ').trim();
+        const raw = (el.textContent || '').replace(/[\\r\\n\\t]+/g, ' ').replace(/  +/g, ' ').trim();
         if (raw.length > txt.length) txt = raw;
       } catch(_){}
     }
@@ -212,7 +212,7 @@ const DOM_FN = `() => {
       try {
         const el2 = el.querySelector(s);
         if (el2) {
-          const t = (el2.innerText || el2.textContent || '').trim().split('\n')[0].trim();
+          const t = (el2.innerText || el2.textContent || '').trim().split('\\n')[0].trim();
           if (t && t.length > 1 && !/^(Unknown|View|Follow)$/i.test(t)) return t.substring(0, 100);
         }
       } catch(_){}
@@ -221,11 +221,11 @@ const DOM_FN = `() => {
     const a = el.querySelector('a[href*="/in/"],a[href*="/company/"]');
     if (!a) return 'Unknown';
     const aria = (a.getAttribute('aria-label') || '')
-      .replace(/^[Vv]iew\s+(?:company:\s*)?/i, '')
-      .replace(/\s*[\u2019']s\s.*/i, '')
-      .replace(/\s*(profile|page|company)\s*$/i, '').trim();
+      .replace(/^[Vv]iew\\s+(?:company:\\s*)?/i, '')
+      .replace(/\\s*[\\u2019']s\\s.*/i, '')
+      .replace(/\\s*(profile|page|company)\\s*$/i, '').trim();
     if (aria && aria.length > 1 && !/^(Unknown|View)$/i.test(aria)) return aria.substring(0, 100);
-    const linkText = (a.innerText || a.textContent || '').trim().split('\n')[0] || 'Unknown';
+    const linkText = (a.innerText || a.textContent || '').trim().split('\\n')[0] || 'Unknown';
     return linkText.substring(0, 100);
   }
   function walkCard(anchorEl, urn, href) {
