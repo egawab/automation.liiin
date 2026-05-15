@@ -99,13 +99,25 @@ function ingestBody(body, postsMap) {
         obj.text ||
         obj.description?.text ||
         obj.description ||
-        obj.summary ||
+        // Search result formats:
+        (typeof obj.summary === 'string' ? obj.summary : (obj.summary?.text || '')) ||
         obj.snippet?.text ||
         obj.snippet ||
+        obj.headline?.text ||
+        obj.insight?.text ||
+        obj.insightText?.text ||
         ''
       ).substring(0, 5000);
 
-      let authorObj = obj.actor?.name?.text || obj.actor?.nameV2?.text || obj.actor?.fullName;
+      let authorObj =
+        obj.actor?.name?.text ||
+        obj.actor?.nameV2?.text ||
+        obj.actor?.fullName ||
+        // Search result formats:
+        obj.title?.text ||          // search results put author name in title.text
+        obj.actorName ||
+        obj.primarySubtitle?.text || // sometimes the name is in the subtitle
+        null;
       if (!authorObj && obj.author && (obj.author.firstName || obj.author.lastName)) {
         authorObj = [obj.author.firstName, obj.author.lastName].filter(Boolean).join(' ');
       }
@@ -252,9 +264,18 @@ const DOM_FN = `() => {
     ['data-urn','data-activity-urn','data-chameleon-result-urn','data-entity-urn'].forEach(attr=>{
       document.querySelectorAll('['+attr+']').forEach(el=>{
         const urn=xUrn(el.getAttribute(attr)||''); if(!urn||seen[urn]) return;
+        // Walk UP the tree to find a real card with visible text (same as walkCard)
+        // Needed because LinkedIn often puts data-urn on an invisible wrapper div
+        let c = el;
+        for (let i = 0; i < 15; i++) {
+          if (!c.parentElement || c.parentElement === document.body) break;
+          c = c.parentElement;
+          const l = (c.innerText||'').trim().length;
+          if (l > 50 && l < 20000) break;  // found the real card
+        }
         seen[urn]=1;
-        const eng=getEng(el);
-        records.push({urn, url:'', text:getText(el).substring(0,3000), author:getAuthor(el), likes:eng.likes, comments:eng.comments});
+        const eng=getEng(c);
+        records.push({urn, url:'', text:getText(c).substring(0,3000), author:getAuthor(c), likes:eng.likes, comments:eng.comments});
       });
     });
     
