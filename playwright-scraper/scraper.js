@@ -458,16 +458,23 @@ async function ensureLoggedIn(page) {
 }
 
 
-// ── Scrape one keyword ────────────────────────────────────────────────────────
+// ── Scrape one keyword (3 URL variants to maximise yield per keyword) ──────────
 async function scrapeKeyword(page, keyword, postsMap) {
-  const searchUrl = 'https://www.linkedin.com/search/results/content/?keywords='
-    + encodeURIComponent(keyword) + '&origin=GLOBAL_SEARCH_HEADER';
+  // LinkedIn returns DIFFERENT result sets for different sort/date params.
+  // Running all three variants and merging into one shared postsMap can
+  // 2-3x the unique posts collected, especially for accounts with fewer results.
+  const base = 'https://www.linkedin.com/search/results/content/?keywords='
+             + encodeURIComponent(keyword);
+  const urlVariants = [
+    { url: base + '&origin=GLOBAL_SEARCH_HEADER',                       label: 'relevance' },
+    { url: base + '&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted',    label: 'recent'    },
+    { url: base + '&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month', label: 'month'     },
+  ];
 
   log('');
   log('── Keyword: "' + keyword + '" ──────────────────────────────');
-  log('Navigating...');
 
-  // Attach network listener BEFORE navigation so we catch all responses
+  // Single network listener shared across all variants
   const onResponse = async (response) => {
     const rUrl = response.url();
     if (!rUrl.includes('linkedin.com')) return;
@@ -484,107 +491,97 @@ async function scrapeKeyword(page, keyword, postsMap) {
   page.on('response', onResponse);
 
   try {
-    await safeGoto(page, searchUrl);
+    for (const { url: searchUrl, label } of urlVariants) {
+      const beforeCount = Object.keys(postsMap).length;
+      log('Variant [' + label + '] navigating...');
+      await safeGoto(page, searchUrl);
 
-    // Wait for feed content to appear
-    let waited = 0;
-    while (waited < 15000) {
-      const scrollH = await page.evaluate(() => document.documentElement.scrollHeight);
-      const clientH = await page.evaluate(() => document.documentElement.clientHeight);
-      if (scrollH > clientH * 1.5) break;
-      await page.waitForTimeout(500);
-      waited += 500;
-    }
-
-    // ── Scroll loop ──────────────────────────────────────────────────────────
-    // Tracks TWO stagnation signals independently:
-    //   scrollStall — scroll position hasn't changed (page hit lazy-load ceiling)
-    //   postStall   — post count hasn't grown (DOM yielding no new URNs)
-    // Either hitting MAX_STALL triggers an immediate Next-button attempt.
-    // This fixes the bug where scrollTop kept growing but posts never increased,
-    // causing the old single-signal tracker to never trigger pagination.
-    const MAX_STEPS = 80;
-    const MIN_STEPS = 10;  // try Next as early as step 10 if already stalled
-    const MAX_STALL = 8;   // 8 steps with no new posts → try Next button
-    let step = 0, scrollStall = 0, postStall = 0, lastTop = -1, lastCount = -1;
-
-    while (step < MAX_STEPS) {
-      step++;
-
-      // Scroll using all three strategies to handle any LinkedIn layout variant
-      const scrollTop = await page.evaluate(() => {
-        const amount = Math.floor(window.innerHeight * 0.80);
-        window.scrollBy({ top: amount, behavior: 'instant' });
-        const el = document.querySelector('.scaffold-layout__main')
-                || document.querySelector('main')
-                || document.querySelector('.scaffold-layout-container__main');
-        if (el && el.scrollHeight > el.clientHeight + 100) el.scrollTop += amount;
-        document.body.scrollTop += amount;
-        return Math.max(
-          Math.round(window.scrollY || window.pageYOffset || 0),
-          Math.round(document.documentElement.scrollTop || 0),
-          Math.round(document.body.scrollTop || 0),
-          el ? Math.round(el.scrollTop) : 0
-        );
-      });
-
-      await page.waitForTimeout(3000 + Math.floor(Math.random() * 1500));
-
-      // DOM extraction every step
-      const domRecs = await page.evaluate('(' + DOM_FN + ')()');
-      const safeDomRecs = Array.isArray(domRecs) ? domRecs : [];
-      for (const r of safeDomRecs) mergeDOM(r, postsMap);
-
-      const total = Object.keys(postsMap).length;
-      log('Step ' + step + ' | scroll=' + scrollTop + ' | posts=' + total + ' | scrollStall=' + scrollStall + ' postStall=' + postStall);
-
-      // Update stagnation counters
-      if (Math.abs(scrollTop - lastTop) < 60) scrollStall++; else { scrollStall = 0; lastTop = scrollTop; }
-      if (total === lastCount) postStall++;                   else { postStall   = 0; lastCount = total;   }
-
-      // Bottom detection
-      const atBottom = await page.evaluate(() => {
-        const el = document.querySelector('.scaffold-layout__main') || document.querySelector('main');
-        if (el && el.scrollHeight > el.clientHeight + 100) {
-          return (el.scrollTop + el.clientHeight) >= el.scrollHeight - 800;
-        }
-        const scrollY = window.scrollY || window.pageYOffset || 0;
-        const totalH  = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-        return (scrollY + window.innerHeight) >= totalH - 800;
-      });
-
-      // Trigger Next button when posts OR scroll stall, or we're at the bottom
-      const shouldTryNext = step >= MIN_STEPS && (postStall >= MAX_STALL || scrollStall >= MAX_STALL || atBottom);
-      if (shouldTryNext) {
-        const reason = atBottom ? 'atBottom' : (postStall >= MAX_STALL ? 'postStall=' + postStall : 'scrollStall=' + scrollStall);
-        const clicked = await page.evaluate(() => {
-          const btn = document.querySelector('.artdeco-pagination__button--next')
-                   || document.querySelector('button[aria-label="Next"]')
-                   || document.querySelector('button[aria-label="Go to next page"]')
-                   || Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim().toLowerCase() === 'next');
-          if (btn && !btn.disabled) { btn.click(); return true; }
-          return false;
-        });
-        if (clicked) {
-          log('Clicked Next page (' + reason + ') — continuing...');
-          scrollStall = 0; postStall = 0;
-          await page.waitForTimeout(5000);
-          continue;
-        }
-        log('Scroll done (' + reason + ', no Next button available)');
-        break;
+      // Wait for feed to render
+      let waited = 0;
+      while (waited < 12000) {
+        const scrollH = await page.evaluate(() => document.documentElement.scrollHeight);
+        const clientH = await page.evaluate(() => document.documentElement.clientHeight);
+        if (scrollH > clientH * 1.5) break;
+        await page.waitForTimeout(500);
+        waited += 500;
       }
+
+      // Scroll loop — dual stagnation tracking
+      const MAX_STEPS = 50;
+      const MIN_STEPS = 8;
+      const MAX_STALL = 7;
+      let step = 0, scrollStall = 0, postStall = 0, lastTop = -1, lastCount = Object.keys(postsMap).length;
+
+      while (step < MAX_STEPS) {
+        step++;
+        const scrollTop = await page.evaluate(() => {
+          const amount = Math.floor(window.innerHeight * 0.80);
+          window.scrollBy({ top: amount, behavior: 'instant' });
+          const el = document.querySelector('.scaffold-layout__main')
+                  || document.querySelector('main')
+                  || document.querySelector('.scaffold-layout-container__main');
+          if (el && el.scrollHeight > el.clientHeight + 100) el.scrollTop += amount;
+          document.body.scrollTop += amount;
+          return Math.max(
+            Math.round(window.scrollY || window.pageYOffset || 0),
+            Math.round(document.documentElement.scrollTop || 0),
+            Math.round(document.body.scrollTop || 0),
+            el ? Math.round(el.scrollTop) : 0
+          );
+        });
+
+        await page.waitForTimeout(2500 + Math.floor(Math.random() * 1500));
+
+        const domRecs = await page.evaluate('(' + DOM_FN + ')()');
+        for (const r of (Array.isArray(domRecs) ? domRecs : [])) mergeDOM(r, postsMap);
+
+        const total = Object.keys(postsMap).length;
+        log('[' + label + '] Step ' + step + ' | scroll=' + scrollTop + ' | posts=' + total + ' | sStall=' + scrollStall + ' pStall=' + postStall);
+
+        if (Math.abs(scrollTop - lastTop) < 60) scrollStall++; else { scrollStall = 0; lastTop = scrollTop; }
+        if (total === lastCount) postStall++;                   else { postStall   = 0; lastCount = total;   }
+
+        const atBottom = await page.evaluate(() => {
+          const el = document.querySelector('.scaffold-layout__main') || document.querySelector('main');
+          if (el && el.scrollHeight > el.clientHeight + 100) return (el.scrollTop + el.clientHeight) >= el.scrollHeight - 800;
+          const scrollY = window.scrollY || window.pageYOffset || 0;
+          return (scrollY + window.innerHeight) >= Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) - 800;
+        });
+
+        const stalled = step >= MIN_STEPS && (postStall >= MAX_STALL || scrollStall >= MAX_STALL || atBottom);
+        if (stalled) {
+          const reason = atBottom ? 'atBottom' : (postStall >= MAX_STALL ? 'pStall' : 'sStall');
+          const clicked = await page.evaluate(() => {
+            const btn = document.querySelector('.artdeco-pagination__button--next')
+                     || document.querySelector('button[aria-label="Next"]')
+                     || document.querySelector('button[aria-label="Go to next page"]')
+                     || Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim().toLowerCase() === 'next');
+            if (btn && !btn.disabled) { btn.click(); return true; }
+            return false;
+          });
+          if (clicked) {
+            log('[' + label + '] Next page (' + reason + ')');
+            scrollStall = 0; postStall = 0;
+            await page.waitForTimeout(5000);
+            continue;
+          }
+          log('[' + label + '] done (' + reason + ', no Next btn)');
+          break;
+        }
+      }
+
+      // Final DOM pass for this variant
+      await page.waitForTimeout(2000);
+      const finalRecs = await page.evaluate('(' + DOM_FN + ')()');
+      for (const r of (Array.isArray(finalRecs) ? finalRecs : [])) mergeDOM(r, postsMap);
+
+      const afterCount = Object.keys(postsMap).length;
+      log('[' + label + '] +' + (afterCount - beforeCount) + ' new (total=' + afterCount + ')');
+
+      // Skip remaining variants if we already have a strong yield
+      if (afterCount >= 25) { log('Good yield — skipping remaining variants.'); break; }
+      await page.waitForTimeout(2000);
     }
-
-    // Wait for late network responses (engagement counts arrive last)
-    log('Waiting for network to settle...');
-    await page.waitForTimeout(4000);
-
-    // Final DOM pass
-    const finalRecs = await page.evaluate('(' + DOM_FN + ')()');
-    const safeFinalRecs = Array.isArray(finalRecs) ? finalRecs : [];
-    for (const r of safeFinalRecs) mergeDOM(r, postsMap);
-
   } finally {
     page.off('response', onResponse);
   }
