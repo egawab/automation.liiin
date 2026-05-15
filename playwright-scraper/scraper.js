@@ -471,7 +471,7 @@ async function scrapeKeyword(page, keyword, postsMap) {
   const onResponse = async (response) => {
     const rUrl = response.url();
     if (!rUrl.includes('linkedin.com')) return;
-    if (/(\.js|\.css|\.png|\.jpg|\.gif|\.woff|\.svg)(\?|$)/i.test(rUrl)) return;
+    if (/(\\.js|\\.css|\\.png|\\.jpg|\\.gif|\\.woff|\\.svg)(\?|$)/i.test(rUrl)) return;
     if (!rUrl.includes('voyager/api') && !rUrl.includes('/feed/') && !rUrl.includes('/search/') && !rUrl.includes('/updates') && !rUrl.includes('contentrecipe')) return;
     try {
       const body = await response.text();
@@ -496,35 +496,30 @@ async function scrapeKeyword(page, keyword, postsMap) {
       waited += 500;
     }
 
-    // ── Scroll loop ────────────────────────────────────────────────────────
-    // Deliberately slower: more time per step = more network events captured,
-    // more DOM rendered, more complete dataset before finishing.
-    const MAX_STEPS  = 80;   // allow up to 80 scroll steps
-    const MIN_STEPS  = 15;   // never stop before 15 steps regardless of bottom
-    const NO_PROG_MAX = 12;  // require 12 consecutive no-progress steps before giving up
-    let step = 0, noProgress = 0, lastTop = -1;
+    // ── Scroll loop ──────────────────────────────────────────────────────────
+    // Tracks TWO stagnation signals independently:
+    //   scrollStall — scroll position hasn't changed (page hit lazy-load ceiling)
+    //   postStall   — post count hasn't grown (DOM yielding no new URNs)
+    // Either hitting MAX_STALL triggers an immediate Next-button attempt.
+    // This fixes the bug where scrollTop kept growing but posts never increased,
+    // causing the old single-signal tracker to never trigger pagination.
+    const MAX_STEPS = 80;
+    const MIN_STEPS = 10;  // try Next as early as step 10 if already stalled
+    const MAX_STALL = 8;   // 8 steps with no new posts → try Next button
+    let step = 0, scrollStall = 0, postStall = 0, lastTop = -1, lastCount = -1;
 
     while (step < MAX_STEPS) {
       step++;
 
-      // Scroll ~80% of viewport using multiple strategies.
-      // window.scrollBy always works regardless of which element LinkedIn
-      // chose as the scroll container (varies between account cohorts).
+      // Scroll using all three strategies to handle any LinkedIn layout variant
       const scrollTop = await page.evaluate(() => {
         const amount = Math.floor(window.innerHeight * 0.80);
-        // Strategy 1: scroll the window itself
         window.scrollBy({ top: amount, behavior: 'instant' });
-        // Strategy 2: also scroll the main content element if it exists
         const el = document.querySelector('.scaffold-layout__main')
                 || document.querySelector('main')
                 || document.querySelector('.scaffold-layout-container__main');
-        if (el && el.scrollHeight > el.clientHeight + 100) {
-          el.scrollTop += amount;
-        }
-        // Strategy 3: scroll body
+        if (el && el.scrollHeight > el.clientHeight + 100) el.scrollTop += amount;
         document.body.scrollTop += amount;
-        
-        // Measure maximum scroll from all possible containers to ensure we track progress
         return Math.max(
           Math.round(window.scrollY || window.pageYOffset || 0),
           Math.round(document.documentElement.scrollTop || 0),
@@ -533,8 +528,7 @@ async function scrapeKeyword(page, keyword, postsMap) {
         );
       });
 
-      // Slower wait: 3.5–5.5s per step gives LinkedIn time to load lazy content
-      await page.waitForTimeout(3500 + Math.floor(Math.random() * 2000));
+      await page.waitForTimeout(3000 + Math.floor(Math.random() * 1500));
 
       // DOM extraction every step
       const domRecs = await page.evaluate('(' + DOM_FN + ')()');
@@ -542,28 +536,27 @@ async function scrapeKeyword(page, keyword, postsMap) {
       for (const r of safeDomRecs) mergeDOM(r, postsMap);
 
       const total = Object.keys(postsMap).length;
-      log('Step ' + step + ' | scroll=' + scrollTop + ' | posts=' + total + ' | noProgress=' + noProgress);
+      log('Step ' + step + ' | scroll=' + scrollTop + ' | posts=' + total + ' | scrollStall=' + scrollStall + ' postStall=' + postStall);
 
-      // Progress tracking
-      if (Math.abs(scrollTop - lastTop) < 60) noProgress++;
-      else { noProgress = 0; lastTop = scrollTop; }
+      // Update stagnation counters
+      if (Math.abs(scrollTop - lastTop) < 60) scrollStall++; else { scrollStall = 0; lastTop = scrollTop; }
+      if (total === lastCount) postStall++;                   else { postStall   = 0; lastCount = total;   }
 
-      // Bottom detection — window-level, works on all layout variants
+      // Bottom detection
       const atBottom = await page.evaluate(() => {
         const el = document.querySelector('.scaffold-layout__main') || document.querySelector('main');
         if (el && el.scrollHeight > el.clientHeight + 100) {
           return (el.scrollTop + el.clientHeight) >= el.scrollHeight - 800;
         }
-        const scrollY     = window.scrollY || window.pageYOffset || 0;
-        const totalHeight = Math.max(
-          document.body.scrollHeight,
-          document.documentElement.scrollHeight
-        );
-        return (scrollY + window.innerHeight) >= totalHeight - 800;
+        const scrollY = window.scrollY || window.pageYOffset || 0;
+        const totalH  = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+        return (scrollY + window.innerHeight) >= totalH - 800;
       });
 
-      if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom)) {
-        // Try pagination Next button before stopping
+      // Trigger Next button when posts OR scroll stall, or we're at the bottom
+      const shouldTryNext = step >= MIN_STEPS && (postStall >= MAX_STALL || scrollStall >= MAX_STALL || atBottom);
+      if (shouldTryNext) {
+        const reason = atBottom ? 'atBottom' : (postStall >= MAX_STALL ? 'postStall=' + postStall : 'scrollStall=' + scrollStall);
         const clicked = await page.evaluate(() => {
           const btn = document.querySelector('.artdeco-pagination__button--next')
                    || document.querySelector('button[aria-label="Next"]')
@@ -573,17 +566,17 @@ async function scrapeKeyword(page, keyword, postsMap) {
           return false;
         });
         if (clicked) {
-          log('Clicked Next page — continuing scroll...');
-          noProgress = 0;
-          await page.waitForTimeout(6000); // longer wait after page turn
+          log('Clicked Next page (' + reason + ') — continuing...');
+          scrollStall = 0; postStall = 0;
+          await page.waitForTimeout(5000);
           continue;
         }
-        log('Scroll done: ' + (atBottom ? 'reached bottom' : 'no scroll progress after ' + NO_PROG_MAX + ' steps'));
+        log('Scroll done (' + reason + ', no Next button available)');
         break;
       }
     }
 
-    // Wait longer for late network responses (engagement counts arrive last)
+    // Wait for late network responses (engagement counts arrive last)
     log('Waiting for network to settle...');
     await page.waitForTimeout(4000);
 
@@ -600,6 +593,8 @@ async function scrapeKeyword(page, keyword, postsMap) {
   log('Keyword "' + keyword + '" complete: ' + count + ' posts collected');
   return count;
 }
+
+
 
 // ── Windows toast notification ────────────────────────────────────────────────
 function showNotification(title, msg) {
