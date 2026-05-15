@@ -640,10 +640,12 @@ function showNotification(title, msg) {
   console.log('');
 
   const config = loadConfig();
-  const { dashboardUrl, userId, headless = false, chromeProfile = 'Default' } = config;
+  const { dashboardUrl, headless = false, chromeProfile = 'Default' } = config;
+  // userId is resolved dynamically from the active LinkedIn session (no hardcoding)
+  let userId = config.userId || null;  // optional fallback only
 
-  if (!dashboardUrl || !userId) {
-    console.error('[ERROR] Incomplete config. Please run install.bat again.');
+  if (!dashboardUrl) {
+    console.error('[ERROR] dashboardUrl missing in config.json. Please run install.bat again.');
     process.exit(1);
   }
 
@@ -788,6 +790,43 @@ function showNotification(title, msg) {
 
     // Check login
     await ensureLoggedIn(page);
+
+    // ── Dynamic user resolution ──────────────────────────────────────────────
+    // Read the li_at cookie from the live LinkedIn session, then ask the
+    // dashboard which userId owns that session. This means no hardcoded
+    // userId — the scraper always routes to whoever is currently logged in.
+    log('');
+    log('Identifying account from LinkedIn session...');
+    try {
+      const cookies = await page.context().cookies('https://www.linkedin.com');
+      const liAt = (cookies.find(c => c.name === 'li_at') || {}).value;
+      if (liAt) {
+        const whoResp = await apiFetch(dashboardUrl + '/api/extension/who-am-i', {
+          headers: { 'x-linkedin-cookie': liAt },
+        });
+        if (whoResp.ok) {
+          const who = whoResp.json();
+          if (who.found && who.userId) {
+            userId = who.userId;
+            log('Session identified ✓  (userId resolved from active LinkedIn session)');
+          } else {
+            log('[WARN] ' + (who.error || 'Session not linked to any dashboard account.'));
+            log('[WARN] Go to Dashboard → Settings → save your LinkedIn session cookie.');
+          }
+        } else {
+          log('[WARN] who-am-i returned ' + whoResp.status);
+        }
+      } else {
+        log('[WARN] li_at cookie not found — is LinkedIn properly logged in?');
+      }
+    } catch (e) {
+      log('[WARN] Could not resolve identity: ' + e.message);
+    }
+
+    if (!userId) {
+      throw new Error('Could not determine userId. Link your LinkedIn session in Dashboard → Settings, or add userId to config.json as a fallback.');
+    }
+    log('Active userId: ' + userId);
 
     // Fetch keywords
     log('');
