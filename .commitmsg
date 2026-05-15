@@ -1,0 +1,17 @@
+fix: stale async chain + steps=0 via runId session cancellation
+
+Root cause: stopSession() does not cancel in-flight runKeyword() calls.
+When a second START arrives during ATTACHING, stopSession() runs but
+the first runKeyword() continues executing asynchronously, calling
+setState("SCRAPING") concurrently with the new session's setState("ATTACHING").
+This caused FSM collision: SCRAPING->ATTACHING, and cdpScrollEngine's
+while(S.state==="SCRAPING") exited immediately -> steps=0.
+
+Fix: added S.runId counter (integer, incremented on each session start
+and on stopSession). All async chains capture runId at entry and abort
+if S.runId changes before they reach a key checkpoint:
+- runKeyword(sid): aborts if S.runId !== sid before SCRAPING
+- cdpScrollEngine(kw, sid): while loop condition includes S.runId===sid
+- finalizeKeyword(sid): skips reconcile if S.runId !== sid
+- runKeyword recursive call: checks S.runId===sid before next keyword
+- stopSession: S.runId++ + S.scrollRunning=false to release all locks

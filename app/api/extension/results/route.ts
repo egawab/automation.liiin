@@ -108,14 +108,24 @@ export async function POST(req: Request) {
         } catch (createErr: any) {
           if (createErr?.code === 'P2002') {
             outcome.status = 'updated';
+            // Fetch the current postAuthor so we can decide whether to overwrite
+            const existing = await prisma.savedPost.findFirst({
+              where: { userId, canonicalUrn: urn },
+              select: { postAuthor: true },
+            });
+            const currentAuthor = existing?.postAuthor ?? '';
+            const authorIsGarbage = !currentAuthor || currentAuthor === 'undefined undefined';
             await prisma.savedPost.updateMany({
               where: { userId, canonicalUrn: urn },
               data: {
-                ...(safeUrl.length > 0           && { postUrl: safeUrl }),
+                ...(safeUrl.length > 0            && { postUrl: safeUrl }),
                 ...(postLikes    != null && postLikes    > BigInt(0) && { likes: postLikes    }),
                 ...(postComments != null && postComments > BigInt(0) && { comments: postComments }),
-                ...(safePreview.length > 20       && { postPreview: safePreview }),
-                ...(safeAuthor && safeAuthor !== 'Unknown' && { postAuthor: safeAuthor }),
+                ...(safePreview.length > 20        && { postPreview: safePreview }),
+                // Update author if: new value is valid, OR old value is garbage
+                ...((safeAuthor && safeAuthor !== 'Unknown') || authorIsGarbage
+                  ? { postAuthor: safeAuthor || 'Unknown' }
+                  : {}),
                 savedAt: new Date(),
               },
             });

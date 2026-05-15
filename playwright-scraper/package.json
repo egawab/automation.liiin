@@ -1,0 +1,13 @@
+{
+  "name": "nexora-playwright-scraper",
+  "version": "1.0.0",
+  "description": "Nexora LinkedIn Scraper — Playwright Edition",
+  "main": "scraper.js",
+  "scripts": {
+    "start": "node scraper.js",
+    "setup": "node setup.js"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}
