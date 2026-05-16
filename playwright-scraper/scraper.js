@@ -241,17 +241,18 @@ const DOM_FN = `() => {
     return linkText.substring(0, 100);
   }
   function walkCard(anchorEl, urn, href) {
-    let c=anchorEl;
-    for(let i=0;i<30;i++){
-      c=c.parentElement; if(!c||c===document.body) break;
-      const l=(c.innerText||'').trim().length;
-      if(l>20&&l<20000){
-        seen[urn]=1;
-        const eng=getEng(c);
-        records.push({urn, url:href, text:getText(c).substring(0,3000), author:getAuthor(c), likes:eng.likes, comments:eng.comments});
-        break;
-      }
+    let c = anchorEl, best = null;
+    for(let i = 0; i < 30; i++){
+      c = c.parentElement; if(!c || c === document.body) break;
+      const l = Math.max((c.innerText||'').trim().length, (c.textContent||'').trim().length);
+      if(l >= 20000) break;  // overshot into page shell
+      if(l > 300) { best = c; break; }  // real card with content
+      if(l > 50 && !best) best = c;     // fallback if nothing bigger found
     }
+    if(!best) return;
+    seen[urn]=1;
+    const eng=getEng(best);
+    records.push({urn, url:href, text:getText(best).substring(0,3000), author:getAuthor(best), likes:eng.likes, comments:eng.comments});
   }
   try {
     document.querySelectorAll('a[href]').forEach(a=>{
