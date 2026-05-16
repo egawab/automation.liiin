@@ -118,6 +118,7 @@ export async function POST(req: Request) {
             await prisma.savedPost.updateMany({
               where: { userId, canonicalUrn: urn },
               data: {
+                keyword:      safeKeyword,
                 ...(safeUrl.length > 0            && { postUrl: safeUrl }),
                 ...(postLikes    != null && postLikes    > BigInt(0) && { likes: postLikes    }),
                 ...(postComments != null && postComments > BigInt(0) && { comments: postComments }),
