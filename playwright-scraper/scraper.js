@@ -198,7 +198,17 @@ const DOM_FN = `() => {
     for (const s of selectors) {
       try {
         el.querySelectorAll(s).forEach(d => {
-          const t = (d.innerText || '').trim();
+          const t = (d.innerText || d.textContent || '').trim();
+          if (t.length > txt.length) txt = t;
+        });
+      } catch(_){}
+    }
+    // Fallback for search result components
+    if (txt.length < 20) {
+      try {
+        el.querySelectorAll('div[dir="ltr"], span[dir="ltr"]').forEach(d => {
+          if (d.closest('button') || d.classList.contains('artdeco-button__text')) return;
+          const t = (d.innerText || d.textContent || '').trim();
           if (t.length > txt.length) txt = t;
         });
       } catch(_){}
@@ -222,7 +232,7 @@ const DOM_FN = `() => {
       try {
         const el2 = el.querySelector(s);
         if (el2) {
-          const t = (el2.innerText || '').trim().split('\\n')[0].trim();
+          const t = (el2.innerText || el2.textContent || '').trim().split('\\n')[0].trim();
           if (t && t.length > 1 && !/^(Unknown|View|Follow)$/i.test(t)) return t.substring(0, 100);
         }
       } catch(_){}
