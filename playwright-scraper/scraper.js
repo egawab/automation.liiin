@@ -330,6 +330,109 @@ const DOM_FN = `() => {
   return records;
 }`;
 
+// ── Real DOM extractor function (used via page.evaluate(domExtractor)) ──────────
+// No string escaping issues — Playwright serializes this function directly.
+function domExtractor() {
+  const records = [], seen = {};
+  function pe(s) {
+    if (!s) return 0;
+    const x = String(s).toUpperCase().replace(/,/g, '');
+    const n = parseFloat((x.match(/[0-9.]+/) || [])[0]);
+    if (isNaN(n)) return 0;
+    if (x.includes('K')) return Math.floor(n * 1000);
+    if (x.includes('M')) return Math.floor(n * 1000000);
+    return Math.floor(n);
+  }
+  function xUrn(s) {
+    const m = String(s || '').match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+    if (m) return 'urn:li:' + m[1] + ':' + m[2];
+    const p = String(s || '').match(/activity-([0-9]{10,25})/i);
+    if (p) return 'urn:li:activity:' + p[1];
+    return '';
+  }
+  function getEng(el) {
+    let lk = 0, cm = 0;
+    try {
+      el.querySelectorAll('[aria-label]').forEach(x => {
+        const a = x.getAttribute('aria-label') || '';
+        if (/[0-9]/.test(a) && /(reaction|like|reacted|vote)/i.test(a)) lk = Math.max(lk, pe(a));
+        if (/[0-9]/.test(a) && /comment/i.test(a)) cm = Math.max(cm, pe(a));
+      });
+      el.querySelectorAll('span,button').forEach(x => {
+        if (x.children.length > 3) return;
+        const n = (x.innerText || '').trim();
+        const r = n.match(/([0-9][0-9,.]*[KkMm]?)\s*(reaction|like|reacted|vote)/i); if (r) lk = Math.max(lk, pe(r[1]));
+        const c = n.match(/([0-9][0-9,.]*[KkMm]?)\s*comment/i); if (c) cm = Math.max(cm, pe(c[1]));
+      });
+    } catch (_) {}
+    return { likes: lk, comments: cm };
+  }
+  const NOISE_RE = /^(like|comment|repost|send|share|follow|connect|view|see more|show more|load more|just now|ago|\d+[smhdw]|\d+\s*(reaction|comment|repost|vote)|[•.]{1,3})$/i;
+  function getText(el) {
+    // 1. CSS selectors (feed + search)
+    const CSS = ['.feed-shared-update-v2__commentary', '.update-components-text__text-view', '.update-components-text', '.feed-shared-inline-show-more-text', '.feed-shared-text', '.entity-result__summary'];
+    let txt = '';
+    for (const s of CSS) {
+      try { el.querySelectorAll(s).forEach(d => { const t = (d.innerText || d.textContent || '').trim(); if (t.length > txt.length) txt = t; }); if (txt.length > 30) break; } catch (_) {}
+    }
+    if (txt.length > 30) return txt.replace(/\s*\d[\d,.]*[KkMm]?\s*(reactions?|likes?|comments?|reposts?|votes?).*$/i, '').trim().substring(0, 3000);
+    // 2. TreeWalker — most reliable, works regardless of CSS class names
+    try {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+      const parts = [];
+      let node;
+      while ((node = walker.nextNode())) {
+        const p = node.parentElement;
+        if (!p) continue;
+        const tag = (p.tagName || '').toLowerCase();
+        if (['script', 'style', 'noscript', 'svg'].includes(tag)) continue;
+        try { const cs = window.getComputedStyle(p); if (cs.display === 'none' || cs.visibility === 'hidden') continue; } catch (_) {}
+        const t = (node.nodeValue || '').trim();
+        if (t.length > 2 && !NOISE_RE.test(t)) parts.push(t);
+      }
+      let best = '', cur = '';
+      for (const t of parts) {
+        if (t.length > 10) { cur += (cur ? ' ' : '') + t; if (cur.length > best.length) best = cur; } else { cur = ''; }
+      }
+      txt = best.length > 20 ? best : parts.join(' ');
+    } catch (_) {}
+    return txt.replace(/\s*\d[\d,.]*[KkMm]?\s*(reactions?|likes?|comments?|reposts?|votes?).*$/i, '').trim().substring(0, 3000);
+  }
+  function getAuthor(el) {
+    const SS = ['.update-components-actor__name span[aria-hidden="true"]', '.update-components-actor__name', '.entity-result__title-text a span[aria-hidden="true"]', '.entity-result__title-text a', '.app-aware-link .visually-hidden', '.update-components-actor__title', '.feed-shared-actor__name'];
+    for (const s of SS) {
+      try { const el2 = el.querySelector(s); if (el2) { const t = (el2.innerText || el2.textContent || '').trim().split('\n')[0].trim(); if (t && t.length > 1 && !/^(Unknown|View|Follow)$/i.test(t)) return t.substring(0, 100); } } catch (_) {}
+    }
+    const a = el.querySelector('a[href*="/in/"],a[href*="/company/"]');
+    if (!a) return 'Unknown';
+    const aria = (a.getAttribute('aria-label') || '').replace(/^[Vv]iew\s+(?:company:\s*)?/i, '').replace(/\s*[\u2019']s\s.*/i, '').replace(/\s*(profile|page|company)\s*$/i, '').trim();
+    if (aria && aria.length > 1 && !/^(Unknown|View)$/i.test(aria)) return aria.substring(0, 100);
+    return ((a.innerText || '').trim().split('\n')[0] || 'Unknown').substring(0, 100);
+  }
+  function findCard(el) {
+    let c = el;
+    for (let i = 0; i < 30; i++) {
+      c = c.parentElement; if (!c || c === document.body) return null;
+      const cls = typeof c.className === 'string' ? c.className : (c.className && c.className.baseVal) || '';
+      if (c.hasAttribute('data-urn') || /feed-shared-update-v2|reusable-search__result-container|occludable-update|search-entity/.test(cls)) return c;
+      if ((c.innerText || '').trim().length >= 20000) return null;
+    }
+    return null;
+  }
+  function add(el, urn, href) {
+    if (seen[urn]) return; seen[urn] = 1;
+    const eng = getEng(el);
+    records.push({ urn, url: href || '', text: getText(el), author: getAuthor(el), likes: eng.likes, comments: eng.comments });
+  }
+  // Pass 1: post permalink anchors
+  try { document.querySelectorAll('a[href]').forEach(a => { const href = a.href || ''; if (!href.includes('feed/update/urn:li:') && !href.includes('/posts/')) return; const urn = xUrn(href); if (!urn || seen[urn]) return; const card = findCard(a); if (card) add(card, urn, href); }); } catch (_) {}
+  // Pass 2: data-urn attributes
+  try { ['data-urn','data-activity-urn','data-chameleon-result-urn','data-entity-urn'].forEach(attr => { document.querySelectorAll('[' + attr + ']').forEach(el => { const urn = xUrn(el.getAttribute(attr) || ''); if (!urn || seen[urn]) return; const card = findCard(el) || el; add(card, urn, ''); }); }); } catch (_) {}
+  // Pass 3: card container classes
+  try { document.querySelectorAll('.reusable-search__result-container,.feed-shared-update-v2,.occludable-update').forEach(el => { const m = el.innerHTML.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/); if (!m) return; const urn = 'urn:li:' + m[1] + ':' + m[2]; if (seen[urn]) return; add(el, urn, ''); }); } catch (_) {}
+  return records;
+}
+
 // ── Merge DOM record into postsMap ─────────────────────────────────────────────
 function mergeDOM(rec, postsMap) {
   if (!rec.urn) return;
@@ -587,7 +690,7 @@ async function scrapeKeyword(page, keyword, postsMap) {
 
         await page.waitForTimeout(2500 + Math.floor(Math.random() * 1500));
 
-        const domRecs = await page.evaluate('(' + DOM_FN + ')()');
+        const domRecs = await page.evaluate(domExtractor);
         for (const r of (Array.isArray(domRecs) ? domRecs : [])) mergeDOM(r, postsMap);
 
         const total = Object.keys(postsMap).length;
@@ -627,7 +730,7 @@ async function scrapeKeyword(page, keyword, postsMap) {
 
       // Final DOM pass for this variant
       await page.waitForTimeout(2000);
-      const finalRecs = await page.evaluate('(' + DOM_FN + ')()');
+      const finalRecs = await page.evaluate(domExtractor);
       for (const r of (Array.isArray(finalRecs) ? finalRecs : [])) mergeDOM(r, postsMap);
 
       const afterCount = Object.keys(postsMap).length;
