@@ -17,14 +17,8 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Step 2: Close Chrome so the scraper can open it with the debugging port.
-:: The scraper will relaunch it automatically.
+:: The scraper will use an isolated profile, so your main Chrome can stay open.
 echo.
-echo Closing Chrome...
-taskkill /IM chrome.exe >nul 2>&1
-timeout /t 4 /nobreak >nul
-taskkill /F /IM chrome.exe >nul 2>&1
-timeout /t 2 /nobreak >nul
 echo [OK] Ready.
 
 echo.
