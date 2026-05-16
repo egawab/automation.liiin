@@ -81,7 +81,8 @@ function ingestBody(body, postsMap) {
   try { json = JSON.parse(body); } catch (_) { return; }
   function walk(obj) {
     if (!obj || typeof obj !== 'object') return;
-    const rawUrn = String(obj.entityUrn || obj.updateUrn || obj.urn || '');
+    // Check both standard URN fields AND obj.id (used in content search)
+    const rawUrn = String(obj.entityUrn || obj.updateUrn || obj.urn || obj.id || '');
     const m = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
     if (m) {
       const urn = 'urn:li:' + m[1] + ':' + m[2];
@@ -99,13 +100,16 @@ function ingestBody(body, postsMap) {
         obj.text ||
         obj.description?.text ||
         obj.description ||
-        // Search result formats:
         (typeof obj.summary === 'string' ? obj.summary : (obj.summary?.text || '')) ||
         obj.snippet?.text ||
         obj.snippet ||
         obj.headline?.text ||
         obj.insight?.text ||
         obj.insightText?.text ||
+        obj.shareCommentary?.text ||
+        obj.shareCommentary ||
+        obj.body?.text ||
+        obj.body ||
         ''
       ).substring(0, 5000);
 
@@ -182,7 +186,7 @@ const DOM_FN = `() => {
     return {likes:lk, comments:cm};
   }
   function getText(el) {
-    // Priority: try known LinkedIn content selectors first
+    // 1. Try known LinkedIn selectors (Feed + Search)
     const selectors = [
       '.feed-shared-update-v2__commentary',
       '.update-components-text__text-view',
@@ -203,18 +207,26 @@ const DOM_FN = `() => {
         });
       } catch(_){}
     }
-    // Fallback for search result components
-    if (txt.length < 20) {
+    // 2. Fallback: any dir=ltr element (LinkedIn always marks post text with this)
+    if (txt.length < 30) {
       try {
-        el.querySelectorAll('div[dir="ltr"], span[dir="ltr"]').forEach(d => {
-          if (d.closest('button') || d.classList.contains('artdeco-button__text')) return;
+        el.querySelectorAll('[dir="ltr"]').forEach(d => {
+          if (d.closest('button,header,nav')) return;
           const t = (d.innerText || d.textContent || '').trim();
           if (t.length > txt.length) txt = t;
         });
       } catch(_){}
     }
-    // Clean up typical garbage
-    txt = txt.replace(/([0-9]+)\\s*(reactions|comments|votes).*$/i, '').trim();
+    // 3. Last resort: use full card innerText, filter noise lines
+    if (txt.length < 30) {
+      try {
+        const NOISE = /^(like|comment|repost|send|share|follow|connect|view|see more|load|\\d+ reaction|\\d+ comment|\\d+ repost|\\.\\.\\.|ago|•|\\d+[smhdw]|just now)/i;
+        const lines = (el.innerText || el.textContent || '').trim().split(/\\n/).map(l => l.trim()).filter(l => l.length > 10 && !NOISE.test(l));
+        if (lines.length > 0) txt = lines.join(' ');
+      } catch(_){}
+    }
+    // 4. Strip trailing engagement noise
+    txt = txt.replace(/\\s*(\\d[\\d,.]*[KkMm]?)\\s*(reactions?|likes?|comments?|reposts?|votes?).*$/i, '').trim();
     return txt.substring(0, 3000);
   }
   function getAuthor(el) {
@@ -550,9 +562,9 @@ async function scrapeKeyword(page, keyword, postsMap) {
       }
 
       // Scroll loop — dual stagnation tracking
-      const MAX_STEPS = 50;
-      const MIN_STEPS = 8;
-      const MAX_STALL = 7;
+      const MAX_STEPS = 60;
+      const MIN_STEPS = 5;
+      const MAX_STALL = 5;
       let step = 0, scrollStall = 0, postStall = 0, lastTop = -1, lastCount = Object.keys(postsMap).length;
 
       while (step < MAX_STEPS) {
