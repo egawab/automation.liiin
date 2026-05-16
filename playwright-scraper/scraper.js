@@ -169,13 +169,13 @@ const DOM_FN = `() => {
     try {
       el.querySelectorAll('[aria-label]').forEach(x => {
         const a = x.getAttribute('aria-label')||'';
-        if (/[0-9]/.test(a) && /(reaction|like|reacted)/i.test(a)) lk=Math.max(lk,pe(a));
+        if (/[0-9]/.test(a) && /(reaction|like|reacted|vote)/i.test(a)) lk=Math.max(lk,pe(a));
         if (/[0-9]/.test(a) && /comment/i.test(a)) cm=Math.max(cm,pe(a));
       });
       el.querySelectorAll('span,button').forEach(x => {
         if (x.children.length>3) return;
         const n=(x.innerText||'').trim();
-        const r=n.match(/([0-9][0-9,.]*[KkMm]?)\\s*(reaction|like|reacted)/i); if(r) lk=Math.max(lk,pe(r[1]));
+        const r=n.match(/([0-9][0-9,.]*[KkMm]?)\\s*(reaction|like|reacted|vote)/i); if(r) lk=Math.max(lk,pe(r[1]));
         const c=n.match(/([0-9][0-9,.]*[KkMm]?)\\s*comment/i);               if(c) cm=Math.max(cm,pe(c[1]));
       });
     } catch(_){}
@@ -184,6 +184,7 @@ const DOM_FN = `() => {
   function getText(el) {
     // Priority: try known LinkedIn content selectors first
     const selectors = [
+      '.feed-shared-update-v2__commentary',
       '.update-components-text__text-view',
       '.update-components-text',
       '.feed-shared-inline-show-more-text',
@@ -197,18 +198,13 @@ const DOM_FN = `() => {
     for (const s of selectors) {
       try {
         el.querySelectorAll(s).forEach(d => {
-          const t = (d.innerText || d.textContent || '').trim();
+          const t = (d.innerText || '').trim();
           if (t.length > txt.length) txt = t;
         });
       } catch(_){}
     }
-    // Fallback: use textContent (works even when innerText returns empty)
-    if (txt.length < 20) {
-      try {
-        const raw = (el.textContent || '').replace(/[\\r\\n\\t]+/g, ' ').replace(/  +/g, ' ').trim();
-        if (raw.length > txt.length) txt = raw;
-      } catch(_){}
-    }
+    // Clean up typical garbage
+    txt = txt.replace(/([0-9]+)\\s*(reactions|comments|votes).*$/i, '').trim();
     return txt.substring(0, 3000);
   }
   function getAuthor(el) {
@@ -219,12 +215,14 @@ const DOM_FN = `() => {
       '.entity-result__title-text a span[aria-hidden="true"]',
       '.entity-result__title-text a',
       '.app-aware-link .visually-hidden',
+      '.update-components-actor__title',
+      '.feed-shared-actor__name'
     ];
     for (const s of authorSelectors) {
       try {
         const el2 = el.querySelector(s);
         if (el2) {
-          const t = (el2.innerText || el2.textContent || '').trim().split('\\n')[0].trim();
+          const t = (el2.innerText || '').trim().split('\\n')[0].trim();
           if (t && t.length > 1 && !/^(Unknown|View|Follow)$/i.test(t)) return t.substring(0, 100);
         }
       } catch(_){}
@@ -237,17 +235,30 @@ const DOM_FN = `() => {
       .replace(/\\s*[\\u2019']s\\s.*/i, '')
       .replace(/\\s*(profile|page|company)\\s*$/i, '').trim();
     if (aria && aria.length > 1 && !/^(Unknown|View)$/i.test(aria)) return aria.substring(0, 100);
-    const linkText = (a.innerText || a.textContent || '').trim().split('\\n')[0] || 'Unknown';
+    const linkText = (a.innerText || '').trim().split('\\n')[0] || 'Unknown';
     return linkText.substring(0, 100);
   }
   function walkCard(anchorEl, urn, href) {
     let c = anchorEl, best = null;
     for(let i = 0; i < 30; i++){
       c = c.parentElement; if(!c || c === document.body) break;
-      const l = Math.max((c.innerText||'').trim().length, (c.textContent||'').trim().length);
+      
+      // Stop exactly at known card wrapper boundaries
+      const cls = c.className || '';
+      if (
+        c.hasAttribute('data-urn') || 
+        cls.includes('feed-shared-update-v2') ||
+        cls.includes('search-entity') ||
+        cls.includes('reusable-search__result-container') ||
+        cls.includes('occludable-update')
+      ) {
+        best = c;
+        break; // Stop going up once we hit the card root
+      }
+
+      const l = (c.innerText||'').trim().length;
       if(l >= 20000) break;  // overshot into page shell
-      if(l > 300) { best = c; break; }  // real card with content
-      if(l > 50 && !best) best = c;     // fallback if nothing bigger found
+      if(l > 200 && !best) best = c; // fallback if no specific class found
     }
     if(!best) return;
     seen[urn]=1;
