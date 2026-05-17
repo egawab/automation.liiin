@@ -91,24 +91,26 @@ function domExtractor() {
   }
 
   function extractEngagement(card) {
-    let likes = 0, comments = 0;
+    let likes = 0, comments = 0, isPoll = false;
     // Strategy 1: aria-label on reaction/comment buttons
     card.querySelectorAll('[aria-label]').forEach(el => {
       const a = (el.getAttribute('aria-label') || '').toLowerCase();
       if (/\d/.test(a)) {
-        if (/(reaction|like|reacted|vote)/i.test(a)) likes = Math.max(likes, parseNum(a));
+        if (/(reaction|like|reacted)/i.test(a)) likes = Math.max(likes, parseNum(a));
         if (/comment/i.test(a)) comments = Math.max(comments, parseNum(a));
+        if (/vote/i.test(a)) isPoll = true;
       }
     });
     // Strategy 2: text inside spans/buttons that contains engagement numbers
     if (likes === 0 && comments === 0) {
       const rawText = (card.innerText || '');
-      const likeMatch = rawText.match(/([\d,.]+[KkMm]?)\s*(Like|like|Reaction|reaction|Reacted|reacted|Vote|vote)s?/);
+      const likeMatch = rawText.match(/([\d,.]+[KkMm]?)\s*(Like|like|Reaction|reaction|Reacted|reacted)s?/);
       if (likeMatch) likes = parseNum(likeMatch[1]);
       const commentMatch = rawText.match(/([\d,.]+[KkMm]?)\s*(Comment|comment)s?/);
       if (commentMatch) comments = parseNum(commentMatch[1]);
+      if (/vote/i.test(rawText)) isPoll = true;
     }
-    return { likes, comments };
+    return { likes, comments, isPoll };
   }
 
   function extractText(card) {
@@ -161,7 +163,8 @@ function domExtractor() {
       text, 
       author: 'Unknown', 
       likes: eng.likes, 
-      comments: eng.comments 
+      comments: eng.comments,
+      isPoll: eng.isPoll
     });
   }
 
@@ -272,11 +275,13 @@ function mergeDOM(rec, postsMap) {
   const old = postsMap[rec.urn] || {};
   postsMap[rec.urn] = {
     canonicalUrn: rec.urn,
-    url: rec.url || old.url || ('https://www.linkedin.com/feed/update/' + rec.urn),
-    postText: rec.text.length > (old.postText || '').length ? rec.text : (old.postText || ''),
-    author: (old.author && old.author !== 'Unknown') ? old.author : rec.author,
-    likes: Math.max(old.likes || 0, rec.likes || 0),
-    comments: Math.max(old.comments || 0, rec.comments || 0),
+    url: rec.url || old.url,
+    postUrl: old.postUrl, // Keep network URL if we had it
+    postText: rec.text.length > (old.postText || '').length ? rec.text : old.postText,
+    authorName: (old.authorName && old.authorName !== 'Unknown') ? old.authorName : rec.author,
+    likes: Math.max(rec.likes || 0, old.likes || 0),
+    comments: Math.max(rec.comments || 0, old.comments || 0),
+    isPoll: rec.isPoll || old.isPoll || false,
     source: old.source || 'dom',
   };
 }
@@ -354,8 +359,11 @@ async function pushToAPI(posts, keyword, dashUrl, userId) {
   // Map internal fields to the API contract:
   // postText (internal) → postPreview (API) for the dashboard snippet
   const payload = posts.map(p => {
-    let finalUrl = p.postUrl || p.url || ('https://www.linkedin.com/feed/update/' + p.canonicalUrn);
-    if (p.canonicalUrn && p.canonicalUrn.includes('ugcPost')) {
+    // p.url is usually the DOM permalink (highly reliable)
+    // p.postUrl is the network permalink (constructed from URN)
+    // We prioritize p.url first, because the DOM always provides the right activity URN wrapper!
+    let finalUrl = p.url || p.postUrl || ('https://www.linkedin.com/feed/update/' + p.canonicalUrn);
+    if (p.canonicalUrn && p.canonicalUrn.includes('ugcPost') && finalUrl.includes('ugcPost')) {
       const idMatch = p.canonicalUrn.match(/\d{10,25}/);
       if (idMatch) finalUrl = 'https://www.linkedin.com/posts/' + idMatch[0];
     }
@@ -946,7 +954,7 @@ function showNotification(title, msg) {
     log('');
     log('Fetching keywords from dashboard...');
     let keywords = await fetchKeywords(dashboardUrl, userId);
-    keywords = ['reactjs']; // TEST OVERRIDE
+    keywords = ['python developer']; // TEST OVERRIDE
     log('Keywords: ' + keywords.join(', '));
 
     // Scrape each keyword
