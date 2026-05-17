@@ -1,0 +1,17 @@
+{
+  "counts": {
+    "liContainers": 0,
+    "dataUrnAny": 0,
+    "dataEntityUrn": 0,
+    "occludable": 0,
+    "feedShared": 0,
+    "expandableText": 6,
+    "pDirAuto": 1,
+    "postLinks": 0,
+    "feedLinks": 3
+  },
+  "liSample": [],
+  "overlapCheck": [],
+  "engagements": [],
+  "dataUrns": []
+}

@@ -3,14 +3,21 @@
 'use strict';
 
 const { chromium } = require('playwright');
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
-const os   = require('os');
+const os = require('os');
 const https = require('https');
-const http  = require('http');
+const http = require('http');
 
-const CONFIG_PATH    = path.join(__dirname, 'config.json');
-const PROFILE_DIR    = path.join(os.homedir(), '.nexora_scraper', 'profile');
+const CONFIG_PATH = path.join(__dirname, 'config.json');
+
+let profileName = 'profile';
+const profileArg = process.argv.find(arg => arg.startsWith('--profile='));
+if (profileArg) {
+  profileName = profileArg.split('=')[1].replace(/[^a-zA-Z0-9_-]/g, '') || 'profile';
+}
+
+const PROFILE_DIR = path.join(os.homedir(), '.nexora_scraper', profileName);
 const REAL_CHROME_DIR = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
   'Google', 'Chrome', 'User Data'
@@ -32,19 +39,19 @@ function loadConfig() {
 
 function apiFetch(url, opts = {}) {
   return new Promise((resolve, reject) => {
-    const u   = new URL(url);
+    const u = new URL(url);
     const lib = u.protocol === 'https:' ? https : http;
     const req = lib.request({
       hostname: u.hostname,
-      port:     u.port || (u.protocol === 'https:' ? 443 : 80),
-      path:     u.pathname + u.search,
-      method:   opts.method || 'GET',
-      headers:  opts.headers || {},
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname + u.search,
+      method: opts.method || 'GET',
+      headers: opts.headers || {},
     }, res => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => resolve({
-        ok:   res.statusCode >= 200 && res.statusCode < 300,
+        ok: res.statusCode >= 200 && res.statusCode < 300,
         status: res.statusCode,
         json: () => JSON.parse(data),
         text: () => data,
@@ -64,277 +71,16 @@ function waitForEnter() {
   });
 }
 
-// ── Parse engagement number (e.g. "1.2K" → 1200) ─────────────────────────────
-function pe(s) {
-  if (s == null) return 0;
-  const x = String(s).toUpperCase().replace(/,/g, '');
-  const n = parseFloat((x.match(/[0-9.]+/) || [])[0]);
-  if (isNaN(n)) return 0;
-  if (x.includes('K')) return Math.floor(n * 1000);
-  if (x.includes('M')) return Math.floor(n * 1000000);
-  return Math.floor(n);
-}
+// No network interception needed for visual extraction.
 
-// ── Network response → postsMap ───────────────────────────────────────────────
-function ingestBody(body, postsMap) {
-  let json;
-  try { json = JSON.parse(body); } catch (_) { return; }
-  function walk(obj) {
-    if (!obj || typeof obj !== 'object') return;
-    // Check both standard URN fields AND obj.id (used in content search)
-    const rawUrn = String(obj.entityUrn || obj.updateUrn || obj.urn || obj.id || '');
-    const m = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
-    if (m) {
-      const urn = 'urn:li:' + m[1] + ':' + m[2];
-
-      // Try every known text field path LinkedIn has ever used
-      const text = String(
-        obj.commentary?.text?.text ||
-        obj.commentary?.text ||
-        obj.specificContent?.['com.linkedin.ugc.ShareContent']?.shareCommentary?.text ||
-        obj.content?.article?.description ||
-        obj.content?.article?.title ||
-        obj.resharedUpdate?.commentary?.text?.text ||
-        obj.resharedUpdate?.commentary?.text ||
-        obj.text?.text ||
-        obj.text ||
-        obj.description?.text ||
-        obj.description ||
-        (typeof obj.summary === 'string' ? obj.summary : (obj.summary?.text || '')) ||
-        obj.snippet?.text ||
-        obj.snippet ||
-        obj.headline?.text ||
-        obj.insight?.text ||
-        obj.insightText?.text ||
-        obj.shareCommentary?.text ||
-        obj.shareCommentary ||
-        obj.body?.text ||
-        obj.body ||
-        ''
-      ).substring(0, 5000);
-
-      let authorObj =
-        obj.actor?.name?.text ||
-        obj.actor?.nameV2?.text ||
-        obj.actor?.fullName ||
-        // Search result formats:
-        obj.title?.text ||          // search results put author name in title.text
-        obj.actorName ||
-        obj.primarySubtitle?.text || // sometimes the name is in the subtitle
-        null;
-      if (!authorObj && obj.author && (obj.author.firstName || obj.author.lastName)) {
-        authorObj = [obj.author.firstName, obj.author.lastName].filter(Boolean).join(' ');
-      }
-      const author = String(authorObj || '').trim().substring(0, 100);
-
-
-      const soc      = obj.socialDetail || obj.totalSocialActivityCounts || {};
-      const likes    = pe(soc.numLikes    ?? obj.numLikes);
-      const comments = pe(soc.numComments ?? obj.numComments);
-      const old      = postsMap[urn] || {};
-
-      postsMap[urn] = {
-        canonicalUrn: urn,
-        url:      old.url || ('https://www.linkedin.com/feed/update/' + urn),
-        postText: text.length > (old.postText || '').length ? text : (old.postText || ''),
-        author:   (author && author !== 'Unknown' && author !== 'undefined undefined' && author.length > 1) ? author : (old.author || 'Unknown'),
-        likes:    Math.max(old.likes || 0, likes),
-        comments: Math.max(old.comments || 0, comments),
-        source:   'network',
-      };
-    }
-    if (Array.isArray(obj)) { for (const item of obj) walk(item); }
-    else { for (const k of Object.keys(obj)) { if (typeof obj[k] === 'object' && k !== 'paging') walk(obj[k]); } }
-  }
-  walk(json);
-}
-
-// ── DOM extractor (runs inside page via evaluate) ─────────────────────────────
-const DOM_FN = `() => {
-  const records = [], seen = {};
-  function pe(s) {
-    if (!s) return 0;
-    const x = String(s).toUpperCase().replace(/,/g,'');
-    const n = parseFloat((x.match(/[0-9]+\\.?[0-9]*/) || [])[0]);
-    if (isNaN(n)) return 0;
-    if (x.indexOf('K')>-1) return Math.floor(n*1000);
-    if (x.indexOf('M')>-1) return Math.floor(n*1000000);
-    return Math.floor(n);
-  }
-  function xUrn(s) {
-    const m = String(s||'').match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
-    if (m) return 'urn:li:'+m[1]+':'+m[2];
-    const p = String(s||'').match(/activity-([0-9]{10,25})/i);
-    if (p) return 'urn:li:activity:'+p[1];
-    return '';
-  }
-  function getEng(el) {
-    let lk=0, cm=0;
-    try {
-      el.querySelectorAll('[aria-label]').forEach(x => {
-        const a = x.getAttribute('aria-label')||'';
-        if (/[0-9]/.test(a) && /(reaction|like|reacted|vote)/i.test(a)) lk=Math.max(lk,pe(a));
-        if (/[0-9]/.test(a) && /comment/i.test(a)) cm=Math.max(cm,pe(a));
-      });
-      el.querySelectorAll('span,button').forEach(x => {
-        if (x.children.length>3) return;
-        const n=(x.innerText||'').trim();
-        const r=n.match(/([0-9][0-9,.]*[KkMm]?)\\s*(reaction|like|reacted|vote)/i); if(r) lk=Math.max(lk,pe(r[1]));
-        const c=n.match(/([0-9][0-9,.]*[KkMm]?)\\s*comment/i);               if(c) cm=Math.max(cm,pe(c[1]));
-      });
-    } catch(_){}
-    return {likes:lk, comments:cm};
-  }
-  function getText(el) {
-    // 1. Try known LinkedIn selectors (Feed + Search)
-    const selectors = [
-      '.feed-shared-update-v2__commentary',
-      '.update-components-text__text-view',
-      '.update-components-text',
-      '.feed-shared-inline-show-more-text',
-      '.feed-shared-update-v2__description',
-      '.feed-shared-text',
-      '.break-words',
-      '.entity-result__summary',
-      '.entity-result__content-primary'
-    ];
-    let txt = '';
-    for (const s of selectors) {
-      try {
-        el.querySelectorAll(s).forEach(d => {
-          const t = (d.innerText || d.textContent || '').trim();
-          if (t.length > txt.length) txt = t;
-        });
-      } catch(_){}
-    }
-    // 2. Fallback: any dir=ltr element (LinkedIn always marks post text with this)
-    if (txt.length < 30) {
-      try {
-        el.querySelectorAll('[dir="ltr"]').forEach(d => {
-          if (d.closest('button,header,nav')) return;
-          const t = (d.innerText || d.textContent || '').trim();
-          if (t.length > txt.length) txt = t;
-        });
-      } catch(_){}
-    }
-    // 3. Last resort: use full card innerText, filter noise lines
-    if (txt.length < 30) {
-      try {
-        const NOISE = /^(like|comment|repost|send|share|follow|connect|view|see more|load|\\d+ reaction|\\d+ comment|\\d+ repost|\\.\\.\\.|ago|•|\\d+[smhdw]|just now)/i;
-        const lines = (el.innerText || el.textContent || '').trim().split(/\\n/).map(l => l.trim()).filter(l => l.length > 10 && !NOISE.test(l));
-        if (lines.length > 0) txt = lines.join(' ');
-      } catch(_){}
-    }
-    // 4. Strip trailing engagement noise
-    txt = txt.replace(/\\s*(\\d[\\d,.]*[KkMm]?)\\s*(reactions?|likes?|comments?|reposts?|votes?).*$/i, '').trim();
-    return txt.substring(0, 3000);
-  }
-  function getAuthor(el) {
-    // Try multiple LinkedIn actor selectors in priority order
-    const authorSelectors = [
-      '.update-components-actor__name span[aria-hidden="true"]',
-      '.update-components-actor__name',
-      '.entity-result__title-text a span[aria-hidden="true"]',
-      '.entity-result__title-text a',
-      '.app-aware-link .visually-hidden',
-      '.update-components-actor__title',
-      '.feed-shared-actor__name'
-    ];
-    for (const s of authorSelectors) {
-      try {
-        const el2 = el.querySelector(s);
-        if (el2) {
-          const t = (el2.innerText || el2.textContent || '').trim().split('\\n')[0].trim();
-          if (t && t.length > 1 && !/^(Unknown|View|Follow)$/i.test(t)) return t.substring(0, 100);
-        }
-      } catch(_){}
-    }
-    // Fallback to href-based search
-    const a = el.querySelector('a[href*="/in/"],a[href*="/company/"]');
-    if (!a) return 'Unknown';
-    const aria = (a.getAttribute('aria-label') || '')
-      .replace(/^[Vv]iew\\s+(?:company:\\s*)?/i, '')
-      .replace(/\\s*[\\u2019']s\\s.*/i, '')
-      .replace(/\\s*(profile|page|company)\\s*$/i, '').trim();
-    if (aria && aria.length > 1 && !/^(Unknown|View)$/i.test(aria)) return aria.substring(0, 100);
-    const linkText = (a.innerText || '').trim().split('\\n')[0] || 'Unknown';
-    return linkText.substring(0, 100);
-  }
-  function walkCard(anchorEl, urn, href) {
-    let c = anchorEl, best = null;
-    for(let i = 0; i < 30; i++){
-      c = c.parentElement; if(!c || c === document.body) break;
-      
-      // Stop exactly at known card wrapper boundaries
-      const cls = c.className || '';
-      if (
-        c.hasAttribute('data-urn') || 
-        cls.includes('feed-shared-update-v2') ||
-        cls.includes('search-entity') ||
-        cls.includes('reusable-search__result-container') ||
-        cls.includes('occludable-update')
-      ) {
-        best = c;
-        break; // Stop going up once we hit the card root
-      }
-
-      const l = (c.innerText||'').trim().length;
-      if(l >= 20000) break;  // overshot into page shell
-      if(l > 200 && !best) best = c; // fallback if no specific class found
-    }
-    if(!best) return;
-    seen[urn]=1;
-    const eng=getEng(best);
-    records.push({urn, url:href, text:getText(best).substring(0,3000), author:getAuthor(best), likes:eng.likes, comments:eng.comments});
-  }
-  try {
-    document.querySelectorAll('a[href]').forEach(a=>{
-      if(!a.href||(!(a.href.includes('feed/update/urn:li:'))&&!a.href.includes('/posts/'))) return;
-      const urn=xUrn(a.href); if(!urn||seen[urn]) return;
-      walkCard(a,urn,a.href);
-    });
-  } catch(_){}
-  try {
-    ['data-urn','data-activity-urn','data-chameleon-result-urn','data-entity-urn'].forEach(attr=>{
-      document.querySelectorAll('['+attr+']').forEach(el=>{
-        const urn=xUrn(el.getAttribute(attr)||''); if(!urn||seen[urn]) return;
-        // Walk UP the tree to find a real card with visible text (same as walkCard)
-        // Needed because LinkedIn often puts data-urn on an invisible wrapper div
-        let c = el;
-        for (let i = 0; i < 15; i++) {
-          if (!c.parentElement || c.parentElement === document.body) break;
-          c = c.parentElement;
-          const l = (c.innerText||'').trim().length;
-          if (l > 50 && l < 20000) break;  // found the real card
-        }
-        seen[urn]=1;
-        const eng=getEng(c);
-        records.push({urn, url:'', text:getText(c).substring(0,3000), author:getAuthor(c), likes:eng.likes, comments:eng.comments});
-      });
-    });
-    
-    document.querySelectorAll('.reusable-search__result-container, .feed-shared-update-v2, .occludable-update').forEach(el => {
-      let urn = '';
-      const m = el.innerHTML.match(/urn:li:(activity|ugcPost|share):[0-9]+/);
-      if (m) urn = m[0];
-      if (!urn) {
-        const a = el.querySelector('a[href*="urn:li:"]');
-        if (a) urn = xUrn(a.href);
-      }
-      if (!urn || seen[urn]) return;
-      seen[urn] = 1;
-      const eng = getEng(el);
-      records.push({urn, url:'', text:getText(el).substring(0,3000), author:getAuthor(el), likes:eng.likes, comments:eng.comments});
-    });
-  } catch(_){}
-  return records;
-}`;
+// Template string DOM_FN removed since we use actual domExtractor function now.
 
 // ── Real DOM extractor function (used via page.evaluate(domExtractor)) ──────────
-// No string escaping issues — Playwright serializes this function directly.
 function domExtractor() {
-  const records = [], seen = {};
-  function pe(s) {
+  const records = [];
+  const seen = {};
+  
+  function parseNum(s) {
     if (!s) return 0;
     const x = String(s).toUpperCase().replace(/,/g, '');
     const n = parseFloat((x.match(/[0-9.]+/) || [])[0]);
@@ -343,93 +89,180 @@ function domExtractor() {
     if (x.includes('M')) return Math.floor(n * 1000000);
     return Math.floor(n);
   }
-  function xUrn(s) {
-    const m = String(s || '').match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
-    if (m) return 'urn:li:' + m[1] + ':' + m[2];
-    const p = String(s || '').match(/activity-([0-9]{10,25})/i);
-    if (p) return 'urn:li:activity:' + p[1];
-    return '';
+
+  function extractEngagement(card) {
+    let likes = 0, comments = 0;
+    // Strategy 1: aria-label on reaction/comment buttons
+    card.querySelectorAll('[aria-label]').forEach(el => {
+      const a = (el.getAttribute('aria-label') || '').toLowerCase();
+      if (/\d/.test(a)) {
+        if (/(reaction|like|reacted|vote)/i.test(a)) likes = Math.max(likes, parseNum(a));
+        if (/comment/i.test(a)) comments = Math.max(comments, parseNum(a));
+      }
+    });
+    // Strategy 2: text inside spans/buttons that contains engagement numbers
+    if (likes === 0 && comments === 0) {
+      const rawText = (card.innerText || '');
+      const likeMatch = rawText.match(/([\d,.]+[KkMm]?)\s*(Like|like|Reaction|reaction|Reacted|reacted|Vote|vote)s?/);
+      if (likeMatch) likes = parseNum(likeMatch[1]);
+      const commentMatch = rawText.match(/([\d,.]+[KkMm]?)\s*(Comment|comment)s?/);
+      if (commentMatch) comments = parseNum(commentMatch[1]);
+    }
+    return { likes, comments };
   }
-  function getEng(el) {
-    let lk = 0, cm = 0;
-    try {
-      el.querySelectorAll('[aria-label]').forEach(x => {
-        const a = x.getAttribute('aria-label') || '';
-        if (/[0-9]/.test(a) && /(reaction|like|reacted|vote)/i.test(a)) lk = Math.max(lk, pe(a));
-        if (/[0-9]/.test(a) && /comment/i.test(a)) cm = Math.max(cm, pe(a));
-      });
-      el.querySelectorAll('span,button').forEach(x => {
-        if (x.children.length > 3) return;
-        const n = (x.innerText || '').trim();
-        const r = n.match(/([0-9][0-9,.]*[KkMm]?)\s*(reaction|like|reacted|vote)/i); if (r) lk = Math.max(lk, pe(r[1]));
-        const c = n.match(/([0-9][0-9,.]*[KkMm]?)\s*comment/i); if (c) cm = Math.max(cm, pe(c[1]));
-      });
-    } catch (_) {}
-    return { likes: lk, comments: cm };
-  }
-  const NOISE_RE = /^(like|comment|repost|send|share|follow|connect|view|see more|show more|load more|just now|ago|\d+[smhdw]|\d+\s*(reaction|comment|repost|vote)|[•.]{1,3})$/i;
-  function getText(el) {
-    // 1. CSS selectors (feed + search)
-    const CSS = ['.feed-shared-update-v2__commentary', '.update-components-text__text-view', '.update-components-text', '.feed-shared-inline-show-more-text', '.feed-shared-text', '.entity-result__summary'];
+
+  function extractText(card) {
+    // Try known post text selectors first (most reliable)
+    const CSS = [
+      '[data-testid="expandable-text-box"]',
+      '.feed-shared-update-v2__commentary',
+      '.update-components-text__text-view',
+      '.update-components-text',
+      '.feed-shared-inline-show-more-text',
+      '.feed-shared-text',
+      'p[dir="auto"]',
+      '[dir="ltr"]',
+    ];
     let txt = '';
     for (const s of CSS) {
-      try { el.querySelectorAll(s).forEach(d => { const t = (d.innerText || d.textContent || '').trim(); if (t.length > txt.length) txt = t; }); if (txt.length > 30) break; } catch (_) {}
+      try {
+        card.querySelectorAll(s).forEach(d => {
+          if (d.closest('button,header,nav,aside,footer')) return;
+          const t = (d.innerText || '').trim();
+          if (t.length > txt.length) txt = t;
+        });
+        if (txt.length > 60) break;
+      } catch (_) {}
     }
-    if (txt.length > 30) return txt.replace(/\s*\d[\d,.]*[KkMm]?\s*(reactions?|likes?|comments?|reposts?|votes?).*$/i, '').trim().substring(0, 3000);
-    // 2. TreeWalker — most reliable, works regardless of CSS class names
-    try {
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-      const parts = [];
-      let node;
-      while ((node = walker.nextNode())) {
-        const p = node.parentElement;
-        if (!p) continue;
-        const tag = (p.tagName || '').toLowerCase();
-        if (['script', 'style', 'noscript', 'svg'].includes(tag)) continue;
-        try { const cs = window.getComputedStyle(p); if (cs.display === 'none' || cs.visibility === 'hidden') continue; } catch (_) {}
-        const t = (node.nodeValue || '').trim();
-        if (t.length > 2 && !NOISE_RE.test(t)) parts.push(t);
-      }
-      let best = '', cur = '';
-      for (const t of parts) {
-        if (t.length > 10) { cur += (cur ? ' ' : '') + t; if (cur.length > best.length) best = cur; } else { cur = ''; }
-      }
-      txt = best.length > 20 ? best : parts.join(' ');
-    } catch (_) {}
-    return txt.replace(/\s*\d[\d,.]*[KkMm]?\s*(reactions?|likes?|comments?|reposts?|votes?).*$/i, '').trim().substring(0, 3000);
+    // Fallback: use innerText but clean it aggressively
+    if (txt.length < 15) {
+      txt = (card.innerText || '').trim();
+    }
+    // Strip navigation, engagement counters, action buttons
+    return txt
+      .replace(/^(Home|My Network|Jobs|Messaging|Notifications|Me|Work|Business).*$/igm, '')
+      .replace(/^(Like|Comment|Repost|Send|Share|Follow|Connect|View|See more|Show more|Load more).*$/igm, '')
+      .replace(/^\s*[\d,.]+[KkMm]?\s*(reactions?|likes?|comments?|reposts?|votes?).*$/igm, '')
+      .replace(/^.*notifications?\s+Skip to main content.*$/igm, '') // aggressive noise filter
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .substring(0, 3000);
   }
-  function getAuthor(el) {
-    const SS = ['.update-components-actor__name span[aria-hidden="true"]', '.update-components-actor__name', '.entity-result__title-text a span[aria-hidden="true"]', '.entity-result__title-text a', '.app-aware-link .visually-hidden', '.update-components-actor__title', '.feed-shared-actor__name'];
-    for (const s of SS) {
-      try { const el2 = el.querySelector(s); if (el2) { const t = (el2.innerText || el2.textContent || '').trim().split('\n')[0].trim(); if (t && t.length > 1 && !/^(Unknown|View|Follow)$/i.test(t)) return t.substring(0, 100); } } catch (_) {}
-    }
-    const a = el.querySelector('a[href*="/in/"],a[href*="/company/"]');
-    if (!a) return 'Unknown';
-    const aria = (a.getAttribute('aria-label') || '').replace(/^[Vv]iew\s+(?:company:\s*)?/i, '').replace(/\s*[\u2019']s\s.*/i, '').replace(/\s*(profile|page|company)\s*$/i, '').trim();
-    if (aria && aria.length > 1 && !/^(Unknown|View)$/i.test(aria)) return aria.substring(0, 100);
-    return ((a.innerText || '').trim().split('\n')[0] || 'Unknown').substring(0, 100);
+
+  function processCard(card, urn) {
+    if (!urn || seen[urn]) return;
+    seen[urn] = true;
+    const eng = extractEngagement(card);
+    const text = extractText(card);
+    if (text.length < 10) return; // skip empty cards
+    records.push({ 
+      urn, 
+      url: 'https://www.linkedin.com/feed/update/' + urn, 
+      text, 
+      author: 'Unknown', 
+      likes: eng.likes, 
+      comments: eng.comments 
+    });
   }
-  function findCard(el) {
-    let c = el;
-    for (let i = 0; i < 30; i++) {
-      c = c.parentElement; if (!c || c === document.body) return null;
-      const cls = typeof c.className === 'string' ? c.className : (c.className && c.className.baseVal) || '';
-      if (c.hasAttribute('data-urn') || /feed-shared-update-v2|reusable-search__result-container|occludable-update|search-entity/.test(cls)) return c;
-      if ((c.innerText || '').trim().length >= 20000) return null;
-    }
+
+  // Common URN extractor for any string
+  function findUrn(str) {
+    if (!str) return null;
+    const m = str.match(/urn:li:(activity|ugcPost|share|update):[0-9]{15,25}/);
+    if (m) return m[0];
+    const m2 = str.match(/(activity|ugcPost|share|update)-([0-9]{15,25})/i);
+    if (m2) return 'urn:li:activity:' + m2[2];
     return null;
   }
-  function add(el, urn, href) {
-    if (seen[urn]) return; seen[urn] = 1;
-    const eng = getEng(el);
-    records.push({ urn, url: href || '', text: getText(el), author: getAuthor(el), likes: eng.likes, comments: eng.comments });
+
+  // Build URN from a 19-digit ID and its type context
+  function buildUrn(id, context) {
+    if (!id) return null;
+    if (context && /ugcPost|userGeneratedContent/i.test(context)) return 'urn:li:ugcPost:' + id;
+    if (context && /share/i.test(context)) return 'urn:li:share:' + id;
+    return 'urn:li:activity:' + id;
   }
-  // Pass 1: post permalink anchors
-  try { document.querySelectorAll('a[href]').forEach(a => { const href = a.href || ''; if (!href.includes('feed/update/urn:li:') && !href.includes('/posts/')) return; const urn = xUrn(href); if (!urn || seen[urn]) return; const card = findCard(a); if (card) add(card, urn, href); }); } catch (_) {}
-  // Pass 2: data-urn attributes
-  try { ['data-urn','data-activity-urn','data-chameleon-result-urn','data-entity-urn'].forEach(attr => { document.querySelectorAll('[' + attr + ']').forEach(el => { const urn = xUrn(el.getAttribute(attr) || ''); if (!urn || seen[urn]) return; const card = findCard(el) || el; add(card, urn, ''); }); }); } catch (_) {}
-  // Pass 3: card container classes
-  try { document.querySelectorAll('.reusable-search__result-container,.feed-shared-update-v2,.occludable-update').forEach(el => { const m = el.innerHTML.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/); if (!m) return; const urn = 'urn:li:' + m[1] + ':' + m[2]; if (seen[urn]) return; add(el, urn, ''); }); } catch (_) {}
+
+  // Walk UP from an element to find the largest isolated post container
+  // (outermost container that still has exactly 1 expandable text box — includes engagement bar)
+  function isolateCard(el) {
+    let card = el;
+    let bestCard = el;
+    for (let i = 0; i < 25 && card.parentElement && card.parentElement !== document.body; i++) {
+      card = card.parentElement;
+      const boxCount = card.querySelectorAll('[data-testid="expandable-text-box"]').length;
+      const textLen = (card.innerText || '').length;
+      if (boxCount === 1 && textLen < 12000) {
+        bestCard = card; // keep going up — we want the LARGEST single-post container (includes engagement)
+      }
+      if (boxCount > 1) break; // second post found — stop, return last valid
+      if (textLen > 12000) break; // too big
+    }
+    return bestCard;
+  }
+
+  // ── EXTRACTION STRATEGIES (based on real LinkedIn DOM, 2025) ──
+
+  // Strategy 0 (PRIMARY): Start from expandable-text-box → extract URN from componentkey attribute.
+  // This works even when LinkedIn hides all permalink links (e.g. in recent/date_posted view).
+  try {
+    document.querySelectorAll('[data-testid="expandable-text-box"]').forEach(el => {
+      // The parent <p> element typically has a componentkey with the 19-digit post ID
+      const p = el.closest('p') || el.parentElement;
+      const componentKey = (p && (p.getAttribute('componentkey') || p.getAttribute('data-componentkey'))) || '';
+      const html = componentKey || el.parentElement.outerHTML || '';
+      const idMatch = html.match(/([0-9]{19})/);
+      if (!idMatch) return;
+      let urn = buildUrn(idMatch[1], html);
+      if (!urn) return;
+
+      const card = isolateCard(el);
+
+      // ── Permalink reliability fix ─────────────────────────────────────────
+      // ugcPost URNs sometimes produce "This post cannot be displayed" on LinkedIn.
+      // activity URNs always work. If the isolated card HTML contains an explicit
+      // activity URN, upgrade to it so the saved permalink is always openable.
+      if (urn.includes('ugcPost')) {
+        const cardHtml = card.outerHTML || '';
+        const actMatch = cardHtml.match(/urn:li:activity:([0-9]{15,25})/);
+        if (actMatch) {
+          const activityUrn = 'urn:li:activity:' + actMatch[1];
+          if (seen[activityUrn]) return; // already processed via its activity URN
+          urn = activityUrn;             // upgrade — better permalink
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      if (seen[urn]) return;
+      processCard(card, urn);
+    });
+  } catch (_) {}
+
+
+  // Strategy 1: feed/update permalink links (works when LinkedIn includes them)
+  try {
+    document.querySelectorAll('a[href*="feed/update/urn:li:"]').forEach(a => {
+      const urn = findUrn(a.href || '');
+      if (!urn || seen[urn]) return;
+      const card = isolateCard(a);
+      processCard(card, urn);
+    });
+  } catch (_) {}
+
+  // Strategy 2: data-urn attributes (LinkedIn feed / older layouts)
+  try {
+    const selectors = ['[data-urn*="urn:li:"]', '[data-entity-urn*="urn:li:"]', '[data-activity-urn]', '[data-id*="urn:li:"]'];
+    for (const s of selectors) {
+      document.querySelectorAll(s).forEach(el => {
+        const raw = el.getAttribute('data-urn') || el.getAttribute('data-entity-urn') || el.getAttribute('data-activity-urn') || el.getAttribute('data-id') || '';
+        const urn = findUrn(raw);
+        if (!urn || seen[urn]) return;
+        const card = isolateCard(el);
+        processCard(card, urn);
+      });
+    }
+  } catch (_) {}
+
   return records;
 }
 
@@ -439,12 +272,12 @@ function mergeDOM(rec, postsMap) {
   const old = postsMap[rec.urn] || {};
   postsMap[rec.urn] = {
     canonicalUrn: rec.urn,
-    url:      rec.url || old.url || ('https://www.linkedin.com/feed/update/' + rec.urn),
+    url: rec.url || old.url || ('https://www.linkedin.com/feed/update/' + rec.urn),
     postText: rec.text.length > (old.postText || '').length ? rec.text : (old.postText || ''),
-    author:   (old.author && old.author !== 'Unknown') ? old.author : rec.author,
-    likes:    Math.max(old.likes || 0, rec.likes || 0),
+    author: (old.author && old.author !== 'Unknown') ? old.author : rec.author,
+    likes: Math.max(old.likes || 0, rec.likes || 0),
     comments: Math.max(old.comments || 0, rec.comments || 0),
-    source:   old.source || 'dom',
+    source: old.source || 'dom',
   };
 }
 
@@ -461,7 +294,7 @@ async function fetchKeywords(dashUrl, userId) {
     try {
       const cfg = JSON.parse(jobs.settings.searchConfigJson);
       if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
-    } catch (_) {}
+    } catch (_) { }
   }
   if (kws.length === 0 && Array.isArray(jobs.keywords)) {
     kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
@@ -471,43 +304,46 @@ async function fetchKeywords(dashUrl, userId) {
 }
 
 // ── Filter and rank posts by engagement ─────────────────────────────────────
-// Tiered quality filter: balances volume vs quality.
-// Rule priority (checked in order):
-//   1. No URN          → always drop (can't deduplicate)
-//   2. Zero engagement → always drop (no signal at all)
-//   3. Has comment(s)  → always keep (comments = strong high-intent signal)
-//   4. Likes >= 3      → keep       (meaningful reach, even without comments)
-//   5. Likes 1–2       → drop       (too weak; likely bots or low-visibility posts)
-function filterAndRankPosts(posts) {
-  const score = (p) => (p.likes || 0) + (p.comments || 0) * 3;
-
+// Engagement filter: sum of likes + comments must be >= 10, and post must have text
+function filterAndRankPosts(posts, runSeenUrns) {
   const filtered = posts.filter(p => {
-    const urn      = p.canonicalUrn;
-    const likes    = p.likes    || 0;
+    if (!p.canonicalUrn) return false;
+    
+    // Drop polls/vote posts
+    if (p.isPoll) {
+      log('[DROP] ' + p.canonicalUrn + ' | poll/vote post ignored');
+      return false;
+    }
+
+    // Skip posts already captured under a different keyword this run
+    if (runSeenUrns && runSeenUrns.has(p.canonicalUrn)) {
+      log('[SKIP] ' + p.canonicalUrn + ' | already captured under another keyword');
+      return false;
+    }
+
+    // Require post text (no preview = no save)
+    const text = (p.postText || '').trim();
+    if (text.length < 20) {
+      log('[DROP] ' + p.canonicalUrn + ' | no post text (would show No preview)');
+      return false;
+    }
+
+    const likes = p.likes || 0;
     const comments = p.comments || 0;
-    const tag      = `[likes=${likes} comments=${comments}]`;
-
-    log('[EXTRACTED] ' + (urn || '(no-urn)') + ' | likes=' + likes + ' comments=' + comments + ' author=' + (p.author || '?') + ' textLen=' + (p.postText || '').length);
-
-    // Rule 1: must have a URN for deduplication
-    if (!urn) { log('[DROP] (no-urn) ' + (p.postText || '').substring(0, 40) + ' -> no canonicalUrn'); return false; }
-
-    // Rule 2: completely dead post — no engagement at all
-    if (likes === 0 && comments === 0) { log('[DROP] ' + urn + ' ' + tag + ' -> zero engagement'); return false; }
-
-    // Rule 3: any comment = strong intent signal → always keep
-    if (comments >= 1) { log('[VALIDATION PASS] ' + urn + ' ' + tag + ' -> has comments'); return true; }
-
-    // Rule 4: meaningful like-reach (3+ likes, no comments)
-    if (likes >= 3) { log('[VALIDATION PASS] ' + urn + ' ' + tag + ' -> reach ok'); return true; }
-
-    // Rule 5: 1-2 likes with no comments = too weak
-    log('[DROP] ' + urn + ' ' + tag + ' -> low signal (< 3 likes, 0 comments)');
-    return false;
+    const totalEng = likes + comments;
+    
+    if (totalEng >= 10) {
+      log('[KEEP] ' + p.canonicalUrn + ' | likes=' + likes + ' comments=' + comments);
+      if (runSeenUrns) runSeenUrns.add(p.canonicalUrn);
+      return true;
+    } else {
+      log('[DROP] ' + p.canonicalUrn + ' | total engagement=' + totalEng + ' (needs 10+)');
+      return false;
+    }
   });
 
-  // Sort highest-engagement first
-  filtered.sort((a, b) => score(b) - score(a));
+  // Sort highest engagement first
+  filtered.sort((a, b) => ((b.likes||0) + (b.comments||0)) - ((a.likes||0) + (a.comments||0)));
   return filtered;
 }
 
@@ -517,27 +353,35 @@ async function pushToAPI(posts, keyword, dashUrl, userId) {
 
   // Map internal fields to the API contract:
   // postText (internal) → postPreview (API) for the dashboard snippet
-  const payload = posts.map(p => ({
-    ...p,
-    postPreview: (p.postText || '').substring(0, 500) || undefined,
-  }));
+  const payload = posts.map(p => {
+    let finalUrl = p.postUrl || p.url || ('https://www.linkedin.com/feed/update/' + p.canonicalUrn);
+    if (p.canonicalUrn && p.canonicalUrn.includes('ugcPost')) {
+      const idMatch = p.canonicalUrn.match(/\d{10,25}/);
+      if (idMatch) finalUrl = 'https://www.linkedin.com/posts/' + idMatch[0];
+    }
+    return {
+      ...p,
+      url: finalUrl,
+      postPreview: (p.postText || '').substring(0, 500) || undefined,
+    };
+  });
 
   const resp = await apiFetch(dashUrl + '/api/extension/results', {
-    method:  'POST',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-extension-token': userId },
-    body:    JSON.stringify({ posts: payload, keyword, source: 'nexora_playwright_v1' }),
+    body: JSON.stringify({ posts: payload, keyword, source: 'nexora_playwright_v1' }),
   });
   if (!resp.ok) throw new Error('API error ' + resp.status + ': ' + resp.text().substring(0, 200));
   const data = resp.json();
   const created = data.createdCount ?? 0;
   const updated = data.updatedCount ?? 0;
   const totalProcessed = (data.createdCount !== undefined) ? (created + updated) : (data.savedCount ?? posts.length);
-  for (const p of payload) log('[SAVED] ' + p.canonicalUrn + ' preview=' + (p.postPreview||'').substring(0,40).replace(/\n/g,' '));
+  for (const p of payload) log('[SAVED] ' + p.canonicalUrn + ' preview=' + (p.postPreview || '').substring(0, 40).replace(/\n/g, ' '));
   log('✓ Saved ' + totalProcessed + '/' + posts.length + ' posts (New: ' + created + ', Updated: ' + updated + ')  [keyword: ' + keyword + ']');
   return totalProcessed;
 }
 
-// ── Safe navigation (tolerates LinkedIn's 999 and redirect-loop responses) ─────
+// ── Safe navigation (tolerates LinkedIn's SPA navigation and redirect loops) ────
 async function safeGoto(page, url, opts = {}) {
   const RECOVERABLE = [
     'ERR_HTTP_RESPONSE_CODE_FAILURE',
@@ -546,7 +390,7 @@ async function safeGoto(page, url, opts = {}) {
   ];
 
   try {
-    await page.goto(url, { waitUntil: 'commit', timeout: 30000, ...opts });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, ...opts });
   } catch (e) {
     const msg = e.message || '';
     const isRecoverable = RECOVERABLE.some(code => msg.includes(code));
@@ -554,56 +398,79 @@ async function safeGoto(page, url, opts = {}) {
 
     log('[WARN] Navigation issue (' + (RECOVERABLE.find(c => msg.includes(c)) || 'unknown') + ')');
 
+    // ERR_ABORTED is very common on LinkedIn's SPA — the page is still loading.
+    // Wait for the DOM to stabilize before continuing.
+    if (msg.includes('ERR_ABORTED')) {
+      try {
+        await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+        log('[RECOVERY] Page stabilized after ERR_ABORTED.');
+      } catch (_) {
+        log('[WARN] Page did not stabilize, continuing anyway.');
+      }
+    }
+
     // Redirect loop usually means session state is broken for this URL.
     // Reset by going to the feed first, then retry once.
     if (msg.includes('ERR_TOO_MANY_REDIRECTS')) {
       log('[RECOVERY] Navigating to feed to reset session state...');
       try {
-        await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'commit', timeout: 20000 });
+        await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 20000 });
         await page.waitForTimeout(3000);
         // Retry the original URL once
-        await page.goto(url, { waitUntil: 'commit', timeout: 30000, ...opts });
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, ...opts });
       } catch (_) {
         log('[WARN] Recovery attempt failed — continuing with current page state.');
       }
     }
   }
 
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(2500);
 }
 
 // ── Ensure LinkedIn is logged in ──────────────────────────────────────────────
 async function ensureLoggedIn(page) {
-  // If the user ran import-session.bat, inject the saved cookie first.
-  // This lets us use an already-logged-in account without entering credentials.
-  // BUT do NOT do this if USE_REAL_CHROME is active, because we already copied
-  // the real, live session files. Injecting a stale cookie file here destroys
-  // the live session and causes ERR_TOO_MANY_REDIRECTS loops.
-  if (!USE_REAL_CHROME) {
-    const cookieFile = path.join(__dirname, 'linkedin_cookies.json');
-    if (fs.existsSync(cookieFile)) {
-      try {
-        const { cookies } = JSON.parse(fs.readFileSync(cookieFile, 'utf8'));
-        if (Array.isArray(cookies) && cookies.length > 0) {
-          await page.context().addCookies(cookies);
-          log('Session cookie injected from import file.');
-        }
-      } catch (e) {
-        log('[WARN] Could not inject cookie file: ' + e.message);
+  const cookieFile = path.join(__dirname, 'linkedin_cookies.json');
+
+  if (!USE_REAL_CHROME && fs.existsSync(cookieFile)) {
+    try {
+      const { cookies } = JSON.parse(fs.readFileSync(cookieFile, 'utf8'));
+      if (Array.isArray(cookies) && cookies.length > 0) {
+        await page.context().addCookies(cookies);
+        log('Session cookie injected from import file.');
       }
+    } catch (e) {
+      log('[WARN] Could not inject cookie file: ' + e.message);
     }
   }
 
   log('Checking LinkedIn session...');
-  await safeGoto(page, 'https://www.linkedin.com/feed/');
-  const url = page.url();
-  if (url.includes('/login') || url.includes('/checkpoint') || url.includes('/authwall')) {
+
+  // Try navigating to feed — detect stale cookies (redirect loop)
+  let feedUrl = '';
+  try {
+    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 25000 });
+    feedUrl = page.url();
+  } catch (e) {
+    const msg = e.message || '';
+    if (msg.includes('ERR_TOO_MANY_REDIRECTS')) {
+      log('[WARN] Stale session detected — clearing cookies and prompting login.');
+      await page.context().clearCookies();
+      if (fs.existsSync(cookieFile)) {
+        try { fs.unlinkSync(cookieFile); log('Deleted stale linkedin_cookies.json.'); } catch (_) {}
+      }
+      try {
+        await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 20000 });
+      } catch (_) {}
+    }
+    feedUrl = page.url();
+  }
+
+  if (feedUrl.includes('/login') || feedUrl.includes('/checkpoint') || feedUrl.includes('/authwall') || feedUrl.includes('chrome-error')) {
     console.log('');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('  ACTION REQUIRED:');
     console.log('  Please log into LinkedIn in the browser window.');
-    console.log('  Once you are logged in and see your feed, come back');
-    console.log('  here and press ENTER to continue.');
+    console.log('  Once you see your feed, come back here and press ENTER.');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('');
     await waitForEnter();
@@ -616,68 +483,84 @@ async function ensureLoggedIn(page) {
 }
 
 
-// ── Scrape one keyword (3 URL variants to maximise yield per keyword) ──────────
+// ── Scrape one keyword (2 URL variants: relevance + recent) ──────────
 async function scrapeKeyword(page, keyword, postsMap) {
-  // LinkedIn returns DIFFERENT result sets for different sort/date params.
-  // Running all three variants and merging into one shared postsMap can
-  // 2-3x the unique posts collected, especially for accounts with fewer results.
   const base = 'https://www.linkedin.com/search/results/content/?keywords='
-             + encodeURIComponent(keyword);
-  const urlVariants = [
-    { url: base + '&origin=GLOBAL_SEARCH_HEADER',                       label: 'relevance' },
-    { url: base + '&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted',    label: 'recent'    },
-    { url: base + '&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month', label: 'month'     },
+    + encodeURIComponent(keyword);
+
+  // Run 2 variants: general relevance, then past month relevance
+  const variants = [
+    { url: base + '&origin=GLOBAL_SEARCH_HEADER', label: 'relevance_all' },
+    { url: base + '&datePosted=%22past-month%22', label: 'relevance_month' },
   ];
 
   log('');
   log('── Keyword: "' + keyword + '" ──────────────────────────────');
 
-  // Single network listener shared across all variants
-  const onResponse = async (response) => {
-    const rUrl = response.url();
-    if (!rUrl.includes('linkedin.com')) return;
-    if (/(\\.js|\\.css|\\.png|\\.jpg|\\.gif|\\.woff|\\.svg)(\?|$)/i.test(rUrl)) return;
-    if (!rUrl.includes('voyager/api') && !rUrl.includes('/feed/') && !rUrl.includes('/search/') && !rUrl.includes('/updates') && !rUrl.includes('contentrecipe')) return;
-    try {
-      const body = await response.text();
-      if (body.length < 200) return;
-      const fc = body.trimStart()[0];
-      if (fc !== '{' && fc !== '[') return;
-      ingestBody(body, postsMap);
-    } catch (_) {}
-  };
-  page.on('response', onResponse);
+  const beforeCount = Object.keys(postsMap).length;
 
-  try {
-    for (const { url: searchUrl, label } of urlVariants) {
-      const beforeCount = Object.keys(postsMap).length;
-      log('Variant [' + label + '] navigating...');
-      await safeGoto(page, searchUrl);
+  for (const { url: variantUrl, label } of variants) {
+    log('[' + label + '] Navigating to: ' + variantUrl);
+    await safeGoto(page, variantUrl);
+    const currentUrl = page.url();
+    if (currentUrl.includes('/login') || currentUrl.includes('/authwall') || currentUrl.includes('chrome-error')) {
+      log('[WARN] [' + label + '] Redirected to login — skipping.');
+      continue;
+    }
+    log('[' + label + '] Landed on: ' + currentUrl);
 
-      // Wait for feed to render
-      let waited = 0;
-      while (waited < 12000) {
-        const scrollH = await page.evaluate(() => document.documentElement.scrollHeight);
-        const clientH = await page.evaluate(() => document.documentElement.clientHeight);
-        if (scrollH > clientH * 1.5) break;
-        await page.waitForTimeout(500);
-        waited += 500;
+    // Wait for any post content to appear (up to 12 seconds)
+    let contentReady = false;
+    const CONTENT_SELECTORS = [
+      'a[href*="feed/update/urn:li:"]',
+      '[data-urn*="urn:li:activity:"]',
+      '[data-urn*="urn:li:ugcPost:"]',
+      '.reusable-search__result-container',
+      '.occludable-update',
+    ];
+    const waitStart = Date.now();
+    while (Date.now() - waitStart < 12000) {
+      try {
+        for (const s of CONTENT_SELECTORS) {
+          const count = await page.evaluate((sel) => document.querySelectorAll(sel).length, s);
+          if (count > 0) { contentReady = true; log('[' + label + '] Content ready (' + count + ' via ' + s + ')'); break; }
+        }
+      } catch (_) {}
+      if (contentReady) break;
+      await page.waitForTimeout(1000);
+    }
+    if (!contentReady) log('[WARN] [' + label + '] No content detected — will attempt extraction anyway.');
+
+    // Scroll loop — patient, high-yield settings
+    const MAX_STEPS = 150;
+    const MIN_STEPS = 3;
+    const MAX_STALL = 15;   // more patience = more posts loaded
+    let step = 0, scrollStall = 0, postStall = 0, lastTop = -1, lastCount = Object.keys(postsMap).length;
+
+    while (step < MAX_STEPS) {
+      step++;
+
+      // Debug dump on step 2
+      if (step === 2) {
+        try {
+          const mainHtml = await page.evaluate(() => {
+            const main = document.querySelector('.scaffold-layout__main') || document.querySelector('main') || document.body;
+            return main.innerHTML;
+          });
+          require('fs').writeFileSync('debug-main-' + label + '.html', mainHtml);
+          log('[DEBUG] Dumped main HTML to debug-main-' + label + '.html');
+        } catch(e) {}
       }
 
-      // Scroll loop — dual stagnation tracking
-      const MAX_STEPS = 60;
-      const MIN_STEPS = 5;
-      const MAX_STALL = 5;
-      let step = 0, scrollStall = 0, postStall = 0, lastTop = -1, lastCount = Object.keys(postsMap).length;
-
-      while (step < MAX_STEPS) {
-        step++;
-        const scrollTop = await page.evaluate(() => {
-          const amount = Math.floor(window.innerHeight * 0.80);
-          window.scrollBy({ top: amount, behavior: 'instant' });
+      // Scroll
+      let scrollTop = lastTop;
+      try {
+        scrollTop = await page.evaluate(() => {
+          const amount = Math.floor(window.innerHeight * 0.75);
+          window.scrollBy({ top: amount, behavior: 'smooth' });
           const el = document.querySelector('.scaffold-layout__main')
-                  || document.querySelector('main')
-                  || document.querySelector('.scaffold-layout-container__main');
+            || document.querySelector('main')
+            || document.querySelector('.scaffold-layout-container__main');
           if (el && el.scrollHeight > el.clientHeight + 100) el.scrollTop += amount;
           document.body.scrollTop += amount;
           return Math.max(
@@ -687,66 +570,73 @@ async function scrapeKeyword(page, keyword, postsMap) {
             el ? Math.round(el.scrollTop) : 0
           );
         });
-
-        await page.waitForTimeout(2500 + Math.floor(Math.random() * 1500));
-
-        const domRecs = await page.evaluate(domExtractor);
-        for (const r of (Array.isArray(domRecs) ? domRecs : [])) mergeDOM(r, postsMap);
-
-        const total = Object.keys(postsMap).length;
-        log('[' + label + '] Step ' + step + ' | scroll=' + scrollTop + ' | posts=' + total + ' | sStall=' + scrollStall + ' pStall=' + postStall);
-
-        if (Math.abs(scrollTop - lastTop) < 60) scrollStall++; else { scrollStall = 0; lastTop = scrollTop; }
-        if (total === lastCount) postStall++;                   else { postStall   = 0; lastCount = total;   }
-
-        const atBottom = await page.evaluate(() => {
-          const el = document.querySelector('.scaffold-layout__main') || document.querySelector('main');
-          if (el && el.scrollHeight > el.clientHeight + 100) return (el.scrollTop + el.clientHeight) >= el.scrollHeight - 800;
-          const scrollY = window.scrollY || window.pageYOffset || 0;
-          return (scrollY + window.innerHeight) >= Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) - 800;
-        });
-
-        const stalled = step >= MIN_STEPS && (postStall >= MAX_STALL || scrollStall >= MAX_STALL || atBottom);
-        if (stalled) {
-          const reason = atBottom ? 'atBottom' : (postStall >= MAX_STALL ? 'pStall' : 'sStall');
-          const clicked = await page.evaluate(() => {
-            const btn = document.querySelector('.artdeco-pagination__button--next')
-                     || document.querySelector('button[aria-label="Next"]')
-                     || document.querySelector('button[aria-label="Go to next page"]')
-                     || Array.from(document.querySelectorAll('button')).find(b => (b.innerText||'').trim().toLowerCase() === 'next');
-            if (btn && !btn.disabled) { btn.click(); return true; }
-            return false;
-          });
-          if (clicked) {
-            log('[' + label + '] Next page (' + reason + ')');
-            scrollStall = 0; postStall = 0;
-            await page.waitForTimeout(5000);
-            continue;
-          }
-          log('[' + label + '] done (' + reason + ', no Next btn)');
-          break;
-        }
+      } catch (e) {
+        log('[WARN] Scroll failed (' + e.message.substring(0, 60) + '), skipping step.');
+        await page.waitForTimeout(2000);
+        continue;
       }
 
-      // Final DOM pass for this variant
-      await page.waitForTimeout(2000);
+      // Wait longer so LinkedIn has time to lazy-load new posts
+      await page.waitForTimeout(4000 + Math.floor(Math.random() * 2000));
+
+      // Extract posts
+      try {
+        const domRecs = await page.evaluate(domExtractor);
+        for (const r of (Array.isArray(domRecs) ? domRecs : [])) mergeDOM(r, postsMap);
+      } catch (e) {
+        log('[WARN] domExtractor failed (' + e.message.substring(0, 60) + '), skipping.');
+      }
+
+      const total = Object.keys(postsMap).length;
+      log('[' + label + '] Step ' + step + ' | scroll=' + scrollTop + ' | posts=' + total + ' | sStall=' + scrollStall + ' pStall=' + postStall);
+
+      if (Math.abs(scrollTop - lastTop) < 60) scrollStall++; else { scrollStall = 0; lastTop = scrollTop; }
+      if (total === lastCount) postStall++; else { postStall = 0; lastCount = total; }
+
+      // If stalled on posts, try clicking "Show more results" button before giving up
+      if (postStall > 0 && postStall % 3 === 0) {
+        try {
+          const clicked = await page.evaluate(() => {
+            const btns = [...document.querySelectorAll('button')];
+            const loadMore = btns.find(b => /(show more|load more|see more results)/i.test(b.innerText || ''));
+            if (loadMore) { loadMore.click(); return true; }
+            return false;
+          });
+          if (clicked) { log('[' + label + '] Clicked "show more" button.'); await page.waitForTimeout(3000); }
+        } catch (_) {}
+      }
+
+      let atBottom = false;
+      try {
+        atBottom = await page.evaluate(() => {
+          const el = document.querySelector('.scaffold-layout__main') || document.querySelector('main');
+          if (el && el.scrollHeight > el.clientHeight + 100) return (el.scrollTop + el.clientHeight) >= el.scrollHeight - 600;
+          const scrollY = window.scrollY || window.pageYOffset || 0;
+          return (scrollY + window.innerHeight) >= Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) - 600;
+        });
+      } catch (_) {}
+
+      const stalled = step >= MIN_STEPS && (postStall >= MAX_STALL || scrollStall >= MAX_STALL || atBottom);
+      if (stalled) {
+        log('[' + label + '] Done scrolling (stalled or at bottom).');
+        break;
+      }
+    }
+
+    // Final extraction pass
+    await page.waitForTimeout(2000);
+    try {
       const finalRecs = await page.evaluate(domExtractor);
       for (const r of (Array.isArray(finalRecs) ? finalRecs : [])) mergeDOM(r, postsMap);
+    } catch (_) {}
 
-      const afterCount = Object.keys(postsMap).length;
-      log('[' + label + '] +' + (afterCount - beforeCount) + ' new (total=' + afterCount + ')');
+    const variantCount = Object.keys(postsMap).length - beforeCount;
+    log('[' + label + '] Variant done: ' + Object.keys(postsMap).length + ' posts total (+' + variantCount + ' so far)');
+  } // end variants loop
 
-      // Skip remaining variants if we already have a strong yield
-      if (afterCount >= 25) { log('Good yield — skipping remaining variants.'); break; }
-      await page.waitForTimeout(2000);
-    }
-  } finally {
-    page.off('response', onResponse);
-  }
-
-  const count = Object.keys(postsMap).length;
-  log('Keyword "' + keyword + '" complete: ' + count + ' posts collected');
-  return count;
+  const afterCount = Object.keys(postsMap).length;
+  log('Keyword "' + keyword + '" complete: ' + afterCount + ' posts collected (+' + (afterCount - beforeCount) + ' new)');
+  return afterCount;
 }
 
 
@@ -765,7 +655,7 @@ function showNotification(title, msg) {
       $n.Dispose();
     `;
     execSync('powershell -WindowStyle Hidden -Command "' + ps.replace(/\n/g, ' ') + '"', { timeout: 10000 });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -805,7 +695,7 @@ function showNotification(title, msg) {
         const prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
         if (!prefs.profile) prefs.profile = {};
         prefs.profile.exit_type = 'Normal';
-        prefs.profile.crashed   = false;
+        prefs.profile.crashed = false;
         fs.writeFileSync(prefsPath, JSON.stringify(prefs));
         log('Chrome exit_type set to Normal — restore dialog suppressed.');
       } catch (e) {
@@ -825,14 +715,14 @@ function showNotification(title, msg) {
       // cookie invalidation, we use a dedicated scraper profile directory but launch
       // it via spawn() to maintain 100% stealth (no Playwright automation flags).
       const { spawn } = require('child_process');
-      const SCRAPER_PROFILE = path.join(os.homedir(), '.nexora_scraper', 'stealth_profile');
+      const SCRAPER_PROFILE = path.join(os.homedir(), '.nexora_scraper', profileName === 'profile' ? 'stealth_profile' : profileName + '_stealth');
       fs.mkdirSync(SCRAPER_PROFILE, { recursive: true });
 
       // Find Chrome exe
       const chromePaths = [
-        path.join(process.env['ProgramFiles']      || 'C:\\Program Files',       'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
         path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
-        path.join(process.env['LOCALAPPDATA']      || '',                         'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(process.env['LOCALAPPDATA'] || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
       ];
       const chromeExe = chromePaths.find(p => fs.existsSync(p));
       if (!chromeExe) throw new Error('Google Chrome not found. Please install Chrome.');
@@ -844,9 +734,9 @@ function showNotification(title, msg) {
           const prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
           if (!prefs.profile) prefs.profile = {};
           prefs.profile.exit_type = 'Normal';
-          prefs.profile.crashed   = false;
+          prefs.profile.crashed = false;
           fs.writeFileSync(prefsPath, JSON.stringify(prefs));
-        } catch (_) {}
+        } catch (_) { }
       }
 
       log('Launching isolated stealth browser...');
@@ -877,7 +767,7 @@ function showNotification(title, msg) {
             }).on('error', rej);
           });
           if (txt.includes('webSocketDebuggerUrl') || txt.includes('Browser')) { cdpReady = true; break; }
-        } catch (_) {}
+        } catch (_) { }
       }
       if (!cdpReady) throw new Error('Could not connect to browser engine within 15s.');
 
@@ -916,7 +806,7 @@ function showNotification(title, msg) {
       await new Promise(r => setTimeout(r, 1000));
       const pages = browser.pages();
       page = pages.find(p => { const u = p.url(); return u && !u.startsWith('about:') && !u.startsWith('chrome://'); })
-             || await browser.newPage();
+        || await browser.newPage();
     }
 
     // Stealth: remove webdriver flag
@@ -927,6 +817,94 @@ function showNotification(title, msg) {
 
     // Check login
     await ensureLoggedIn(page);
+
+    // ── Network Extraction (Handles Obfuscated UI) ───────────────────────────
+    let activePostsMap = null;
+    page.on('response', async (res) => {
+      if (!activePostsMap) return;
+      try {
+        const url = res.url();
+        if (!url.includes('/voyager/api/') && !url.includes('/graphql') && !url.includes('/search/')) return;
+        const body = await res.text();
+        if (!body || body.length < 200) return;
+        const fc = body.trimStart()[0];
+        if (fc !== '{' && fc !== '[') return;
+        let json;
+        try { json = JSON.parse(body); } catch (_) { return; }
+
+        function pe(v) { return typeof v === 'number' ? v : 0; }
+        function walk(obj) {
+          if (!obj || typeof obj !== 'object') return;
+          let rawUrn = String(obj.updateUrn || obj.entityUrn || obj.urn || '');
+          
+          // Upgrade ugcPost to activity if possible to prevent "Post cannot be displayed"
+          if (rawUrn.includes('ugcPost')) {
+            const str = JSON.stringify(obj);
+            const actMatch = str.match(/urn:li:activity:([0-9]{15,25})/);
+            if (actMatch) rawUrn = actMatch[0];
+          }
+
+          const m = rawUrn.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+          if (m) {
+            const urn = 'urn:li:' + m[1] + ':' + m[2];
+            let bestText = '';
+            function extractText(o) {
+              if (!o || typeof o !== 'object') return;
+              if (typeof o.text === 'string' && o.text.length > bestText.length) bestText = o.text;
+              if (typeof o.text?.text === 'string' && o.text.text.length > bestText.length) bestText = o.text.text;
+              if (Array.isArray(o)) o.forEach(extractText);
+              else Object.values(o).forEach(extractText);
+            }
+            extractText(obj);
+            const text = bestText.substring(0, 5000);
+
+            let bestAuthor = '';
+            function extractAuthor(o) {
+              if (!o || typeof o !== 'object') return;
+              const name = o.actor?.name?.text || o.actor?.nameV2?.text || o.actor?.fullName;
+              if (typeof name === 'string' && name.length > bestAuthor.length) bestAuthor = name;
+              if (Array.isArray(o)) o.forEach(extractAuthor);
+              else Object.values(o).forEach(extractAuthor);
+            }
+            extractAuthor(obj);
+            const author = bestAuthor.substring(0, 100);
+            const soc    = obj.socialDetail || obj.totalSocialActivityCounts || {};
+            
+            if (!activePostsMap[urn]) {
+              let url = 'https://www.linkedin.com/feed/update/' + urn;
+              if (urn.includes('ugcPost')) {
+                const id = urn.split(':').pop();
+                url = 'https://www.linkedin.com/posts/' + id;
+              }
+              activePostsMap[urn] = { 
+                canonicalUrn: urn, 
+                postUrl: url,
+                source: 'network' 
+              };
+            }
+            const p = activePostsMap[urn];
+            if (text && !p.postText) p.postText = text;
+            if (author && !p.authorName) p.authorName = author;
+            
+            // Detect polls
+            if (JSON.stringify(obj).includes('"voteCount"') || JSON.stringify(obj).includes('"pollId"')) {
+              p.isPoll = true;
+            }
+            
+            const likes = pe(soc.numLikes != null ? soc.numLikes : obj.numLikes);
+            const comments = pe(soc.numComments != null ? soc.numComments : obj.numComments);
+            if (likes > 0) p.likes = Math.max(p.likes || 0, likes);
+            if (comments > 0) p.comments = Math.max(p.comments || 0, comments);
+          }
+          if (Array.isArray(obj)) { for (const x of obj) walk(x); }
+          else { for (const k in obj) walk(obj[k]); }
+        }
+        walk(json);
+      } catch (e) {
+        // ignore
+      }
+    });
+
 
     // ── Dynamic user resolution ──────────────────────────────────────────────
     // Read the li_at cookie from the live LinkedIn session, then ask the
@@ -964,25 +942,28 @@ function showNotification(title, msg) {
       throw new Error('Could not determine userId. Link your LinkedIn session in Dashboard → Settings, or add userId to config.json as a fallback.');
     }
     log('Active userId: ' + userId);
-
     // Fetch keywords
     log('');
     log('Fetching keywords from dashboard...');
-    const keywords = await fetchKeywords(dashboardUrl, userId);
+    let keywords = await fetchKeywords(dashboardUrl, userId);
+    keywords = ['reactjs']; // TEST OVERRIDE
     log('Keywords: ' + keywords.join(', '));
 
     // Scrape each keyword
     let totalSaved = 0;
+    const runSeenUrns = new Set(); // Track URNs across all keywords to prevent duplicates
     for (let i = 0; i < keywords.length; i++) {
       const kw = keywords[i];
       log('');
       log('Keyword ' + (i + 1) + ' of ' + keywords.length);
 
       const postsMap = {};
+      activePostsMap = postsMap;
       await scrapeKeyword(page, kw, postsMap);
+      activePostsMap = null;
 
       const allPosts = Object.values(postsMap);
-      const posts    = filterAndRankPosts(allPosts);
+      const posts = filterAndRankPosts(allPosts, runSeenUrns);
       log('Engagement filter: ' + allPosts.length + ' raw → ' + posts.length + ' qualified posts');
       if (posts.length > 0) {
         try {
@@ -992,7 +973,7 @@ function showNotification(title, msg) {
           log('[ERROR] Failed to save posts: ' + e.message);
         }
       } else {
-        log('No qualifying posts for keyword: ' + kw + ' (all had zero engagement)');
+        log('No qualifying posts for keyword: ' + kw);
       }
 
       // Pause between keywords to look human
@@ -1020,6 +1001,6 @@ function showNotification(title, msg) {
     console.error('  • Run install.bat again if this is a fresh install');
     process.exitCode = 1;
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    if (browser) await browser.close().catch(() => { });
   }
 })();

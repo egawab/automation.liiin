@@ -1,1 +1,0 @@
-const { PrismaClient } = require('@prisma/client'); const prisma = new PrismaClient(); prisma.savedPost.findMany({ where: { keyword: 'anti' }, select: { keyword: true, likes: true, comments: true } }).then(posts => { console.log(posts); prisma.$disconnect(); });

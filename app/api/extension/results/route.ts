@@ -32,7 +32,12 @@ function normalizeUrn(raw: string): string | null {
 function normalizeUrl(u: string): string {
   if (!u) return '';
   const m1 = u.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
-  if (m1) return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
+  if (m1) {
+    if (m1[1] === 'ugcPost') {
+      return `https://www.linkedin.com/posts/${m1[2]}`;
+    }
+    return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
+  }
   const m2 = u.match(/activity-(\d{10,25})/i);
   if (m2) return `https://www.linkedin.com/feed/update/urn:li:activity:${m2[1]}`;
   return u.split('?')[0].replace(/\/$/, '');
