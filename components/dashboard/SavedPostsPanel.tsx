@@ -1,12 +1,23 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import {
   ExternalLink, Trash2, Search, Target,
-  Calendar, RefreshCw, Copy, Check, AlertCircle,
+  Clock, RefreshCw, Copy, Check, AlertCircle,
 } from 'lucide-react';
+
+function relativeTime(dateStr: string): string {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1)  return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffH = Math.floor(diffMins / 60);
+  if (diffH < 24)    return `${diffH}h ago`;
+  const diffD = Math.floor(diffH / 24);
+  return `${diffD}d ago`;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface SavedPost {
@@ -56,10 +67,10 @@ const UrlRow = memo(function UrlRow({
         <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse" />
       )}
 
-      {/* Date badge */}
-      <span className="shrink-0 text-[10px] text-tertiary hidden sm:flex items-center gap-1">
-        <Calendar className="w-3 h-3" />
-        {new Date(post.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+      {/* Relative time */}
+      <span className="shrink-0 text-[10px] text-tertiary hidden sm:flex items-center gap-1 min-w-[52px]">
+        <Clock className="w-3 h-3" />
+        {relativeTime(post.savedAt)}
       </span>
 
       {/* URL */}
@@ -214,7 +225,14 @@ export function SavedPostsPanel() {
     (acc[kw] ??= []).push(p);
     return acc;
   }, {});
-  const keywords = Object.keys(grouped).sort();
+
+  // Sort keyword groups by their most-recently saved URL (newest first).
+  // This ensures a freshly completed run always floats to the top.
+  const keywords = Object.keys(grouped).sort((a, b) => {
+    const latestA = Math.max(...grouped[a].map(p => new Date(p.savedAt).getTime()));
+    const latestB = Math.max(...grouped[b].map(p => new Date(p.savedAt).getTime()));
+    return latestB - latestA;
+  });
 
   // ── Stats ───────────────────────────────────────────────────────────────────
   const totalUrls  = posts.length;
@@ -307,12 +325,19 @@ export function SavedPostsPanel() {
 
       ) : (
         <div className="space-y-4 pb-12">
-          {keywords.map(keyword => {
+          {keywords.map((keyword, idx) => {
             const kwPosts = grouped[keyword];
+            const latestSavedAt = kwPosts.reduce((mx, p) => {
+              const t = new Date(p.savedAt).getTime();
+              return t > mx ? t : mx;
+            }, 0);
+            const isNewest = idx === 0;
             return (
               <div
                 key={keyword}
-                className="rounded-xl border border-subtle overflow-hidden"
+                className={`rounded-xl overflow-hidden ${
+                  isNewest ? 'border border-apple-blue/40' : 'border border-subtle'
+                }`}
                 style={{ background: 'var(--dash-surface-1)' }}
               >
                 {/* Keyword header */}
@@ -323,11 +348,19 @@ export function SavedPostsPanel() {
                   <Target className="w-4 h-4 text-apple-blue shrink-0" />
                   <span className="text-sm font-bold text-primary">{keyword}</span>
                   <Badge variant="info" size="sm">{kwPosts.length} links</Badge>
+                  {isNewest && (
+                    <Badge variant="primary" size="sm">Latest</Badge>
+                  )}
                   {kwPosts.some(p => !p.visited) && (
                     <Badge variant="error" size="sm" dot>
                       {kwPosts.filter(p => !p.visited).length} new
                     </Badge>
                   )}
+                  {/* Recency label */}
+                  <span className="text-[10px] text-tertiary flex items-center gap-1 ml-1">
+                    <Clock className="w-3 h-3" />
+                    {relativeTime(new Date(latestSavedAt).toISOString())}
+                  </span>
                   <div className="ml-auto">
                     <button
                       onClick={() => copyAllForKeyword(keyword, kwPosts)}
