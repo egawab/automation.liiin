@@ -55,13 +55,35 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { keyword, posts } = body;
+    const { keyword, posts, source } = body;
 
     if (!posts || !Array.isArray(posts)) {
       return setCorsHeaders(NextResponse.json({ error: 'Invalid payload: posts array required' }, { status: 400 }));
     }
 
     const safeKeyword = sanitize(keyword || 'auto', 50);
+
+    // ── SEARCH-ONLY: links only ───────────────────────────────────────────────
+    if (source === 'search_only') {
+      let createdCount = 0;
+      await Promise.allSettled(posts.map(async (post: any) => {
+        const urn = normalizeUrn(post.canonicalUrn || post.url || '');
+        if (!urn) return;
+        const safeUrl = normalizeUrl(sanitize(post.url || '', 2000));
+        const lk = post.likes != null ? BigInt(Math.min(Math.abs(Number(post.likes)), 10_000_000)) : null;
+        const cm = post.comments != null ? BigInt(Math.min(Math.abs(Number(post.comments)), 10_000_000)) : null;
+        try {
+          await prisma.savedPost.create({
+            data: { userId, canonicalUrn: urn, postUrl: safeUrl, keyword: safeKeyword,
+                    postAuthor: null, postPreview: null, likes: lk, comments: cm, visited: false },
+          });
+          createdCount++;
+        } catch (e: any) { if (e?.code !== 'P2002') throw e; }
+      }));
+      return setCorsHeaders(NextResponse.json({ success: true, createdCount, source: 'search_only' }));
+    }
+    // ── END SEARCH-ONLY ──────────────────────────────────────────────────────
+
     const ENGAGEMENT_MAX = BigInt(10_000_000);
 
     // Log the action

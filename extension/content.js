@@ -11,6 +11,42 @@
   if (window.__nexoraRunId === runId) { console.warn('[CS] Already running runId=' + runId); return; }
   window.__nexoraRunId = runId;
 
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const isActive = () => window.__nexoraRunId === runId;
+  const canSend  = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.sendMessage;
+
+  // SEARCH-ONLY MODE
+  if (cfg.searchOnlyMode) {
+    const MIN_ENG = 10, MAX_ENG = 100;
+    const lm = {};
+    function pe2(s){if(s==null)return 0;const x=String(s).toUpperCase().replace(/,/g,"");const n=parseFloat((x.match(/[0-9.]+/)||[])[0]);if(isNaN(n))return 0;if(x.includes("K"))return Math.floor(n*1000);if(x.includes("M"))return Math.floor(n*1000000);return Math.floor(n);}
+    function xUrn(s){const m=String(s||"").match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m)return "urn:li:"+m[1]+":"+m[2];const p=String(s||"").match(/activity-([0-9]{10,25})/i);if(p)return "urn:li:activity:"+p[1];return "";}
+    function urnUrl(urn){const m=urn.match(/urn:li:(ugcPost|activity|share):([0-9]+)/);if(!m)return "";return m[1]==="ugcPost"?"https://www.linkedin.com/posts/"+m[2]:"https://www.linkedin.com/feed/update/"+urn;}
+    function addUrn(urn,lk,cm){if(!urn)return;if(!lm[urn])lm[urn]={url:urnUrl(urn),likes:0,comments:0};lm[urn].likes=Math.max(lm[urn].likes,lk||0);lm[urn].comments=Math.max(lm[urn].comments,cm||0);}
+    function ingestSO(body){let j;try{j=JSON.parse(body);}catch(_){return;}
+      function w(o){if(!o||typeof o!=="object")return;const raw=String(o.entityUrn||o.updateUrn||o.urn||"");const m=raw.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);if(m){const u="urn:li:"+m[1]+":"+m[2];const soc=o.socialDetail||o.totalSocialActivityCounts||{};addUrn(u,pe2(soc.numLikes??o.numLikes),pe2(soc.numComments??o.numComments));}if(Array.isArray(o)){for(const i of o)w(i);}else{for(const k of Object.keys(o)){if(typeof o[k]==="object"&&k!=="paging")w(o[k]);}}}w(j);}
+    function domSO(){["a[href*='feed/update/urn:li:']","a[href*='/posts/']"].forEach(sel=>{Array.from(document.querySelectorAll(sel)).forEach(a=>{const u=xUrn(a.href);if(u)addUrn(u,0,0);});});["data-urn","data-activity-urn","data-entity-urn"].forEach(at=>{Array.from(document.querySelectorAll("["+at+"]")).forEach(el=>{const u=xUrn(el.getAttribute(at)||'');if(u)addUrn(u,0,0);});});}
+    function onNet(e){const{body}=e.detail||{};if(!body||body.length<100||!isActive())return;const fc=body.trimStart()[0];if(fc!=="{"&&fc!=="[")return;ingestSO(body);}
+    if(window.__nexoraNetHandler)window.removeEventListener("__nexora_net__",window.__nexoraNetHandler);
+    window.__nexoraNetHandler=onNet;window.addEventListener("__nexora_net__",onNet);
+    function getEl(){const cs=[document.querySelector(".scaffold-layout__main"),document.querySelector("main"),document.scrollingElement,document.documentElement];for(const e of cs)if(e&&e.scrollHeight>e.clientHeight+100)return e;return document.documentElement;}
+    function doScroll(){const el=getEl();el.scrollTop+=Math.floor(el.clientHeight*0.85);el.dispatchEvent(new Event("scroll",{bubbles:true}));window.dispatchEvent(new Event("scroll",{bubbles:true}));return el.scrollTop;}
+    function atBot(){const el=getEl();if(el.scrollHeight<el.clientHeight*1.3)return false;return(el.scrollTop+el.clientHeight)>=el.scrollHeight-600;}
+    await sleep(2500);
+    for(let w2=0;w2<12000&&isActive();w2+=500){if(getEl().scrollHeight>getEl().clientHeight*1.5)break;await sleep(500);}
+    if(!isActive()){window.__nexoraRunId=null;return;}
+    let step=0,noP=0,lastT=-1;
+    while(step<40&&isActive()){step++;const st=doScroll();await sleep(2400+Math.floor(Math.random()*900));if(!isActive())break;if(Math.abs(st-lastT)>60){noP=0;lastT=st;}else noP++;domSO();console.log("[CS-SO] step="+step+" links="+Object.keys(lm).length);if(step>=5&&(noP>=7||atBot()))break;}
+    if(!isActive()){window.__nexoraRunId=null;return;}
+    await sleep(2000);domSO();
+    const qualified=Object.entries(lm).filter(([,p])=>{const t=(p.likes||0)+(p.comments||0);return t>=MIN_ENG&&t<=MAX_ENG;}).map(([urn,p])=>({canonicalUrn:urn,url:p.url,postAuthor:null,postPreview:null,likes:p.likes,comments:p.comments,source:"search_only"}));
+    console.log("[CS-SO] total="+Object.keys(lm).length+" qualified="+qualified.length);
+    window.removeEventListener("__nexora_net__",onNet);window.__nexoraNetHandler=null;window.__nexoraRunId=null;
+    if(canSend())chrome.runtime.sendMessage({action:"FLUSH_POSTS",posts:qualified,runId,commentedUrns:[]}).catch(()=>{});
+    return;
+  }
+  // END SEARCH-ONLY
+
   console.log('[CS] v8 start kw="' + keyword + '" runId=' + runId + ' (' + (kwIndex + 1) + '/' + totalKeywords + ')');
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -369,6 +405,96 @@
   const finalRecs = extractDOM();
   for (const rec of finalRecs) mergeDOM(rec.urn, rec.stableKey, rec);
 
+  // ── Comment Automation ─────────────────────────────────────────────────────
+  async function performComments() {
+    if (!cfg.cycleComments || cfg.cycleComments.length === 0) return [];
+    console.log('[CS] Starting comment campaign. Comments:', cfg.cycleComments);
+    const commentedUrns = cfg.commentedUrns || [];
+    
+    let allPosts = Object.values(postsMap)
+      .filter(p => p.canonicalUrn && !commentedUrns.includes(p.canonicalUrn))
+      .sort((a, b) => ((b.likes || 0) + (b.comments || 0)) - ((a.likes || 0) + (a.comments || 0)));
+      
+    const targetCount = cfg.cycleComments.length;
+    const selectedPosts = [];
+    const domContainers = [];
+    
+    for (const p of allPosts) {
+      if (selectedPosts.length >= targetCount) break;
+      const aid = p.canonicalUrn.split(':').pop();
+      const els = Array.from(document.querySelectorAll(`[data-urn*=":${aid}"], [data-entity-urn*=":${aid}"]`));
+      let container = null;
+      for (let c of els) {
+        for (let i=0; i<35; i++) {
+          if (!c || c === document.body) break;
+          const len = (c.innerText || '').length;
+          if (len > 20 && c.tagName === 'LI') { container = c; break; }
+          c = c.parentElement;
+        }
+        if (container) break;
+      }
+      if (container) {
+        selectedPosts.push(p);
+        domContainers.push(container);
+      }
+    }
+    
+    console.log(`[CS] Selected ${selectedPosts.length} top reach posts for commenting.`);
+    const newCommented = [];
+    
+    for (let i = 0; i < selectedPosts.length; i++) {
+      const p = selectedPosts[i];
+      const container = domContainers[i];
+      const commentText = cfg.cycleComments[i]?.text;
+      if (!commentText) continue;
+      
+      try {
+        console.log(`[CS] Commenting on ${p.canonicalUrn} (Likes: ${p.likes}, Comments: ${p.comments})`);
+        container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await sleep(1500);
+        
+        let editor = container.querySelector('div.ql-editor, div[role="textbox"]');
+        if (!editor) {
+           const btns = Array.from(container.querySelectorAll('button'));
+           const commentBtn = btns.find(b => {
+              const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+              return aria.includes('comment') || aria.includes('تعليق');
+           });
+           if (commentBtn) {
+              commentBtn.click();
+              await sleep(2500);
+              editor = container.querySelector('div.ql-editor, div[role="textbox"]');
+           }
+        }
+        
+        if (!editor) { console.warn('[CS] Editor not found for', p.canonicalUrn); continue; }
+        
+        editor.focus();
+        await sleep(500);
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+        document.execCommand('insertText', false, commentText);
+        
+        await sleep(1500);
+        
+        const submitBtn = container.querySelector('button.comments-comment-box__submit-button');
+        if (submitBtn && !submitBtn.disabled) {
+           submitBtn.click();
+           newCommented.push(p.canonicalUrn);
+           console.log(`[CS] Comment successfully posted on ${p.canonicalUrn}`);
+           await sleep(4000); 
+        } else {
+           console.warn('[CS] Submit button not found or disabled for', p.canonicalUrn);
+        }
+      } catch (e) {
+        console.error('[CS] Error commenting on', p.canonicalUrn, e);
+      }
+    }
+    return newCommented;
+  }
+
+  const newlyCommentedUrns = await performComments();
+
   // ── Flush ──────────────────────────────────────────────────────────────────
   window.removeEventListener('__nexora_net__', onNetEvent);
   window.__nexoraNetHandler = null;
@@ -382,7 +508,7 @@
 
   if (canSend()) {
     // Include runId so background can reject stale sessions
-    chrome.runtime.sendMessage({ action: 'FLUSH_POSTS', posts, runId })
+    chrome.runtime.sendMessage({ action: 'FLUSH_POSTS', posts, runId, commentedUrns: newlyCommentedUrns })
       .then(r  => console.log('[CS] FLUSH_POSTS ACK:', JSON.stringify(r)))
       .catch(e => console.warn('[CS] FLUSH_POSTS send failed:', e?.message));
   }

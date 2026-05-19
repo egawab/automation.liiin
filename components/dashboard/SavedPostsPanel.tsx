@@ -6,7 +6,7 @@ import Badge from '@/components/ui/Badge';
 import {
   ExternalLink, Trash2, Eye, Filter, Search,
   ThumbsUp, MessageCircle, BarChart2, Target,
-  Calendar, ChevronDown, ChevronRight, X, RefreshCw
+  Calendar, ChevronDown, ChevronRight, X, RefreshCw, Link2
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -368,8 +368,18 @@ export function SavedPostsPanel() {
     return true;
   });
 
-  // Group by keyword (preserving insertion order)
-  const grouped = filtered.reduce<Record<string, SavedPost[]>>((acc, post) => {
+  // Split: links-only vs full posts
+  const linksOnly = filtered.filter(p => p.postAuthor === null && p.postPreview === null);
+  const fullPosts  = filtered.filter(p => p.postAuthor !== null || p.postPreview !== null);
+
+  // Group links-only by keyword
+  const linksGrouped = linksOnly.reduce<Record<string, SavedPost[]>>((acc, post) => {
+    (acc[post.keyword] ??= []).push(post);
+    return acc;
+  }, {});
+
+  // Group full posts by keyword
+  const grouped = fullPosts.reduce<Record<string, SavedPost[]>>((acc, post) => {
     (acc[post.keyword] ??= []).push(post);
     return acc;
   }, {});
@@ -380,6 +390,7 @@ export function SavedPostsPanel() {
   const totalShown  = filtered.length;
   const freshLeads  = filtered.filter(p => !p.visited).length;
   const kwCount     = new Set(posts.map(p => p.keyword)).size;
+  const linksKws    = Object.keys(linksGrouped);
 
   return (
     <div className="space-y-6">
@@ -493,7 +504,60 @@ export function SavedPostsPanel() {
           </p>
         </div>
       ) : (
-        <div className="space-y-4 pb-12">
+        <div className="space-y-6 pb-12">
+
+          {/* ── SEARCH LINKS SECTION ── */}
+          {linksKws.length > 0 && (
+            <div className="rounded-xl border border-apple-blue/30 overflow-hidden" style={{background:'var(--dash-surface-1)'}}>
+              <div className="px-5 py-3 flex items-center gap-3" style={{background:'var(--dash-surface-2)',borderBottom:'1px solid var(--dash-border)'}}>
+                <Link2 className="w-4 h-4 text-apple-blue" />
+                <span className="text-sm font-bold text-primary">Search Links</span>
+                <Badge variant="info" size="sm">{linksOnly.length} links</Badge>
+              </div>
+              <div className="divide-y" style={{divideColor:'var(--dash-border)'}}>
+                {linksKws.map(kw => {
+                  const kwLinks = linksGrouped[kw];
+                  return (
+                    <div key={kw} className="p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Target className="w-3.5 h-3.5 text-apple-blue" />
+                        <span className="text-xs font-bold text-primary uppercase tracking-wider">{kw}</span>
+                        <Badge variant="neutral" size="sm">{kwLinks.length} links</Badge>
+                      </div>
+                      <div className="space-y-1.5">
+                        {kwLinks.map(post => (
+                          <div key={post.id} className="flex items-center gap-2 px-3 py-2 rounded-lg group transition-colors" style={{background:'var(--dash-surface-2)'}}>
+                            <ExternalLink className="w-3.5 h-3.5 text-apple-blue shrink-0" />
+                            <span className="text-xs text-secondary font-mono truncate flex-1" title={post.postUrl}>
+                              {post.postUrl || '—'}
+                            </span>
+                            {post.likes != null && (
+                              <span className="text-xs text-tertiary shrink-0">👍 {Number(post.likes)}</span>
+                            )}
+                            <button
+                              onClick={() => { window.open(post.postUrl, '_blank', 'noopener,noreferrer'); markVisited(post.id); }}
+                              className="shrink-0 px-3 py-1 rounded-md text-xs font-semibold text-white transition-opacity opacity-80 hover:opacity-100"
+                              style={{background:'var(--apple-blue,#0a84ff)'}}
+                            >
+                              Open
+                            </button>
+                            <button
+                              onClick={() => deletePost(post.id)}
+                              className="shrink-0 p-1 text-tertiary hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── FULL POSTS CARDS ── */}
           {keywords.map(keyword => (
             <KeywordGroup
               key={keyword}

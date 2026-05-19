@@ -53,6 +53,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (canSend()) {
             chrome.runtime.sendMessage({ action: 'GET_STATUS' }, (resp) => {
                 if (chrome.runtime.lastError || !resp) return;
+                
+                const cCom = document.getElementById('countComments');
+                const cCyc = document.getElementById('countCycles');
+                if (cCom) cCom.textContent = resp.totalCommentsPosted || 0;
+                if (cCyc) cCyc.textContent = `${(resp.cycleIndex || 0) + (['RUNNING','STARTING'].includes(resp.state) ? 1 : 0)}/${resp.targetCycles || 1}`;
+                
                 if (resp.running && resp.keyword) {
                     setRunning(resp.keyword);
                     statusSub.textContent = `⚙️ ${resp.state} | Saved: ${resp.totalSaved}`;

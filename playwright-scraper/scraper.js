@@ -82,11 +82,15 @@ function domExtractor() {
   
   function parseNum(s) {
     if (!s) return 0;
-    const x = String(s).toUpperCase().replace(/,/g, '');
+    let x = String(s).toUpperCase().replace(/,/g, '');
+    const arabicNumbers = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+    for (let i = 0; i < arabicNumbers.length; i++) {
+      x = x.replace(new RegExp(arabicNumbers[i], 'g'), String(i));
+    }
     const n = parseFloat((x.match(/[0-9.]+/) || [])[0]);
     if (isNaN(n)) return 0;
-    if (x.includes('K')) return Math.floor(n * 1000);
-    if (x.includes('M')) return Math.floor(n * 1000000);
+    if (x.includes('K') || x.includes('ألف')) return Math.floor(n * 1000);
+    if (x.includes('M') || x.includes('مليون')) return Math.floor(n * 1000000);
     return Math.floor(n);
   }
 
@@ -95,20 +99,20 @@ function domExtractor() {
     // Strategy 1: aria-label on reaction/comment buttons
     card.querySelectorAll('[aria-label]').forEach(el => {
       const a = (el.getAttribute('aria-label') || '').toLowerCase();
-      if (/\d/.test(a)) {
-        if (/(reaction|like|reacted)/i.test(a)) likes = Math.max(likes, parseNum(a));
-        if (/comment/i.test(a)) comments = Math.max(comments, parseNum(a));
-        if (/vote/i.test(a)) isPoll = true;
+      if (/\d/.test(a) || /[٠-٩]/.test(a)) {
+        if (/(reaction|like|reacted|إعجاب|تفاعل)/i.test(a)) likes = Math.max(likes, parseNum(a));
+        if (/(comment|تعليق)/i.test(a)) comments = Math.max(comments, parseNum(a));
+        if (/(vote|تصويت)/i.test(a)) isPoll = true;
       }
     });
     // Strategy 2: text inside spans/buttons that contains engagement numbers
     if (likes === 0 && comments === 0) {
       const rawText = (card.innerText || '');
-      const likeMatch = rawText.match(/([\d,.]+[KkMm]?)\s*(Like|like|Reaction|reaction|Reacted|reacted)s?/);
+      const likeMatch = rawText.match(/([\d,.]+[KkMm]?|[٠-٩,.]+[KkMm]?)\s*(Like|like|Reaction|reaction|Reacted|reacted|إعجاب|تفاعل)s?/);
       if (likeMatch) likes = parseNum(likeMatch[1]);
-      const commentMatch = rawText.match(/([\d,.]+[KkMm]?)\s*(Comment|comment)s?/);
+      const commentMatch = rawText.match(/([\d,.]+[KkMm]?|[٠-٩,.]+[KkMm]?)\s*(Comment|comment|تعليق)s?/);
       if (commentMatch) comments = parseNum(commentMatch[1]);
-      if (/vote/i.test(rawText)) isPoll = true;
+      if (/(vote|تصويت)/i.test(rawText)) isPoll = true;
     }
     return { likes, comments, isPoll };
   }
@@ -876,14 +880,13 @@ function showNotification(title, msg) {
             }
             extractAuthor(obj);
             const author = bestAuthor.substring(0, 100);
-            const soc    = obj.socialDetail || obj.totalSocialActivityCounts || {};
+            const soc    = obj.socialDetail || {};
+            const activityCounts = soc.totalSocialActivityCounts || obj.totalSocialActivityCounts || obj || {};
             
             if (!activePostsMap[urn]) {
+              // Always use the canonical feed/update format because /posts/{id} can fail
+              // for ugcPosts if they don't have a corresponding activity ID.
               let url = 'https://www.linkedin.com/feed/update/' + urn;
-              if (urn.includes('ugcPost')) {
-                const id = urn.split(':').pop();
-                url = 'https://www.linkedin.com/posts/' + id;
-              }
               activePostsMap[urn] = { 
                 canonicalUrn: urn, 
                 postUrl: url,
@@ -899,8 +902,8 @@ function showNotification(title, msg) {
               p.isPoll = true;
             }
             
-            const likes = pe(soc.numLikes != null ? soc.numLikes : obj.numLikes);
-            const comments = pe(soc.numComments != null ? soc.numComments : obj.numComments);
+            const likes = pe(activityCounts.numLikes);
+            const comments = pe(activityCounts.numComments);
             if (likes > 0) p.likes = Math.max(p.likes || 0, likes);
             if (comments > 0) p.comments = Math.max(p.comments || 0, comments);
           }
@@ -954,7 +957,6 @@ function showNotification(title, msg) {
     log('');
     log('Fetching keywords from dashboard...');
     let keywords = await fetchKeywords(dashboardUrl, userId);
-    keywords = ['python developer']; // TEST OVERRIDE
     log('Keywords: ' + keywords.join(', '));
 
     // Scrape each keyword

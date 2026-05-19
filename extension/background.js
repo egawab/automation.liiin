@@ -5,7 +5,7 @@ console.log('[BG] Nexora v8.1 loaded');
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const S = {
-  state: 'IDLE',      // IDLE | STARTING | RUNNING | DONE
+  state: 'IDLE',      // IDLE | STARTING | RUNNING | WAITING | DONE
   tabId: null,
   runId: 0,           // incremented each session; content.js checks this to self-abort
   totalSaved: 0,
@@ -13,6 +13,10 @@ const S = {
   userId: '',
   keywords: [],
   kwIndex: 0,
+  jobsData: null,
+  cycleIndex: 0,
+  commentedUrns: [],
+  totalCommentsPosted: 0,
 };
 // NOTE: STARTING is a new intermediate state that blocks duplicate STARTs during
 // the async setup phase (fetchKeywords, resolveLinkedInTab). This closes the
@@ -21,9 +25,17 @@ const S = {
 // ── Keep-alive (service worker won't go idle during a session) ────────────────
 chrome.alarms.create('nexora_hb', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener(alarm => {
-  if (alarm.name !== 'nexora_hb') return;
-  if (S.state === 'RUNNING' || S.state === 'STARTING')
-    console.log('[BG] hb state=' + S.state + ' saved=' + S.totalSaved + ' kw=' + (S.keywords[S.kwIndex] || ''));
+  if (alarm.name === 'nexora_hb') {
+    if (S.state === 'RUNNING' || S.state === 'STARTING' || S.state === 'WAITING')
+      console.log('[BG] hb state=' + S.state + ' saved=' + S.totalSaved + ' kw=' + (S.keywords[S.kwIndex] || ''));
+  } else if (alarm.name.startsWith('nexora_cycle_')) {
+    const rId = parseInt(alarm.name.split('_').pop(), 10);
+    if (rId === S.runId && S.state === 'WAITING') {
+      S.state = 'RUNNING';
+      console.log('[BG] Waking up from cycle wait for runId=' + rId);
+      runKeyword().catch(e => console.error('[BG] runKeyword post-alarm:', e.message));
+    }
+  }
 });
 
 // ── Single message handler ────────────────────────────────────────────────────
@@ -74,20 +86,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     (async () => {
       const posts = msg.posts || [];
-      console.log('[BG] FLUSH_POSTS count=' + posts.length + ' kw=' + (S.keywords[S.kwIndex] || '') + ' runId=' + S.runId);
+      const newCommented = msg.commentedUrns || [];
+      if (newCommented.length) {
+        S.commentedUrns.push(...newCommented);
+        S.totalCommentsPosted += newCommented.length;
+      }
+      console.log('[BG] FLUSH_POSTS count=' + posts.length + ' comments=' + newCommented.length + ' kw=' + (S.keywords[S.kwIndex] || '') + ' runId=' + S.runId);
       try { await pushToAPI(posts); } catch (e) { console.warn('[BG] API flush failed:', e.message); }
       sendResponse({ ok: true });
-      advanceKeyword();
+      advanceCycleOrKeyword();
     })();
     return true;
   }
 
   if (msg.action === 'GET_STATUS') {
     sendResponse({
-      running: S.state === 'RUNNING' || S.state === 'STARTING',
+      running: ['RUNNING', 'STARTING', 'WAITING'].includes(S.state),
       state: S.state,
       totalSaved: S.totalSaved,
       keyword: S.keywords[S.kwIndex] || null,
+      cycleIndex: S.cycleIndex,
+      targetCycles: S.jobsData?.keywords?.find(k => k.keyword === S.keywords[S.kwIndex])?.targetCycles || 1,
+      totalCommentsPosted: S.totalCommentsPosted,
     });
     return false;
   }
@@ -102,6 +122,9 @@ async function startSession(msg) {
   S.runId++;
   S.totalSaved = 0;
   S.kwIndex = 0;
+  S.cycleIndex = 0;
+  S.commentedUrns = [];
+  S.totalCommentsPosted = 0;
   console.log('[BG] startSession BEGIN runId=' + S.runId);
 
   const cfg = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
@@ -170,39 +193,74 @@ async function runKeyword() {
   broadcastStatus('Scraping: ' + kw);
   setBadge('ON', '#10b981');
 
-  // Step 1: stamp runId + config into the page
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: S.tabId },
-      func: (cfg) => { window.__nexoraCfg = cfg; },
-      args: [{ runId: myRunId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length }],
-    });
-  } catch (e) { console.warn('[BG] config inject failed:', e.message); }
+  // Step 1: stamp runId + config into the page and inject content.js
+  let injected = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const kwObj = S.jobsData?.keywords?.find(k => k.keyword === kw);
+      const targetCycles = kwObj?.targetCycles || 1;
+      const cycleComments = kwObj ? (S.jobsData?.comments || []).filter(c => c.keywordId === kwObj.id && c.cycleIndex === (S.cycleIndex + 1)) : [];
+      
+      await chrome.scripting.executeScript({
+        target: { tabId: S.tabId },
+        func: (cfg) => { window.__nexoraCfg = cfg; },
+        args: [{ 
+          runId: myRunId, 
+          keyword: kw, 
+          kwIndex: S.kwIndex, 
+          totalKeywords: S.keywords.length,
+          cycleIndex: S.cycleIndex,
+          targetCycles: targetCycles,
+          cycleComments: cycleComments,
+          commentedUrns: S.commentedUrns,
+          searchOnlyMode: S.jobsData?.settings?.searchOnlyMode ?? true,
+        }],
+      });
 
-  // Step 2: inject content.js — it reads window.__nexoraCfg on start
-  try {
-    await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] });
-    console.log('[BG] content.js injected kw=' + kw + ' runId=' + myRunId);
-  } catch (e) {
-    console.error('[BG] content.js inject failed:', e.message);
-    advanceKeyword();  // skip this keyword, move on
+      await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] });
+      console.log(`[BG] content.js injected kw=${kw} runId=${myRunId} (attempt ${attempt})`);
+      injected = true;
+      break;
+    } catch (e) {
+      console.warn(`[BG] script inject failed attempt ${attempt}:`, e.message);
+      if (e.message.includes('Extension context invalidated')) return; // Unrecoverable
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  if (!injected) {
+    console.error('[BG] Failed to inject scripts after 3 attempts.');
+    advanceCycleOrKeyword();
   }
   // content.js now drives itself; sends FLUSH_POSTS(runId) when done.
 }
 
-function advanceKeyword() {
+function advanceCycleOrKeyword() {
   if (S.state !== 'RUNNING') {
-    console.warn('[BG] advanceKeyword skipped — state=' + S.state);
+    console.warn('[BG] advanceCycleOrKeyword skipped — state=' + S.state);
     return;
   }
-  S.kwIndex++;
-  if (S.kwIndex >= S.keywords.length) {
-    finalizeSession();
+  const kw = S.keywords[S.kwIndex];
+  const kwObj = S.jobsData?.keywords?.find(k => k.keyword === kw);
+  const targetCycles = kwObj?.targetCycles || 1;
+
+  S.cycleIndex++;
+  if (S.cycleIndex >= targetCycles) {
+    S.kwIndex++;
+    S.cycleIndex = 0;
+    if (S.kwIndex >= S.keywords.length) {
+      finalizeSession();
+    } else {
+      console.log('[BG] advancing to keyword index=' + S.kwIndex + ' kw=' + S.keywords[S.kwIndex]);
+      setTimeout(() => {
+        if (S.state === 'RUNNING') runKeyword().catch(e => console.error('[BG] runKeyword:', e.message));
+      }, 4000);
+    }
   } else {
-    console.log('[BG] advancing to keyword index=' + S.kwIndex + ' kw=' + S.keywords[S.kwIndex]);
-    setTimeout(() => {
-      if (S.state === 'RUNNING') runKeyword().catch(e => console.error('[BG] runKeyword:', e.message));
-    }, 4000);
+    console.log(`[BG] advancing to cycle ${S.cycleIndex+1}/${targetCycles} for keyword ${kw}`);
+    S.state = 'WAITING';
+    broadcastStatus(`Waiting 15m for next cycle...`);
+    chrome.alarms.create('nexora_cycle_' + S.runId, { delayInMinutes: 15 });
   }
 }
 
@@ -260,17 +318,23 @@ async function fetchKeywords(dashUrl, userId) {
   if (!resp.ok) throw new Error('Jobs API ' + resp.status);
   const jobs = await resp.json();
   if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
+  
+  S.jobsData = jobs;
+  
   let kws = [];
-  if (jobs.settings?.searchConfigJson) {
+  const searchOnly = jobs.settings?.searchOnlyMode !== false;
+
+  if (searchOnly && jobs.settings?.searchConfigJson) {
     try {
       const cfg = JSON.parse(jobs.settings.searchConfigJson);
       if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
     } catch (_) {}
   }
-  const searchOnly = jobs.settings?.searchOnlyMode !== false;
+  
   if (!searchOnly || kws.length === 0) {
     if (Array.isArray(jobs.keywords)) kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
   }
+  
   if (kws.length === 0) throw new Error('No keywords configured.');
   return [...new Set(kws)];
 }
