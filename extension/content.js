@@ -49,10 +49,6 @@
 
   console.log('[CS] v8 start kw="' + keyword + '" runId=' + runId + ' (' + (kwIndex + 1) + '/' + totalKeywords + ')');
 
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const isActive = () => window.__nexoraRunId === runId;  // stale-session guard
-  const canSend  = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.sendMessage;
-
   // ── Live Post Store ────────────────────────────────────────────────────────
   // Single source of truth. Updated in-place as network + DOM data arrive.
   const postsMap = {};
