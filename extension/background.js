@@ -86,7 +86,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // ── RE_ENRICH: score individual post pages — separate from scraping pipeline ──
   if (msg.action === 'RE_ENRICH') {
     sendResponse({ ok: true, queued: (msg.posts || []).length });
-    startEnrichSession(msg.posts || [], msg.dashboardUrl || S.dashboardUrl, msg.userId || S.userId);
+    startEnrichSession(msg.posts || [], msg.dashboardUrl || S.dashboardUrl, msg.userId || S.userId, {
+      autoDelete: msg.autoDelete,
+      deleteThreshold: msg.deleteThreshold,
+      currentKeyword: msg.currentKeyword
+    });
     return false;
   }
 
@@ -246,6 +250,21 @@ function finalizeSession() {
   broadcastStatus('Done! ' + S.totalSaved + ' URLs saved.');
   setBadge(String(S.totalSaved), '#3b82f6');
   S.state = 'IDLE';
+
+  // Check if auto-enrich is enabled
+  chrome.storage.sync.get(['autoEnrich', 'dashboardUrl', 'userId', 'autoDelete', 'deleteThreshold'], (cfg) => {
+    if (cfg.autoEnrich) {
+      console.log('[BG] Auto-enrich enabled. Waiting 5s before starting...');
+      setTimeout(() => {
+        if (S.state === 'IDLE') { // Safe gate
+          runAutoEnrich(cfg.dashboardUrl || S.dashboardUrl, cfg.userId || S.userId, {
+            autoDelete: cfg.autoDelete,
+            deleteThreshold: cfg.deleteThreshold
+          });
+        }
+      }, 5000);
+    }
+  });
 }
 
 // ── API push ──────────────────────────────────────────────────────────────────
@@ -418,7 +437,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ── RE_ENRICH: post-by-post enrichment (completely separate from scraping) ──────
 const E = { running: false }; // enrichment state
 
-async function startEnrichSession(posts, dashboardUrl, userId) {
+async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
   if (E.running) {
     console.warn('[BG-ENRICH] Already running, ignoring duplicate request.');
     return;
@@ -427,11 +446,19 @@ async function startEnrichSession(posts, dashboardUrl, userId) {
   E.dashUrl  = dashboardUrl;
   E.userId   = userId;
 
+  const { autoDelete = false, deleteThreshold = 10, currentKeyword = 'Multiple' } = opts;
+
   const total = posts.length;
-  let enriched = 0, failed = 0;
-  console.log('[BG-ENRICH] Starting enrichment for ' + total + ' posts.');
+  let enriched = 0, failed = 0, deleted = 0, nullCount = 0;
+  console.log(`[BG-ENRICH] Starting enrichment for ${total} posts. Keyword: ${currentKeyword}`);
   broadcastStatus('Enriching 0/' + total + ' posts...');
   setBadge('...', '#f59e0b');
+  
+  // Broadcast initial start
+  chrome.runtime.sendMessage({
+    action: 'ENRICH_KEYWORD_START',
+    currentKeyword, total
+  }).catch(() => {});
 
   for (const post of posts) {
     if (!post.url || !post.urn) { failed++; continue; }
@@ -442,8 +469,15 @@ async function startEnrichSession(posts, dashboardUrl, userId) {
         await pushEnrichScore(post.urn, score);
         enriched++;
         console.log('[BG-ENRICH] ✓ ' + post.urn + ' → score=' + score);
+        
+        // Auto-delete guard
+        if (autoDelete && score < deleteThreshold) {
+           await deleteEnrichPost(post.urn);
+           deleted++;
+           console.log(`[BG-ENRICH] 🗑 Deleted ${post.urn} (score ${score} < ${deleteThreshold})`);
+        }
       } else {
-        failed++;
+        nullCount++;
         console.log('[BG-ENRICH] ✕ ' + post.urn + ' → null (private/timeout)');
       }
     } catch (e) {
@@ -451,12 +485,12 @@ async function startEnrichSession(posts, dashboardUrl, userId) {
       console.warn('[BG-ENRICH] Error on ' + post.urn + ':', e.message);
     }
 
-    const done = enriched + failed;
+    const done = enriched + nullCount + failed;
     broadcastStatus('Enriching ' + done + '/' + total + ' posts...');
     // Notify dashboard of progress
     chrome.runtime.sendMessage({
       action: 'ENRICH_PROGRESS',
-      done, total, enriched, failed,
+      done, total, enriched, failed, deleted, nullCount, currentKeyword
     }).catch(() => {});
 
     // Gap between posts: give LinkedIn time to breathe
@@ -464,13 +498,13 @@ async function startEnrichSession(posts, dashboardUrl, userId) {
   }
 
   E.running = false;
-  const msg = 'Enrichment complete: ' + enriched + ' scored, ' + failed + ' unavailable.';
+  const msg = `Enrichment complete: ${enriched} scored, ${deleted} deleted, ${nullCount} null.`;
   console.log('[BG-ENRICH] ' + msg);
   broadcastStatus(msg);
   setBadge(String(enriched), '#10b981');
   chrome.runtime.sendMessage({
     action: 'ENRICH_DONE',
-    enriched, failed, total,
+    enriched, failed, total, deleted, nullCount, currentKeyword
   }).catch(() => {});
 }
 
@@ -540,5 +574,47 @@ async function pushEnrichScore(urn, score) {
   if (!resp.ok) {
     const body = await resp.text().catch(() => '');
     throw new Error('Enrich API HTTP ' + resp.status + ': ' + body.substring(0, 100));
+  }
+}
+
+async function deleteEnrichPost(urn) {
+  const endpoint = E.dashUrl + '/api/extension/enrich?urn=' + encodeURIComponent(urn);
+  const resp = await fetch(endpoint, {
+    method: 'DELETE',
+    headers: { 'x-extension-token': E.userId },
+  });
+  if (!resp.ok) {
+    console.warn('[BG-ENRICH] Failed to delete ' + urn);
+  }
+}
+
+async function runAutoEnrich(dashUrl, userId, opts) {
+  if (E.running) return;
+  console.log('[BG-ENRICH] Auto-enrich starting for keywords:', S.keywords);
+  try {
+    const kwParam = encodeURIComponent(S.keywords.join(','));
+    const url = `${dashUrl}/api/extension/posts?unscored=true&keywords=${kwParam}`;
+    const resp = await fetch(url, { headers: { 'x-extension-token': userId }});
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const posts = await resp.json();
+    
+    if (Array.isArray(posts) && posts.length > 0) {
+      const queue = posts
+        .filter(p => p.canonicalUrn && p.postUrl)
+        .map(p => ({ urn: p.canonicalUrn, url: p.postUrl }));
+      
+      if (queue.length > 0) {
+         startEnrichSession(queue, dashUrl, userId, {
+           ...opts,
+           currentKeyword: S.keywords.join(', ')
+         });
+      } else {
+         console.log('[BG-ENRICH] No valid posts to auto-enrich.');
+      }
+    } else {
+      console.log('[BG-ENRICH] Auto-enrich queue empty.');
+    }
+  } catch (e) {
+    console.error('[BG-ENRICH] Auto-enrich fetch failed:', e.message);
   }
 }

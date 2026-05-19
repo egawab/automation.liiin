@@ -135,8 +135,29 @@ export function SavedPostsPanel() {
   const [copiedKw, setCopiedKw]     = useState<string | null>(null);
 
   // ── Enrich state ─────────────────────────────────────────────────────────────
-  type EnrichState = { running: boolean; done: number; total: number; enriched: number; failed: number };
-  const [enrich, setEnrich] = useState<EnrichState>({ running: false, done: 0, total: 0, enriched: 0, failed: 0 });
+  type EnrichState = { running: boolean; done: number; total: number; enriched: number; failed: number; deleted: number; nullCount: number; currentKeyword: string };
+  const [enrich, setEnrich] = useState<EnrichState>({ running: false, done: 0, total: 0, enriched: 0, failed: 0, deleted: 0, nullCount: 0, currentKeyword: '' });
+
+  const [enrichKeyword, setEnrichKeyword] = useState<string>('all');
+  const [autoEnrich, setAutoEnrich] = useState(false);
+  const [autoDelete, setAutoDelete] = useState(false);
+  const [deleteThreshold, setDeleteThreshold] = useState(10);
+  const [showDeleteWarning, setShowDeleteWarning] = useState(false);
+
+  // Load auto-enrich config on mount
+  useEffect(() => {
+    window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'GET_AUTO_ENRICH' }, '*');
+  }, []);
+
+  const saveConfig = useCallback((cfg: { autoEnrich?: boolean, autoDelete?: boolean, deleteThreshold?: number }) => {
+    window.postMessage({
+      source: 'NEXORA_DASHBOARD',
+      action: 'SAVE_AUTO_ENRICH',
+      autoEnrich: cfg.autoEnrich ?? autoEnrich,
+      autoDelete: cfg.autoDelete ?? autoDelete,
+      deleteThreshold: cfg.deleteThreshold ?? deleteThreshold,
+    }, '*');
+  }, [autoEnrich, autoDelete, deleteThreshold]);
 
   // ── Fetch posts ─────────────────────────────────────────────────────────────
   const fetchPosts = useCallback(async (isManual = false) => {
@@ -194,11 +215,30 @@ export function SavedPostsPanel() {
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       if (!e.data || e.data.source !== 'NEXORA_EXTENSION') return;
+      
+      if (e.data.action === 'AUTO_ENRICH_CFG') {
+        setAutoEnrich(!!e.data.autoEnrich);
+        setAutoDelete(!!e.data.autoDelete);
+        if (e.data.deleteThreshold) setDeleteThreshold(e.data.deleteThreshold);
+      }
+      if (e.data.action === 'ENRICH_KEYWORD_START') {
+        setEnrich(prev => ({ ...prev, currentKeyword: e.data.currentKeyword }));
+      }
       if (e.data.action === 'ENRICH_PROGRESS') {
-        setEnrich({ running: true, done: e.data.done, total: e.data.total, enriched: e.data.enriched, failed: e.data.failed });
+        setEnrich({
+          running: true, done: e.data.done, total: e.data.total,
+          enriched: e.data.enriched, failed: e.data.failed,
+          deleted: e.data.deleted || 0, nullCount: e.data.nullCount || 0,
+          currentKeyword: e.data.currentKeyword || ''
+        });
       }
       if (e.data.action === 'ENRICH_DONE') {
-        setEnrich({ running: false, done: e.data.total, total: e.data.total, enriched: e.data.enriched, failed: e.data.failed });
+        setEnrich({
+          running: false, done: e.data.total, total: e.data.total,
+          enriched: e.data.enriched, failed: e.data.failed,
+          deleted: e.data.deleted || 0, nullCount: e.data.nullCount || 0,
+          currentKeyword: e.data.currentKeyword || ''
+        });
         // Auto-refresh post list so new scores appear immediately
         fetchPosts(true);
       }
@@ -250,12 +290,17 @@ export function SavedPostsPanel() {
   // ── Start enrichment ─────────────────────────────────────────────────────────
   const startEnrich = useCallback(async () => {
     if (enrich.running) return;
-    // Fetch unscored posts from the API
-    const res = await fetch('/api/saved-posts?unscored=true', { credentials: 'include' });
+    
+    // Fetch unscored posts from the API, optionally filtered by keyword
+    const url = enrichKeyword === 'all' 
+      ? '/api/saved-posts?unscored=true' 
+      : `/api/saved-posts?unscored=true&keyword=${encodeURIComponent(enrichKeyword)}`;
+      
+    const res = await fetch(url, { credentials: 'include' });
     if (!res.ok) return;
     const unscored: SavedPost[] = await res.json();
     if (!unscored.length) {
-      alert('All posts are already scored — nothing to enrich!');
+      alert(`All ${enrichKeyword !== 'all' ? `"${enrichKeyword}" ` : ''}posts are already scored — nothing to enrich!`);
       return;
     }
     const queue = unscored
@@ -263,15 +308,18 @@ export function SavedPostsPanel() {
       .map(p => ({ urn: p.canonicalUrn!, url: p.postUrl }));
     if (!queue.length) return;
 
-    setEnrich({ running: true, done: 0, total: queue.length, enriched: 0, failed: 0 });
+    setEnrich({ running: true, done: 0, total: queue.length, enriched: 0, failed: 0, deleted: 0, nullCount: 0, currentKeyword: enrichKeyword === 'all' ? 'Multiple' : enrichKeyword });
 
     // Send to background.js via the existing dashboard-bridge postMessage channel
     window.postMessage({
       source: 'NEXORA_DASHBOARD',
       action: 'RE_ENRICH',
       posts:  queue,
+      autoDelete,
+      deleteThreshold,
+      currentKeyword: enrichKeyword === 'all' ? 'Multiple' : enrichKeyword
     }, '*');
-  }, [enrich.running]);
+  }, [enrich.running, enrichKeyword, autoDelete, deleteThreshold]);
 
   // ── Filter & group ──────────────────────────────────────────────────────────
   const engFiltered = posts.filter(p => {
@@ -302,6 +350,12 @@ export function SavedPostsPanel() {
     return latestB - latestA;
   });
 
+  const unscoredCountByKw = (kw: string) => {
+    if (kw === 'all') return posts.filter(p => p.engagementScore == null).length;
+    return grouped[kw]?.filter(p => p.engagementScore == null).length || 0;
+  };
+  const enrichTargetCount = unscoredCountByKw(enrichKeyword);
+
   // ── Stats ───────────────────────────────────────────────────────────────────
   const totalUrls    = posts.length;
   const freshCount   = posts.filter(p => !p.visited).length;
@@ -319,26 +373,92 @@ export function SavedPostsPanel() {
             Direct LinkedIn post URLs — grouped by keyword.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            onClick={() => fetchPosts(true)}
-            variant="secondary"
-            size="sm"
-            disabled={refreshing || status === 'loading' || enrich.running}
-          >
-            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? 'Syncing…' : 'Refresh'}
-          </Button>
-          <Button
-            onClick={startEnrich}
-            variant="secondary"
-            size="sm"
-            disabled={enrich.running || posts.filter(p => p.engagementScore == null).length === 0}
-            title={`Enrich ${posts.filter(p => p.engagementScore == null).length} unscored posts`}
-          >
-            <Zap className={`w-3.5 h-3.5 mr-1.5 ${enrich.running ? 'animate-pulse text-amber-400' : ''}`} />
-            {enrich.running ? `Enriching ${enrich.done}/${enrich.total}…` : 'Enrich Scores'}
-          </Button>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <div className="flex flex-col gap-1.5 items-end">
+            <div className="flex items-center gap-3 text-xs">
+              <label className="flex items-center gap-1.5 cursor-pointer text-secondary hover:text-primary transition-colors">
+                <input 
+                  type="checkbox" 
+                  className="rounded border-subtle bg-surface-elevated text-apple-blue focus:ring-0 focus:ring-offset-0"
+                  checked={autoEnrich}
+                  onChange={(e) => {
+                    setAutoEnrich(e.target.checked);
+                    saveConfig({ autoEnrich: e.target.checked });
+                  }}
+                />
+                Auto-Enrich after Scrape
+              </label>
+              <div className="w-px h-3 bg-subtle"></div>
+              <label className="flex items-center gap-1.5 cursor-pointer text-secondary hover:text-primary transition-colors" title="Automatically delete enriched posts with score below threshold">
+                <input 
+                  type="checkbox" 
+                  className="rounded border-subtle bg-surface-elevated text-red-500 focus:ring-0 focus:ring-offset-0"
+                  checked={autoDelete}
+                  onChange={(e) => {
+                    if (e.target.checked && !localStorage.getItem('nexora_autodel_ack')) {
+                      setShowDeleteWarning(true);
+                    } else {
+                      setAutoDelete(e.target.checked);
+                      saveConfig({ autoDelete: e.target.checked });
+                    }
+                  }}
+                />
+                Auto-Delete if score &lt;
+              </label>
+              <input 
+                type="number"
+                className="w-12 h-6 px-1.5 text-xs rounded border border-subtle bg-surface-elevated text-primary focus:border-apple-blue focus:ring-0"
+                value={deleteThreshold}
+                min={1}
+                max={9999}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 10;
+                  setDeleteThreshold(val);
+                  saveConfig({ deleteThreshold: val });
+                }}
+                disabled={!autoDelete}
+              />
+            </div>
+            
+            <div className="flex items-center gap-2 mt-1">
+              <select
+                className="text-xs h-8 px-2 rounded-md border border-subtle bg-surface-elevated text-primary focus:border-apple-blue focus:ring-0"
+                value={enrichKeyword}
+                onChange={(e) => setEnrichKeyword(e.target.value)}
+                disabled={enrich.running}
+              >
+                <option value="all">All Keywords ({unscoredCountByKw('all')} unscored)</option>
+                {keywords.map(kw => {
+                  const u = unscoredCountByKw(kw);
+                  return (
+                    <option key={kw} value={kw}>{kw} ({u} unscored)</option>
+                  );
+                })}
+              </select>
+              
+              <Button
+                onClick={() => fetchPosts(true)}
+                variant="secondary"
+                size="sm"
+                className="h-8"
+                disabled={refreshing || status === 'loading' || enrich.running}
+              >
+                <RefreshCw className={`w-3 h-3 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} />
+                {refreshing ? 'Syncing…' : 'Refresh'}
+              </Button>
+              <Button
+                onClick={startEnrich}
+                variant="secondary"
+                size="sm"
+                className="h-8"
+                disabled={enrich.running || enrichTargetCount === 0}
+                title={`Enrich ${enrichTargetCount} unscored posts`}
+              >
+                <Zap className={`w-3 h-3 mr-1.5 ${enrich.running ? 'animate-pulse text-amber-400' : ''}`} />
+                {enrich.running ? `Enriching ${enrich.done}/${enrich.total}…` : 'Enrich'}
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -348,10 +468,12 @@ export function SavedPostsPanel() {
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-amber-400 flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5" />
-              {enrich.running ? 'Enriching engagement scores…' : 'Enrichment complete'}
+              {enrich.running 
+                ? `Enriching engagement scores${enrich.currentKeyword ? ` for "${enrich.currentKeyword}"` : ''}…` 
+                : 'Enrichment complete'}
             </span>
             <span className="text-xs text-tertiary">
-              {enrich.enriched} scored · {enrich.failed} unavailable · {enrich.done}/{enrich.total}
+              {enrich.enriched} scored · {enrich.deleted} deleted · {enrich.nullCount + enrich.failed} unavailable · {enrich.done}/{enrich.total}
             </span>
           </div>
           <div className="w-full bg-zinc-800 rounded-full h-1.5">

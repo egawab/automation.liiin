@@ -60,3 +60,37 @@ export async function PATCH(req: NextRequest) {
     return setCorsHeaders(NextResponse.json({ error: error.message }, { status: 500 }));
   }
 }
+
+// DELETE /api/extension/enrich?urn=...
+// Called by background.js to delete a post that falls below the engagement threshold
+export async function DELETE(req: NextRequest) {
+  try {
+    const userId = req.headers.get('x-extension-token');
+    if (!userId) {
+      return setCorsHeaders(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
+    }
+
+    const { searchParams } = new URL(req.url);
+    const urn = searchParams.get('urn');
+
+    if (!urn) {
+      return setCorsHeaders(NextResponse.json({ error: 'Missing urn' }, { status: 400 }));
+    }
+
+    const result = await prisma.savedPost.deleteMany({
+      where: {
+        userId,
+        canonicalUrn: urn,
+      },
+    });
+
+    return setCorsHeaders(NextResponse.json({
+      ok: true,
+      deleted: result.count,
+      urn,
+    }));
+  } catch (error: any) {
+    console.error('[API/enrich/delete] Error:', error.message);
+    return setCorsHeaders(NextResponse.json({ error: error.message }, { status: 500 }));
+  }
+}

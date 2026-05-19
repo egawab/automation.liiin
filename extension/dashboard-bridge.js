@@ -115,17 +115,38 @@
           posts,
           dashboardUrl: auth.dashboardUrl,
           userId:       auth.userId,
+          autoDelete:   event.data.autoDelete,
+          deleteThreshold: event.data.deleteThreshold,
+          currentKeyword: event.data.currentKeyword
         }, (resp) => {
           console.log('[NexoraBridge] RE_ENRICH queued:', resp);
         });
       });
+    }
+
+    if (action === 'SAVE_AUTO_ENRICH') {
+      if (canSend() && chrome.storage && chrome.storage.sync) {
+         chrome.storage.sync.set({
+           autoEnrich: event.data.autoEnrich,
+           autoDelete: event.data.autoDelete,
+           deleteThreshold: event.data.deleteThreshold
+         });
+      }
+    }
+
+    if (action === 'GET_AUTO_ENRICH') {
+      if (canSend() && chrome.storage && chrome.storage.sync) {
+         chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], (cfg) => {
+           notifyDashboard('AUTO_ENRICH_CFG', cfg);
+         });
+      }
     }
   });
 
   // Relay background → dashboard for enrich progress events
   if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.action === 'ENRICH_PROGRESS' || msg.action === 'ENRICH_DONE') {
+      if (msg.action === 'ENRICH_PROGRESS' || msg.action === 'ENRICH_DONE' || msg.action === 'ENRICH_KEYWORD_START') {
         notifyDashboard(msg.action, msg);
       }
     });
