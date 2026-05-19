@@ -1,26 +1,38 @@
-// content.js — Nexora URL Collector
+// content.js — Nexora URL Collector v2
+// Injected by background.js via executeScript AFTER window.__nexoraCfg is stamped.
 // Collects LinkedIn post URLs only. No text. No analytics. No comments.
-// Injected by background.js after stamping window.__nexoraCfg.
 (async function () {
-  const cfg = window.__nexoraCfg || {};
-  const { runId, keyword } = cfg;
+  const cfg     = window.__nexoraCfg || {};
+  const runId   = cfg.runId;
+  const keyword = cfg.keyword;
 
-  if (!runId || !keyword) { console.warn('[CS] Missing config — aborting'); return; }
-  if (window.__nexoraRunId === runId) { console.warn('[CS] Already running runId=' + runId); return; }
-  window.__nexoraRunId = runId;
+  // ── Guard: abort if config missing ────────────────────────────────────────
+  if (!runId || !keyword) {
+    console.warn('[CS] Missing config — aborting. cfg:', JSON.stringify(cfg));
+    return;
+  }
 
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const isActive = () => window.__nexoraRunId === runId;
+  // ── Dedup guard: uses a SEPARATE flag from the cfg-stamping step ──────────
+  // background.js stamps __nexoraCfg (not __nexoraRunId), so the flag below
+  // is exclusively owned by this script and can't collide with the injector.
+  const flagKey = '__nexoraActive_' + runId;
+  if (window[flagKey]) {
+    console.warn('[CS] Already running runId=' + runId);
+    return;
+  }
+  window[flagKey] = true;
+
+  const sleep    = ms => new Promise(r => setTimeout(r, ms));
+  const isActive = () => !!window[flagKey];
   const canSend  = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.sendMessage;
 
-  console.log('[CS] URL Collector start. kw="' + keyword + '" runId=' + runId);
+  console.log('[CS] URL Collector v2 start. kw="' + keyword + '" runId=' + runId);
 
-  // ── URN extraction helpers ───────────────────────────────────────────────────
+  // ── URN helpers ────────────────────────────────────────────────────────────
   function extractUrn(s) {
     if (!s) return '';
     const m = String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
     if (m) return 'urn:li:' + m[1] + ':' + m[2];
-    // Anchor href format: activity-XXXXXXX
     const p = String(s).match(/activity-([0-9]{10,25})/i);
     if (p) return 'urn:li:activity:' + p[1];
     return '';
@@ -34,39 +46,37 @@
     return 'https://www.linkedin.com/feed/update/' + urn;
   }
 
-  // ── URL Map (urn → url) ──────────────────────────────────────────────────────
-  const urlMap = new Map(); // urn → canonical URL
+  // ── Deduped URL store ──────────────────────────────────────────────────────
+  const urlMap = new Map(); // urn → url
 
   function addUrn(urn) {
     if (!urn || urlMap.has(urn)) return;
     const url = urnToUrl(urn);
-    if (url) {
-      urlMap.set(urn, url);
-    }
+    if (url) urlMap.set(urn, url);
   }
 
-  // ── DOM scan — collect URLs from all layout variants ─────────────────────────
+  // ── DOM scan ───────────────────────────────────────────────────────────────
   function scanDOM() {
-    // Pass 1: anchor hrefs (most reliable — direct post links)
-    const ANCHOR_SELECTORS = [
-      'a[href*="feed/update/urn:li:"]',
-      'a[href*="/posts/"]',
-      'a[href*="activity-"]',
+    const before = urlMap.size;
+
+    // Pass 1 — anchors with LinkedIn post URL patterns
+    const ANCHOR_SELS = [
+      'a[href*="feed/update/urn%3Ali%3A"]',  // URL-encoded URN in href
+      'a[href*="feed/update/urn:li:"]',       // raw URN in href
+      'a[href*="/detail/"]',                  // LinkedIn detail links
     ];
-    for (const sel of ANCHOR_SELECTORS) {
+    for (const sel of ANCHOR_SELS) {
       try {
-        document.querySelectorAll(sel).forEach(a => {
-          addUrn(extractUrn(a.href));
-        });
+        document.querySelectorAll(sel).forEach(a => addUrn(extractUrn(decodeURIComponent(a.href))));
       } catch (_) {}
     }
 
-    // Pass 2: data attributes (LinkedIn A/B layout variants)
+    // Pass 2 — data-urn / data-entity-urn attributes
     const DATA_ATTRS = [
       'data-urn',
       'data-activity-urn',
-      'data-chameleon-result-urn',
       'data-entity-urn',
+      'data-chameleon-result-urn',
       'data-id',
     ];
     for (const attr of DATA_ATTRS) {
@@ -77,130 +87,162 @@
       } catch (_) {}
     }
 
-    // Pass 3: Raw innerHTML URN scan (catches any remaining format)
+    // Pass 3 — raw text scan: hit every <script> and data attribute blob
+    // Uses textContent instead of innerHTML to avoid decoding overhead
     try {
       const re = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
-      let m;
-      while ((m = re.exec(document.body.innerHTML)) !== null) {
-        addUrn('urn:li:' + m[1] + ':' + m[2]);
+      // Scan outerHTML of all likely containers (cheaper than full body)
+      const containers = [
+        ...document.querySelectorAll(
+          '.search-results-container, .scaffold-finite-scroll__content, .artdeco-list, main'
+        ),
+        document.body, // fallback
+      ];
+      const seen = new Set();
+      for (const el of containers) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        let m;
+        re.lastIndex = 0;
+        const src = el.innerHTML;
+        while ((m = re.exec(src)) !== null) {
+          addUrn('urn:li:' + m[1] + ':' + m[2]);
+        }
+        break; // first match wins to avoid duplicating body scan
       }
     } catch (_) {}
+
+    const added = urlMap.size - before;
+    if (added > 0) console.log('[CS] scanDOM +' + added + ' total=' + urlMap.size);
   }
 
-  // ── Scroll utilities ─────────────────────────────────────────────────────────
-  function getScrollEl() {
-    const candidates = [
-      document.querySelector('.scaffold-layout__main'),
-      document.querySelector('.scaffold-layout-container__main'),
-      document.querySelector('main'),
-      document.scrollingElement,
-      document.documentElement,
-    ];
-    for (const el of candidates) {
-      if (el && el.scrollHeight > el.clientHeight + 100) return el;
-    }
-    return document.documentElement;
-  }
-
+  // ── Scroll helpers ─────────────────────────────────────────────────────────
+  // LinkedIn search results scroll via window, not a container element.
+  // Always use window.scrollBy + dispatchEvent to trigger lazy loading.
   function doScroll() {
-    try {
-      if (document.activeElement && document.activeElement !== document.body) {
-        document.activeElement.blur();
-      }
-    } catch (_) {}
-    const el = getScrollEl();
-    el.scrollTop += Math.floor(el.clientHeight * 0.85);
-    el.dispatchEvent(new Event('scroll', { bubbles: true }));
+    const viewH = window.innerHeight || document.documentElement.clientHeight;
+    const before = window.scrollY;
+    window.scrollBy({ top: Math.floor(viewH * 0.8), behavior: 'smooth' });
+    // Also fire on documentElement to catch any internal virtualized list
+    document.documentElement.dispatchEvent(new Event('scroll', { bubbles: true }));
     window.dispatchEvent(new Event('scroll', { bubbles: true }));
-    return el.scrollTop;
+    return window.scrollY;
   }
 
-  function atBottom() {
-    const el = getScrollEl();
-    if (el.scrollHeight < el.clientHeight * 1.3) return false;
-    return (el.scrollTop + el.clientHeight) >= el.scrollHeight - 600;
+  function getScrollProgress() {
+    const h = Math.max(
+      document.body.scrollHeight,
+      document.documentElement.scrollHeight
+    );
+    const viewH = window.innerHeight || document.documentElement.clientHeight;
+    const y = window.scrollY;
+    return { y, atBottom: (y + viewH) >= h - 800, pageH: h };
   }
 
   function clickShowMore() {
-    // LinkedIn "Show more results" pagination button
+    // Pagination "Next" button (search results mode)
     const NEXT_SELS = [
-      '.artdeco-pagination__button--next',
-      'button[aria-label="Next"]',
-      'button[aria-label="Go to next page"]',
+      '.artdeco-pagination__button--next:not([disabled])',
+      'button[aria-label="Next"]:not([disabled])',
+      'button[aria-label="Go to next page"]:not([disabled])',
     ];
     for (const s of NEXT_SELS) {
       const b = document.querySelector(s);
-      if (b && !b.disabled) { b.click(); return true; }
+      if (b) { b.click(); return true; }
     }
-    // "Show more" style button
+    // "Show more" infinite-scroll trigger
     const more = [...document.querySelectorAll('button,[role="button"]')]
       .find(b => /show more|load more|see more results/i.test(b.innerText || ''));
     if (more && !more.disabled) { more.click(); return true; }
     return false;
   }
 
-  // ── Wait for initial page content ────────────────────────────────────────────
-  await sleep(2500);
+  // ── Wait for initial content ───────────────────────────────────────────────
+  // Give LinkedIn's React router time to hydrate the search results page
+  await sleep(3000);
+
+  // Wait until the page has scrollable content (max 15s)
   let waited = 0;
-  while (waited < 12000 && isActive()) {
-    const el = getScrollEl();
-    if (el.scrollHeight > el.clientHeight * 1.5) break;
-    await sleep(500); waited += 500;
+  while (waited < 15000 && isActive()) {
+    const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    if (h > window.innerHeight * 1.5) break;
+    await sleep(600);
+    waited += 600;
   }
-  if (!isActive()) { window.__nexoraRunId = null; return; }
+  if (!isActive()) { window[flagKey] = false; return; }
 
-  // ── Scroll loop ──────────────────────────────────────────────────────────────
-  const MAX_STEPS    = 60;
-  const MIN_STEPS    = 6;
-  const NO_PROG_MAX  = 8;
+  // First scan before scrolling
+  scanDOM();
+  console.log('[CS] After initial wait: urls=' + urlMap.size);
 
-  let step = 0, noProgress = 0, lastTop = -1;
+  // ── Scroll loop ────────────────────────────────────────────────────────────
+  const MAX_STEPS   = 55;
+  const MIN_STEPS   = 5;
+  const NO_PROG_MAX = 6;   // consecutive steps with <100px scroll = done
+
+  let step = 0;
+  let noProgress = 0;
+  let lastY = -1;
 
   while (step < MAX_STEPS && isActive()) {
     step++;
-    const st = doScroll();
-    await sleep(2600 + Math.floor(Math.random() * 1200));
+
+    const scrollY = doScroll();
+    // Wait for lazy-loaded content to render
+    await sleep(2800 + Math.floor(Math.random() * 1000));
     if (!isActive()) break;
 
-    if (Math.abs(st - lastTop) > 60) { noProgress = 0; lastTop = st; }
-    else noProgress++;
+    const { y, atBottom } = getScrollProgress();
+
+    // Measure actual scroll movement (compare current y to last)
+    const moved = Math.abs(y - lastY);
+    if (moved > 80) {
+      noProgress = 0;
+      lastY = y;
+    } else {
+      noProgress++;
+    }
 
     scanDOM();
-    console.log('[CS] step=' + step + ' urls=' + urlMap.size + ' noProg=' + noProgress);
+    console.log('[CS] step=' + step + ' y=' + Math.round(y) + ' moved=' + Math.round(moved) + ' urls=' + urlMap.size + ' noProg=' + noProgress);
 
-    if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom())) {
-      if (clickShowMore()) { noProgress = 0; await sleep(3000); continue; }
+    if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom)) {
+      console.log('[CS] Scroll complete. atBottom=' + atBottom + ' noProgress=' + noProgress);
+      if (clickShowMore()) {
+        console.log('[CS] Clicked "Show more". Continuing.');
+        noProgress = 0;
+        await sleep(3500);
+        continue;
+      }
       break;
     }
   }
 
-  if (!isActive()) { window.__nexoraRunId = null; return; }
+  if (!isActive()) { window[flagKey] = false; return; }
 
-  // Final DOM scan after scrolling is done
+  // Final scan after scroll done
   await sleep(1500);
   scanDOM();
+  console.log('[CS] Final URL count: ' + urlMap.size);
 
-  // ── Build output ─────────────────────────────────────────────────────────────
-  // Only URL — no author, no text, no analytics
+  // ── Build & send payload ───────────────────────────────────────────────────
   const posts = Array.from(urlMap.entries()).map(([urn, url]) => ({
     canonicalUrn: urn,
-    url:          url,
-    postAuthor:   null,
-    postPreview:  null,
-    likes:        null,
-    comments:     null,
-    source:       'search_only',
+    url,
+    source: 'search_only',
   }));
 
-  console.log('[CS] URL Collector done. Found ' + posts.length + ' unique post URLs.');
-  window.__nexoraRunId = null;
+  window[flagKey] = false;
+  console.log('[CS] DONE. Sending ' + posts.length + ' URLs to background.');
 
-  if (canSend() && posts.length > 0) {
-    chrome.runtime.sendMessage({ action: 'FLUSH_POSTS', posts, runId, commentedUrns: [] })
-      .then(r  => console.log('[CS] FLUSH_POSTS ACK:', JSON.stringify(r)))
-      .catch(e => console.warn('[CS] FLUSH_POSTS failed:', e?.message));
-  } else if (canSend()) {
-    // Nothing found — still signal done so background can advance
-    chrome.runtime.sendMessage({ action: 'FLUSH_POSTS', posts: [], runId, commentedUrns: [] }).catch(() => {});
+  if (canSend()) {
+    chrome.runtime.sendMessage({
+      action: 'FLUSH_POSTS',
+      posts,
+      runId,
+      commentedUrns: [],
+    })
+      .then(r  => console.log('[CS] FLUSH ACK:', JSON.stringify(r)))
+      .catch(e => console.warn('[CS] FLUSH failed:', e?.message));
   }
 })();

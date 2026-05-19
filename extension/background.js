@@ -142,11 +142,21 @@ async function runKeyword() {
   // Stamp config then inject URL collector
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
+      // Step 1: stamp the config into the page context
       await chrome.scripting.executeScript({
         target: { tabId: S.tabId },
-        func: (cfg) => { window.__nexoraCfg = cfg; },
+        func: (cfg) => {
+          // Only set __nexoraCfg — never touch __nexoraActive_* (owned by content.js)
+          window.__nexoraCfg = cfg;
+          console.log('[BG-inject] __nexoraCfg stamped. runId=' + cfg.runId + ' kw=' + cfg.keyword);
+        },
         args: [{ runId: myRunId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length, searchOnlyMode: true }],
       });
+
+      // Step 2: small pause to ensure the stamp is committed before content.js reads it
+      await new Promise(r => setTimeout(r, 300));
+
+      // Step 3: inject the collector script
       await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] });
       console.log('[BG] content.js injected for kw=' + kw + ' (attempt ' + attempt + ')');
       return; // content.js takes over; sends FLUSH_POSTS when done
