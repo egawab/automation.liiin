@@ -133,20 +133,50 @@
       } catch (_) {}
     }
 
-    // Pass 3 — Raw innerHTML regex scan across the ENTIRE body
-    // This is critical because LinkedIn's React hydration JSON is stored in <code> tags outside <main>
+    // Pass 3a — Raw innerHTML scan (decoded URNs)
     try {
       const re = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
       const src = document.body.innerHTML || '';
-      let m;
-      re.lastIndex = 0;
-      while ((m = re.exec(src)) !== null) {
-        addUrn('urn:li:' + m[1] + ':' + m[2]);
-      }
+      let m; re.lastIndex = 0;
+      while ((m = re.exec(src)) !== null) addUrn('urn:li:' + m[1] + ':' + m[2]);
     } catch (_) {}
 
-    // Pass 4 — API-intercepted URNs (primary source for new React layout)
-    // The interceptor.js captures LinkedIn's XHR/fetch responses and stores URNs here.
+    // Pass 3b — URL-encoded URN scan (urn%3Ali%3Aactivity%3A...)
+    // LinkedIn's new React layout stores URNs URL-encoded in HTML attributes and script tags
+    try {
+      const re = /urn%3Ali%3A(activity|ugcPost|share)%3A([0-9]{10,25})/gi;
+      const src = document.body.innerHTML || '';
+      let m; re.lastIndex = 0;
+      while ((m = re.exec(src)) !== null) addUrn('urn:li:' + m[1] + ':' + m[2]);
+    } catch (_) {}
+
+    // Pass 3c — JSON-escaped URN scan (urn\\u003Ali\\u003A...)
+    // React SSR sometimes stores URNs as unicode-escaped JSON
+    try {
+      const re = /urn(?:\\u003a|%3a|:)li(?:\\u003a|%3a|:)(activity|ugcPost|share)(?:\\u003a|%3a|:)([0-9]{10,25})/gi;
+      const src = document.body.innerHTML || '';
+      let m; re.lastIndex = 0;
+      while ((m = re.exec(src)) !== null) addUrn('urn:li:' + m[1] + ':' + m[2]);
+    } catch (_) {}
+
+    // Pass 4 — Hidden <code> SSR elements (LinkedIn hydration state)
+    // LinkedIn's new React SSR embeds initial state as JSON in <code id="bpr-guid-*"> elements
+    try {
+      document.querySelectorAll('code[id], code[style*="display:none"], code[style*="display: none"]').forEach(el => {
+        const txt = el.textContent || '';
+        if (txt.length < 50) return;
+        // Extract any nested activity URNs within fs_feedUpdate or similar wrappers
+        const re = /(?:activity|ugcPost|share)[%:\\u003a]+([0-9]{10,25})/gi;
+        let m; re.lastIndex = 0;
+        while ((m = re.exec(txt)) !== null) {
+          const type = m[0].split(/[%:\\u003a]/)[0].toLowerCase();
+          const knownType = type === 'ugcpost' ? 'ugcPost' : (type === 'share' ? 'share' : 'activity');
+          addUrn('urn:li:' + knownType + ':' + m[1]);
+        }
+      });
+    } catch (_) {}
+
+    // Pass 5 — API-intercepted URNs (XHR/fetch captures from interceptor.js)
     try {
       if (window.__nexoraApiUrns && window.__nexoraApiUrns.size > 0) {
         window.__nexoraApiUrns.forEach(urn => addUrn(urn));
@@ -277,12 +307,12 @@
   // First scan before scrolling
   scanDOM();
 
-  // Diagnostic snapshot — show anchors INSIDE main (post area), not nav links
+  // Diagnostic snapshot — show raw HTML from inside main to identify post ID storage format
   const mainEl = document.querySelector('main');
-  const mainAnchors = mainEl ? Array.from(mainEl.querySelectorAll('a')).slice(0, 8).map(a => a.href) : [];
+  const diagRawHtml = (mainEl ? mainEl.innerHTML : document.body.innerHTML).substring(0, 600).replace(/\s+/g, ' ');
   const diagApiUrns = (window.__nexoraApiUrns ? window.__nexoraApiUrns.size : 0);
-  const diagPageH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-  const diagMsg = `[CS-DIAG] urls=${urlMap.size} apiUrns=${diagApiUrns} pageH=${diagPageH} mainLinks=${mainAnchors.join(' || ')}`;
+  const diagCodeEls = document.querySelectorAll('code[id]').length;
+  const diagMsg = `[CS-DIAG] urls=${urlMap.size} apiUrns=${diagApiUrns} codeEls=${diagCodeEls} | RAW: ${diagRawHtml}`;
   console.log(diagMsg);
   if (canSend()) chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: diagMsg }).catch(()=>{});
 
