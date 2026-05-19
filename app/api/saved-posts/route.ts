@@ -37,8 +37,9 @@ export async function GET(request: NextRequest) {
     // Serialize BigInt fields to Number for JSON compatibility
     const serialized = posts.map(p => ({
       ...p,
-      likes:    p.likes    != null ? Number(p.likes)    : null,
-      comments: p.comments != null ? Number(p.comments) : null,
+      likes:           p.likes    != null ? Number(p.likes)    : null,
+      comments:        p.comments != null ? Number(p.comments) : null,
+      engagementScore: p.engagementScore  != null ? Number(p.engagementScore) : null,
     }));
 
     return NextResponse.json(serialized);

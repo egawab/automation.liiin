@@ -19,17 +19,17 @@ function relativeTime(dateStr: string): string {
   return `${diffD}d ago`;
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────────────────────
 interface SavedPost {
-  id:        string;
-  postUrl:   string;
-  keyword:   string;
-  savedAt:   string;
-  visited:   boolean;
-  // optional fields that may be present but are not displayed
-  postAuthor?:  string | null;
-  postPreview?: string | null;
-  canonicalUrn?: string | null;
+  id:               string;
+  postUrl:          string;
+  keyword:          string;
+  savedAt:          string;
+  visited:          boolean;
+  engagementScore?: number | null;  // null = unscored (always shown)
+  postAuthor?:      string | null;
+  postPreview?:     string | null;
+  canonicalUrn?:    string | null;
 }
 
 // ─── Single URL row ───────────────────────────────────────────────────────────
@@ -54,6 +54,7 @@ const UrlRow = memo(function UrlRow({
 
   const displayUrl = post.postUrl || '(no URL)';
   const isValidUrl = post.postUrl?.startsWith('http');
+  const score      = post.engagementScore;
 
   return (
     <div
@@ -72,6 +73,18 @@ const UrlRow = memo(function UrlRow({
         <Clock className="w-3 h-3" />
         {relativeTime(post.savedAt)}
       </span>
+
+      {/* Engagement score badge */}
+      {score !== null && score !== undefined && (
+        <span
+          className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+            score >= 10 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-700/60 text-zinc-400'
+          }`}
+          title={`Engagement score: ${score}`}
+        >
+          {score >= 1000 ? `${(score / 1000).toFixed(1)}k` : score}
+        </span>
+      )}
 
       {/* URL */}
       <span
@@ -118,6 +131,7 @@ export function SavedPostsPanel() {
   const [errorMsg, setErrorMsg]     = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [engagementFilter, setEngagementFilter] = useState<'all' | 'scored' | 'high'>('all');
   const [copiedKw, setCopiedKw]     = useState<string | null>(null);
 
   // ── Fetch posts ─────────────────────────────────────────────────────────────
@@ -159,7 +173,7 @@ export function SavedPostsPanel() {
     }
 
     if (isManual) setRefreshing(false);
-  }, []); // no deps — never recreated
+  }, [status]);
 
   // Initial load
   useEffect(() => {
@@ -213,12 +227,19 @@ export function SavedPostsPanel() {
   }, []);
 
   // ── Filter & group ──────────────────────────────────────────────────────────
+  const engFiltered = posts.filter(p => {
+    if (engagementFilter === 'all')    return true;
+    if (engagementFilter === 'scored') return p.engagementScore != null;
+    if (engagementFilter === 'high')   return (p.engagementScore ?? 0) >= 10;
+    return true;
+  });
+
   const filtered = searchTerm
-    ? posts.filter(p => {
+    ? engFiltered.filter(p => {
         const s = searchTerm.toLowerCase();
         return p.keyword?.toLowerCase().includes(s) || p.postUrl?.toLowerCase().includes(s);
       })
-    : posts;
+    : engFiltered;
 
   const grouped = filtered.reduce<Record<string, SavedPost[]>>((acc, p) => {
     const kw = p.keyword || 'Uncategorized';
@@ -235,9 +256,10 @@ export function SavedPostsPanel() {
   });
 
   // ── Stats ───────────────────────────────────────────────────────────────────
-  const totalUrls  = posts.length;
-  const freshCount = posts.filter(p => !p.visited).length;
-  const kwCount    = new Set(posts.map(p => p.keyword || '')).size;
+  const totalUrls    = posts.length;
+  const freshCount   = posts.filter(p => !p.visited).length;
+  const kwCount      = new Set(posts.map(p => p.keyword || '')).size;
+  const highEngCount = posts.filter(p => (p.engagementScore ?? 0) >= 10).length;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -262,7 +284,7 @@ export function SavedPostsPanel() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="bg-surface-elevated rounded-lg p-5 border border-subtle text-center">
           <div className="text-xs font-bold uppercase tracking-wider text-secondary mb-1">Total Links</div>
           <div className="text-4xl font-bold text-primary leading-none">{totalUrls}</div>
@@ -277,6 +299,33 @@ export function SavedPostsPanel() {
           <div className="text-xs font-bold uppercase tracking-wider text-secondary mb-1">Keywords</div>
           <div className="text-4xl font-bold text-primary leading-none">{kwCount}</div>
         </div>
+        <div className="bg-surface-elevated rounded-lg p-5 border border-emerald-500/30 text-center">
+          <div className="text-xs font-bold uppercase tracking-wider text-emerald-400 mb-1">High Engagement</div>
+          <div className="text-4xl font-bold text-emerald-400 leading-none">{highEngCount}</div>
+        </div>
+      </div>
+
+      {/* Engagement filter toggle */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-tertiary font-medium">Engagement:</span>
+        {(['all', 'scored', 'high'] as const).map(f => (
+          <button
+            key={f}
+            onClick={() => setEngagementFilter(f)}
+            className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+              engagementFilter === f
+                ? 'bg-apple-blue text-white border-apple-blue'
+                : 'border-subtle text-secondary hover:border-apple-blue/50'
+            }`}
+          >
+            {f === 'all'    && 'All posts'}
+            {f === 'scored' && 'Scored only'}
+            {f === 'high'   && '10+ interactions'}
+          </button>
+        ))}
+        {engagementFilter !== 'all' && (
+          <span className="text-xs text-tertiary ml-1">— showing {filtered.length} of {totalUrls}</span>
+        )}
       </div>
 
       {/* Search */}

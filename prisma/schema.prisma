@@ -124,23 +124,25 @@ model AutoPost {
 }
 
 model SavedPost {
-  id            String   @id @default(uuid())
-  canonicalUrn  String?             // e.g. urn:li:activity:1234567890 (null for legacy rows)
-  postUrl       String   @default("")  // metadata only, not used for dedup
-  postAuthor    String?
-  postPreview   String?
-  likes         BigInt?
-  comments      BigInt?
-  keyword       String
-  savedAt       DateTime @default(now())
-  visited       Boolean  @default(false)
+  id              String   @id @default(uuid())
+  canonicalUrn    String?             // e.g. urn:li:activity:1234567890 (null for legacy rows)
+  postUrl         String   @default("")  // metadata only, not used for dedup
+  postAuthor      String?
+  postPreview     String?
+  likes           BigInt?
+  comments        BigInt?
+  engagementScore Int?                // sum of likes+comments+shares from API (null = unscored)
+  keyword         String
+  savedAt         DateTime @default(now())
+  visited         Boolean  @default(false)
 
-  userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, canonicalUrn])
   @@index([userId, savedAt])
   @@index([userId, keyword])
+  @@index([userId, engagementScore])
 }
 
 model PromoCode {

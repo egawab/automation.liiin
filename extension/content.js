@@ -88,13 +88,21 @@
     return 'https://www.linkedin.com/feed/update/' + urn;
   }
 
-  // ── Deduped URL store ──────────────────────────────────────────────────────
-  const urlMap = new Map(); // urn → url
+  // ── Deduped URL store ────────────────────────────────────────────────────────
+  const urlMap = new Map(); // urn → { url, engagementScore }
 
-  function addUrn(urn) {
-    if (!urn || urlMap.has(urn)) return;
+  function addUrn(urn, engagementScore = null) {
+    if (!urn) return;
     const url = urnToUrl(urn);
-    if (url) urlMap.set(urn, url);
+    if (!url) return;
+    if (urlMap.has(urn)) {
+      // Upgrade null → known score if we receive data from a later pass
+      if (engagementScore !== null && urlMap.get(urn).engagementScore === null) {
+        urlMap.get(urn).engagementScore = engagementScore;
+      }
+      return;
+    }
+    urlMap.set(urn, { url, engagementScore });
   }
 
   // ── DOM scan ───────────────────────────────────────────────────────────────
@@ -187,10 +195,10 @@
       });
     } catch (_) {}
 
-    // Pass 5 — API-intercepted URNs (XHR/fetch captures from interceptor.js)
+    // Pass 5 — API-intercepted URNs with engagement scores (Map from interceptor.js)
     try {
       if (window.__nexoraApiUrns && window.__nexoraApiUrns.size > 0) {
-        window.__nexoraApiUrns.forEach(urn => addUrn(urn));
+        window.__nexoraApiUrns.forEach((score, urn) => addUrn(urn, score));
       }
     } catch (_) {}
 
@@ -384,21 +392,23 @@
   scanDOM();
   console.log('[CS] Final URL count: ' + urlMap.size);
 
-  // Build payload — deduplicate by URL as a second layer after URN-level dedup.
-  // Handles rare cases where the same post is returned under two different URN types
-  // (e.g. urn:li:activity:X and urn:li:ugcPost:X) pointing to equivalent content.
+  // Build payload — URL-dedup as second layer, carry engagement score per post.
+  // engagementScore: number (sum of likes+comments+shares) or null (unscored).
+  // Safe-default: null posts are ALWAYS included — never discarded for missing data.
   const seenUrls = new Set();
   const posts = Array.from(urlMap.entries())
-    .map(([urn, url]) => ({ canonicalUrn: urn, url, source: 'search_only' }))
+    .map(([urn, { url, engagementScore }]) => ({ canonicalUrn: urn, url, source: 'search_only', engagementScore }))
     .filter(p => {
       if (seenUrls.has(p.url)) return false;
       seenUrls.add(p.url);
       return true;
     });
 
+  const scored   = posts.filter(p => p.engagementScore !== null).length;
+  const unscored = posts.length - scored;
   window[stopKey] = true;
   window.__nexoraRunningId = null;
-  console.log('[CS] DONE. Sending ' + posts.length + ' URLs (from ' + urlMap.size + ' URNs, ' + (urlMap.size - posts.length) + ' url-dupes removed).');
+  console.log(`[CS] DONE. Sending ${posts.length} URLs (scored=${scored} unscored=${unscored} url-dupes=${urlMap.size - posts.length}).`);
 
   if (canSend()) {
     chrome.runtime.sendMessage({

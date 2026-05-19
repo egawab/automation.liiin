@@ -64,32 +64,49 @@ export async function POST(req: Request) {
     const safeKeyword = sanitize(keyword || 'auto', 50);
 
     // ── SEARCH-ONLY: URL links only ───────────────────────────────────────────
-    // Saves ONLY the canonical post URL. author and preview are always null.
+    // Saves the canonical post URL + optional engagement score. author/preview always null.
     if (source === 'search_only') {
       let createdCount = 0;
       await Promise.allSettled(posts.map(async (post: any) => {
         const urn = normalizeUrn(post.canonicalUrn || post.url || '');
         if (!urn) return;
         const safeUrl = normalizeUrl(sanitize(post.url || post.canonicalUrn || '', 2000));
-        if (!safeUrl) return; // skip if we can't build a valid URL
+        if (!safeUrl) return;
+
+        // Engagement score: integer or null. Clamp to [0, 10_000_000].
+        // Safe-default: null means unscored — post is still saved.
+        let engagementScore: number | null = null;
+        if (post.engagementScore != null) {
+          const n = Math.round(Number(post.engagementScore));
+          if (Number.isFinite(n) && n >= 0 && n <= 10_000_000) engagementScore = n;
+        }
+
         try {
           await prisma.savedPost.create({
             data: {
               userId,
-              canonicalUrn: urn,
-              postUrl:      safeUrl,
-              keyword:      safeKeyword,
-              postAuthor:   null,   // URL-only mode: no author
-              postPreview:  null,   // URL-only mode: no preview
-              likes:        null,   // URL-only mode: no analytics
-              comments:     null,
-              visited:      false,
+              canonicalUrn:    urn,
+              postUrl:         safeUrl,
+              keyword:         safeKeyword,
+              engagementScore: engagementScore,
+              postAuthor:      null,
+              postPreview:     null,
+              likes:           null,
+              comments:        null,
+              visited:         false,
             },
           });
           createdCount++;
         } catch (e: any) {
-          // P2002 = unique constraint (already saved) — silently skip duplicates
-          if (e?.code !== 'P2002') throw e;
+          if (e?.code === 'P2002') {
+            // Duplicate — upgrade null→known score if we have better data now
+            if (engagementScore !== null) {
+              await prisma.savedPost.updateMany({
+                where: { userId, canonicalUrn: urn, engagementScore: null },
+                data:  { engagementScore },
+              });
+            }
+          } else { throw e; }
         }
       }));
       console.log('[API/results] search_only: created=' + createdCount + ' kw=' + safeKeyword);

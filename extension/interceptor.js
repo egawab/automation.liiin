@@ -16,21 +16,52 @@
 
   const URN_RE = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
 
+  // Extract engagement score from a text window near a URN.
+  // Uses regex instead of JSON.parse — resilient to truncated/aborted responses.
+  // Returns null (safe-default: keep post) if no engagement fields are found.
+  function extractEngagement(text) {
+    try {
+      let total = 0;
+      let found = false;
+      const fields = [
+        /\"numLikes\"\s*:\s*(\d+)/,
+        /\"numComments\"\s*:\s*(\d+)/,
+        /\"numShares\"\s*:\s*(\d+)/,
+        /\"reactionCount\"\s*:\s*(\d+)/,
+        /\"totalSocialActivityCount\"\s*:\s*(\d+)/,
+        /\"count\"\s*:\s*(\d+)/,
+      ];
+      for (const re of fields) {
+        const m = text.match(re);
+        if (m) { total += parseInt(m[1], 10); found = true; }
+      }
+      return found ? total : null;
+    } catch (_) { return null; }
+  }
+
   function dispatch(url, body) {
     if (!body || body.length < 200) return;
     const fc = body.trimStart()[0];
     if (fc !== '{' && fc !== '[') return;
-    // Store URNs directly for content.js to harvest
-    window.__nexoraApiUrns = window.__nexoraApiUrns || new Set();
+    // Store as Map(urn → engagementScore|null) — content.js harvests this
+    window.__nexoraApiUrns = window.__nexoraApiUrns || new Map();
     URN_RE.lastIndex = 0;
     let m;
     let found = 0;
     while ((m = URN_RE.exec(body)) !== null) {
-      window.__nexoraApiUrns.add('urn:li:' + m[1] + ':' + m[2]);
+      const urn = 'urn:li:' + m[1] + ':' + m[2];
+      // Extract engagement from the ~3000 chars surrounding this URN
+      const nearby = body.slice(Math.max(0, m.index - 200), Math.min(body.length, m.index + 3000));
+      const score = extractEngagement(nearby);
+      if (!window.__nexoraApiUrns.has(urn)) {
+        window.__nexoraApiUrns.set(urn, score);
+      } else if (score !== null && window.__nexoraApiUrns.get(urn) === null) {
+        // Upgrade null → known score if a later response provides it
+        window.__nexoraApiUrns.set(urn, score);
+      }
       found++;
     }
     if (found > 0) console.log('[INT] captured ' + found + ' URNs from', url.substring(0, 80));
-    // Also dispatch event for any other listeners
     try {
       window.dispatchEvent(new CustomEvent('__nexora_net__', { detail: { url, body } }));
     } catch (e) {}
