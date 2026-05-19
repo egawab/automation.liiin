@@ -196,13 +196,12 @@
     const viewH = window.innerHeight || 800;
     const scrollAmt = Math.floor(viewH * 0.80);
 
-    // Window scroll (primary — works for old layout)
+    // Window-level scroll (old scaffold layout)
     window.scrollBy({ top: scrollAmt, behavior: 'instant' });
+    // NOTE: do NOT also set document.documentElement.scrollTop here —
+    // it is the same as window.scrollY and would double-scroll the old layout.
 
-    // documentElement scroll (new React layout uses this)
-    document.documentElement.scrollTop += scrollAmt;
-
-    // Scroll known scaffold containers if present
+    // Scroll inner containers (new React layout: main, #root, scaffold)
     const containers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
@@ -236,19 +235,27 @@
   }
 
   function atBottom() {
-    // Check both window and inner containers
-    const winH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     const viewH = window.innerHeight || 800;
-    if ((window.scrollY + viewH) >= winH - 800) return true;
 
-    const containers = [
+    // Check window scroll position
+    const winH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    const windowAtBottom = (window.scrollY + viewH) >= winH - 800;
+
+    // Check inner containers
+    const scrollContainers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
-    ];
-    for (const el of containers) {
-      if (el && (el.scrollTop + el.clientHeight) >= el.scrollHeight - 400) return true;
+      document.querySelector('main'),
+    ].filter(el => el && el.scrollHeight > el.clientHeight + 100);
+
+    // For old layout (window scrolls): use window bottom check.
+    // For new layout (container scrolls, winH is tiny ~583px): use container check.
+    if (scrollContainers.length === 0) {
+      // Old layout — pure window scroll
+      return windowAtBottom;
     }
-    return false;
+    // New layout — check the container
+    return scrollContainers.every(el => (el.scrollTop + el.clientHeight) >= el.scrollHeight - 400);
   }
 
   function clickShowMore() {
