@@ -89,19 +89,26 @@
   function scanDOM() {
     const before = urlMap.size;
 
-    // Pass 1 — anchors with LinkedIn post URL patterns
-    const ANCHOR_SELS = [
-      'a[href*="feed/update/urn%3Ali%3A"]',  // URL-encoded URN in href
-      'a[href*="feed/update/urn:li:"]',       // raw URN in href
-      'a[href*="/detail/"]',                  // LinkedIn detail links
-    ];
-    for (const sel of ANCHOR_SELS) {
-      try {
-        document.querySelectorAll(sel).forEach(a => addUrn(extractUrn(decodeURIComponent(a.href))));
-      } catch (_) {}
-    }
+    // Pass 1 — Scan EVERY anchor on the page (extremely robust & fast)
+    try {
+      document.querySelectorAll('a').forEach(a => {
+        const href = a.href || '';
+        if (!href) return;
+        const decoded = decodeURIComponent(href);
+        // Look for any hrefs containing LinkedIn post indicators
+        if (
+          decoded.includes('feed/update') ||
+          decoded.includes('/posts/') ||
+          decoded.includes('/detail/') ||
+          decoded.includes('activity-') ||
+          decoded.includes('urn:li:')
+        ) {
+          addUrn(extractUrn(decoded));
+        }
+      });
+    } catch (_) {}
 
-    // Pass 2 — data-urn / data-entity-urn attributes
+    // Pass 2 — data-urn / data-entity-urn / data-activity-urn attributes
     const DATA_ATTRS = [
       'data-urn',
       'data-activity-urn',
@@ -112,33 +119,23 @@
     for (const attr of DATA_ATTRS) {
       try {
         document.querySelectorAll('[' + attr + ']').forEach(el => {
-          addUrn(extractUrn(el.getAttribute(attr) || ''));
+          const val = el.getAttribute(attr) || '';
+          if (val) addUrn(extractUrn(val));
         });
       } catch (_) {}
     }
 
-    // Pass 3 — raw text scan: hit every <script> and data attribute blob
-    // Uses textContent instead of innerHTML to avoid decoding overhead
+    // Pass 3 — Raw innerHTML regex scan across the whole main container or body
     try {
       const re = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
-      // Scan outerHTML of all likely containers (cheaper than full body)
-      const containers = [
-        ...document.querySelectorAll(
-          '.search-results-container, .scaffold-finite-scroll__content, .artdeco-list, main'
-        ),
-        document.body, // fallback
-      ];
-      const seen = new Set();
-      for (const el of containers) {
-        if (seen.has(el)) continue;
-        seen.add(el);
+      const targetEl = document.querySelector('main') || document.body;
+      if (targetEl) {
         let m;
         re.lastIndex = 0;
-        const src = el.innerHTML;
+        const src = targetEl.innerHTML || '';
         while ((m = re.exec(src)) !== null) {
           addUrn('urn:li:' + m[1] + ':' + m[2]);
         }
-        break; // first match wins to avoid duplicating body scan
       }
     } catch (_) {}
 
