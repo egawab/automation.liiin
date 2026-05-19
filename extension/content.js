@@ -51,9 +51,11 @@
   window.__nexoraRunningId = runId;
 
   const sleep    = ms => new Promise(r => setTimeout(r, ms));
-  // Smart lifecycle guard: if window.__nexoraCfg changes (e.g. background starts
-  // a new keyword, session resets or stops), this running instance terminates immediately.
-  const isActive = () => window.__nexoraCfg?.runId === runId;
+  // Use a dedicated per-run stop flag — NOT window.__nexoraCfg which can be
+  // cleared by LinkedIn's SPA re-rendering the page between route changes.
+  const stopKey  = '__nexoraStop_' + runId;
+  window[stopKey] = false;
+  const isActive = () => !window[stopKey];
   const canSend  = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.sendMessage;
 
   console.log('[CS] URL Collector v2 start. kw="' + keyword + '" runId=' + runId);
@@ -61,14 +63,14 @@
   // ── URN helpers ────────────────────────────────────────────────────────────
   function extractUrn(s) {
     if (!s) return '';
-    const m = String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{18,22})/);
+    // Broad range: LinkedIn IDs vary from ~10 to 25 digits depending on account age
+    const m = String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
     if (m) return 'urn:li:' + m[1] + ':' + m[2];
-    const p = String(s).match(/activity-([0-9]{18,22})/i);
+    const p = String(s).match(/activity-([0-9]{10,25})/i);
     if (p) return 'urn:li:activity:' + p[1];
-    
-    // Aggressive fallback: if the string contains post-like paths, extract any 18-20 digit ID
+    // Fallback: extract any long ID from post-like paths
     if (s.includes('/posts/') || s.includes('feed/update') || s.includes('/detail/')) {
-      const idMatch = String(s).match(/([0-9]{18,22})/);
+      const idMatch = String(s).match(/([0-9]{10,25})/);
       if (idMatch) return 'urn:li:activity:' + idMatch[1];
     }
     return '';
@@ -134,7 +136,7 @@
     // Pass 3 — Raw innerHTML regex scan across the ENTIRE body
     // This is critical because LinkedIn's React hydration JSON is stored in <code> tags outside <main>
     try {
-      const re = /urn:li:(activity|ugcPost|share):([0-9]{18,22})/g;
+      const re = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
       const src = document.body.innerHTML || '';
       let m;
       re.lastIndex = 0;
@@ -229,55 +231,50 @@
     return false;
   }
 
-  // ── Wait for initial content ───────────────────────────────────────────────────
-  // Give LinkedIn's React router + data fetch time to complete the first render.
-  await new Promise(r => setTimeout(r, 4000));
+  // ── Wait for initial content ──────────────────────────────────────────────
+  // 5s hard sleep — lets LinkedIn's React fetch+render complete before we scan.
+  await new Promise(r => setTimeout(r, 5000));
 
-  // Wait for URL count to STABILIZE (not just > 0). This prevents breaking out on
-  // a single nav-link false-positive before the real search results have loaded.
+  // Poll until URL count stabilizes (same for 2 checks) or timeout.
+  // ALWAYS continue to the scroll phase even if we found 0 URLs —
+  // LinkedIn lazy-loads results on scroll on the new React layout.
   let waited = 0;
   let lastCount = -1;
   let stableRounds = 0;
-  const STABLE_NEEDED = 2; // two consecutive identical scans = data is stable
 
-  while (waited < 18000 && isActive()) {
+  while (waited < 15000 && isActive()) {
     scanDOM();
     const text = document.body.innerText || '';
-
-    // Hard-stop: no results for this keyword
     if (text.includes('No results found') || text.includes('try another search') || text.includes('No posts match')) {
       console.log('[CS] No results for this keyword.');
       break;
     }
-
     if (urlMap.size > 0 && urlMap.size === lastCount) {
       stableRounds++;
-      if (stableRounds >= STABLE_NEEDED) {
-        console.log('[CS] URL count stable at ' + urlMap.size + ' after ' + waited + 'ms. Starting scroll.');
+      if (stableRounds >= 2) {
+        console.log('[CS] URL count stable at ' + urlMap.size + ' after ' + waited + 'ms.');
         break;
       }
     } else {
       stableRounds = 0;
     }
     lastCount = urlMap.size;
-
     await new Promise(r => setTimeout(r, 800));
     waited += 800;
   }
-  if (!isActive()) { window.__nexoraRunningId = null; return; }
+  // NOTE: do NOT return early here even if urls=0.
+  // The scroll phase will lazy-load content on the new React layout.
+  if (!isActive()) { window[stopKey] = true; window.__nexoraRunningId = null; return; }
 
   // First scan before scrolling
   scanDOM();
-  
-  // -- DIAGNOSTIC SNAPSHOT --
+
+  // Diagnostic snapshot
   const diagAnchors = Array.from(document.querySelectorAll('a')).slice(0, 5).map(a => a.href).join(' | ');
   const diagContainers = ['.scaffold-layout__main', '.search-results-container', 'main', '#main'].map(s => s + ':' + !!document.querySelector(s)).join(', ');
-  const diagHtml = (document.body.innerHTML || '').substring(0, 300).replace(/\n/g, '');
-  const diagMsg = `[CS-DIAG] urls=${urlMap.size} waited=${waited}ms | Containers: ${diagContainers} | Anchors: ${diagAnchors} | HTML: ${diagHtml}`;
+  const diagMsg = `[CS-DIAG] urls=${urlMap.size} waited=${waited}ms | Containers: ${diagContainers} | Anchors: ${diagAnchors}`;
   console.log(diagMsg);
-  if (canSend()) {
-    chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: diagMsg }).catch(()=>{});
-  }
+  if (canSend()) chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: diagMsg }).catch(()=>{});
 
   // ── Scroll loop ─────────────────────────────────────────────────────
   const MAX_STEPS   = 55;
@@ -322,20 +319,18 @@
     }
   }
 
-  if (!isActive()) { window.__nexoraRunningId = null; return; }
+  if (!isActive()) { window[stopKey] = true; window.__nexoraRunningId = null; return; }
 
-  // Final scan after scroll done
+  // Final scan
   await sleep(1500);
   scanDOM();
   console.log('[CS] Final URL count: ' + urlMap.size);
 
-  // ── Build & send payload ───────────────────────────────────────────────────
   const posts = Array.from(urlMap.entries()).map(([urn, url]) => ({
-    canonicalUrn: urn,
-    url,
-    source: 'search_only',
+    canonicalUrn: urn, url, source: 'search_only',
   }));
 
+  window[stopKey] = true;
   window.__nexoraRunningId = null;
   console.log('[CS] DONE. Sending ' + posts.length + ' URLs to background.');
 

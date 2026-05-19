@@ -109,10 +109,19 @@ async function startSession(msg) {
 
 async function stopSession(reason) {
   console.warn('[BG] stopSession reason=' + reason);
-  S.runId = Date.now(); // Invalidate any running content scripts immediately
+  const oldRunId = S.runId;
+  S.runId = Date.now();
   S.state = 'IDLE';
   broadcastStatus('Stopped (' + reason + ')');
   setBadge('', '#6b7280');
+  // Signal any running content.js to stop immediately
+  if (S.tabId) {
+    chrome.scripting.executeScript({
+      target: { tabId: S.tabId },
+      func: (key) => { window[key] = true; },
+      args: ['__nexoraStop_' + oldRunId],
+    }).catch(() => {});
+  }
 }
 
 // ── Keyword loop ──────────────────────────────────────────────────────────────
