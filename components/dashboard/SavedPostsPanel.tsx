@@ -368,8 +368,9 @@ export function SavedPostsPanel() {
     return true;
   });
 
-  // Split: links-only vs full posts
-  const linksOnly = filtered.filter(p => p.postAuthor === null && p.postPreview === null);
+  // Split: links-only (search_only source) vs full posts
+  // links-only = postAuthor AND postPreview both null
+  const linksOnly = posts.filter(p => p.postAuthor === null && p.postPreview === null);
   const fullPosts  = filtered.filter(p => p.postAuthor !== null || p.postPreview !== null);
 
   // Group links-only by keyword

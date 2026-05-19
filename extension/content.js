@@ -39,7 +39,8 @@
     while(step<40&&isActive()){step++;const st=doScroll();await sleep(2400+Math.floor(Math.random()*900));if(!isActive())break;if(Math.abs(st-lastT)>60){noP=0;lastT=st;}else noP++;domSO();console.log("[CS-SO] step="+step+" links="+Object.keys(lm).length);if(step>=5&&(noP>=7||atBot()))break;}
     if(!isActive()){window.__nexoraRunId=null;return;}
     await sleep(2000);domSO();
-    const qualified=Object.entries(lm).filter(([,p])=>{const t=(p.likes||0)+(p.comments||0);return t>=MIN_ENG&&t<=MAX_ENG;}).map(([urn,p])=>({canonicalUrn:urn,url:p.url,postAuthor:null,postPreview:null,likes:p.likes,comments:p.comments,source:"search_only"}));
+    // Send ALL found links — dashboard filters by engagement
+    const qualified=Object.entries(lm).map(([urn,p])=>({canonicalUrn:urn,url:p.url,postAuthor:null,postPreview:null,likes:p.likes,comments:p.comments,source:"search_only"}));
     console.log("[CS-SO] total="+Object.keys(lm).length+" qualified="+qualified.length);
     window.removeEventListener("__nexora_net__",onNet);window.__nexoraNetHandler=null;window.__nexoraRunId=null;
     if(canSend())chrome.runtime.sendMessage({action:"FLUSH_POSTS",posts:qualified,runId,commentedUrns:[]}).catch(()=>{});
