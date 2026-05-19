@@ -6,15 +6,12 @@
 
   function isTarget(url) {
     if (!url || typeof url !== 'string') return false;
+    if (!/linkedin\.com/i.test(url)) return false;
+    // Exclude static assets
     if (/\.(js|css|png|jpg|gif|woff2?|svg|ico|webp)(\?|$)/i.test(url)) return false;
-    return (
-      url.includes('/voyager/api/') ||
-      url.includes('/graphql') ||
-      url.includes('/feed/') ||
-      url.includes('/search/') ||
-      url.includes('/contentrecipe') ||
-      url.includes('/updates')
-    ) && url.includes('linkedin.com');
+    // Exclude analytics/tracking endpoints that won't have post data
+    if (url.includes('analytics') || url.includes('tracking') || url.includes('utag') || url.includes('tms')) return false;
+    return true; // capture ALL other linkedin.com requests
   }
 
   const URN_RE = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;

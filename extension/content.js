@@ -278,9 +278,13 @@
   scanDOM();
 
   // Diagnostic snapshot
-  const diagAnchors = Array.from(document.querySelectorAll('a')).slice(0, 5).map(a => a.href).join(' | ');
-  const diagContainers = ['.scaffold-layout__main', '.search-results-container', 'main', '#main'].map(s => s + ':' + !!document.querySelector(s)).join(', ');
-  const diagMsg = `[CS-DIAG] urls=${urlMap.size} waited=${waited}ms | Containers: ${diagContainers} | Anchors: ${diagAnchors}`;
+  const diagAnchors = Array.from(document.querySelectorAll('a')).slice(0, 3).map(a => a.href).join(' | ');
+  const diagTotalAnchors = document.querySelectorAll('a').length;
+  const diagContainers = ['.scaffold-layout__main', '.search-results-container', 'main'].map(s => s + ':' + !!document.querySelector(s)).join(', ');
+  const diagApiUrns = (window.__nexoraApiUrns ? window.__nexoraApiUrns.size : 0);
+  const diagPageH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+  const diagText = (document.body.innerText || '').substring(0, 400).replace(/\s+/g, ' ').trim();
+  const diagMsg = `[CS-DIAG] urls=${urlMap.size} waited=${waited}ms apiUrns=${diagApiUrns} pageH=${diagPageH} anchors=${diagTotalAnchors} | ${diagContainers} | Text: ${diagText}`;
   console.log(diagMsg);
   if (canSend()) chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: diagMsg }).catch(()=>{});
 
