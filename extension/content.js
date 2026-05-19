@@ -61,10 +61,16 @@
   // ── URN helpers ────────────────────────────────────────────────────────────
   function extractUrn(s) {
     if (!s) return '';
-    const m = String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+    const m = String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{18,22})/);
     if (m) return 'urn:li:' + m[1] + ':' + m[2];
-    const p = String(s).match(/activity-([0-9]{10,25})/i);
+    const p = String(s).match(/activity-([0-9]{18,22})/i);
     if (p) return 'urn:li:activity:' + p[1];
+    
+    // Aggressive fallback: if the string contains post-like paths, extract any 18-20 digit ID
+    if (s.includes('/posts/') || s.includes('feed/update') || s.includes('/detail/')) {
+      const idMatch = String(s).match(/([0-9]{18,22})/);
+      if (idMatch) return 'urn:li:activity:' + idMatch[1];
+    }
     return '';
   }
 
@@ -95,13 +101,14 @@
         const href = a.href || '';
         if (!href) return;
         const decoded = decodeURIComponent(href);
-        // Look for any hrefs containing LinkedIn post indicators
+        // Look for any hrefs containing LinkedIn post indicators or generic 19-digit IDs
         if (
           decoded.includes('feed/update') ||
           decoded.includes('/posts/') ||
           decoded.includes('/detail/') ||
           decoded.includes('activity-') ||
-          decoded.includes('urn:li:')
+          decoded.includes('urn:li:') ||
+          /linkedin\.com.*[0-9]{18,22}/.test(decoded)
         ) {
           addUrn(extractUrn(decoded));
         }
@@ -125,17 +132,15 @@
       } catch (_) {}
     }
 
-    // Pass 3 — Raw innerHTML regex scan across the whole main container or body
+    // Pass 3 — Raw innerHTML regex scan across the ENTIRE body
+    // This is critical because LinkedIn's React hydration JSON is stored in <code> tags outside <main>
     try {
-      const re = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
-      const targetEl = document.querySelector('main') || document.body;
-      if (targetEl) {
-        let m;
-        re.lastIndex = 0;
-        const src = targetEl.innerHTML || '';
-        while ((m = re.exec(src)) !== null) {
-          addUrn('urn:li:' + m[1] + ':' + m[2]);
-        }
+      const re = /urn:li:(activity|ugcPost|share):([0-9]{18,22})/g;
+      const src = document.body.innerHTML || '';
+      let m;
+      re.lastIndex = 0;
+      while ((m = re.exec(src)) !== null) {
+        addUrn('urn:li:' + m[1] + ':' + m[2]);
       }
     } catch (_) {}
 
