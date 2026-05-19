@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import {
   ExternalLink, Trash2, Search, Target,
-  Calendar, ChevronDown, ChevronRight, RefreshCw, Copy, Check,
+  Calendar, RefreshCw, Copy, Check, AlertCircle,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -15,6 +15,10 @@ interface SavedPost {
   keyword:   string;
   savedAt:   string;
   visited:   boolean;
+  // optional fields that may be present but are not displayed
+  postAuthor?:  string | null;
+  postPreview?: string | null;
+  canonicalUrn?: string | null;
 }
 
 // ─── Single URL row ───────────────────────────────────────────────────────────
@@ -37,6 +41,9 @@ const UrlRow = memo(function UrlRow({
     });
   }
 
+  const displayUrl = post.postUrl || '(no URL)';
+  const isValidUrl = post.postUrl?.startsWith('http');
+
   return (
     <div
       className={`flex items-center gap-3 px-4 py-2.5 rounded-lg group transition-colors ${
@@ -49,12 +56,18 @@ const UrlRow = memo(function UrlRow({
         <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse" />
       )}
 
+      {/* Date badge */}
+      <span className="shrink-0 text-[10px] text-tertiary hidden sm:flex items-center gap-1">
+        <Calendar className="w-3 h-3" />
+        {new Date(post.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+      </span>
+
       {/* URL */}
       <span
         className="flex-1 text-xs font-mono text-secondary truncate"
-        title={post.postUrl}
+        title={displayUrl}
       >
-        {post.postUrl}
+        {displayUrl}
       </span>
 
       {/* Actions — visible on hover */}
@@ -66,13 +79,15 @@ const UrlRow = memo(function UrlRow({
         >
           {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
         </button>
-        <button
-          onClick={() => onOpen(post)}
-          className="p-1.5 rounded-md text-tertiary hover:text-apple-blue transition-colors"
-          title="Open in LinkedIn"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-        </button>
+        {isValidUrl && (
+          <button
+            onClick={() => onOpen(post)}
+            className="p-1.5 rounded-md text-tertiary hover:text-apple-blue transition-colors"
+            title="Open in LinkedIn"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+          </button>
+        )}
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(post.id); }}
           className="p-1.5 rounded-md text-tertiary hover:text-red-400 transition-colors"
@@ -85,158 +100,128 @@ const UrlRow = memo(function UrlRow({
   );
 });
 
-// ─── Keyword group ────────────────────────────────────────────────────────────
-const KeywordGroup = memo(function KeywordGroup({
-  keyword,
-  posts,
-  onOpen,
-  onDelete,
-}: {
-  keyword:  string;
-  posts:    SavedPost[];
-  onOpen:   (post: SavedPost) => void;
-  onDelete: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const freshCount = posts.filter(p => !p.visited).length;
-
-  // Sort newest first
-  const sorted = [...posts].sort(
-    (a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime()
-  );
-
-  return (
-    <div className="rounded-xl border border-subtle overflow-hidden" style={{ background: 'var(--dash-surface-1)' }}>
-      {/* Header */}
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="w-full px-5 py-4 flex items-center justify-between hover:bg-surface-hover transition-colors"
-      >
-        <div className="flex items-center gap-3">
-          {open
-            ? <ChevronDown  className="w-4 h-4 text-apple-blue" />
-            : <ChevronRight className="w-4 h-4 text-tertiary" />
-          }
-          <Target className="w-4 h-4 text-apple-blue" />
-          <span className="text-sm font-semibold text-primary">{keyword}</span>
-          <Badge variant="info"  size="sm">{posts.length} links</Badge>
-          {freshCount > 0 && <Badge variant="error" size="sm" dot>{freshCount} new</Badge>}
-        </div>
-        <span className="text-xs text-tertiary">{open ? 'collapse' : 'expand'}</span>
-      </button>
-
-      {open && (
-        <div className="px-4 pb-4 pt-2 space-y-1 border-t border-subtle">
-          {sorted.map(post => (
-            <UrlRow key={post.id} post={post} onOpen={onOpen} onDelete={onDelete} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-});
-
 // ─── Main panel ───────────────────────────────────────────────────────────────
 export function SavedPostsPanel() {
-  const [posts, setPosts]         = useState<SavedPost[]>([]);
-  const [loading, setLoading]     = useState(true);
+  const [posts, setPosts]           = useState<SavedPost[]>([]);
+  const [status, setStatus]         = useState<'loading' | 'ok' | 'error'>('loading');
+  const [errorMsg, setErrorMsg]     = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const postsRef = useRef<SavedPost[]>([]);
+  const [copiedKw, setCopiedKw]     = useState<string | null>(null);
 
+  // ── Fetch posts ─────────────────────────────────────────────────────────────
   const fetchPosts = useCallback(async (isManual = false) => {
     if (isManual) setRefreshing(true);
+
+    let incoming: SavedPost[] = [];
+    let fetchOk = false;
+
     try {
       const res = await fetch('/api/saved-posts', { credentials: 'include' });
-      if (!res.ok) return;
-      const incoming: SavedPost[] = await res.json();
 
-      const prev = postsRef.current;
-      const changed =
-        incoming.length !== prev.length ||
-        incoming.some((p, i) => p.id !== prev[i]?.id || p.visited !== prev[i]?.visited);
-
-      if (changed) {
-        postsRef.current = incoming;
-        setPosts(incoming);
+      if (res.ok) {
+        const data = await res.json();
+        incoming = Array.isArray(data) ? data : [];
+        fetchOk = true;
+        setErrorMsg('');
+      } else {
+        const body = await res.text().catch(() => '');
+        const msg = `API error ${res.status}: ${body.substring(0, 100)}`;
+        console.error('[SavedPostsPanel]', msg);
+        setErrorMsg(msg);
       }
-    } catch (err) {
-      console.error('[SavedPostsPanel] fetch error:', err);
-    } finally {
-      setLoading(false);
-      if (isManual) setRefreshing(false);
+    } catch (err: any) {
+      const msg = err?.message || 'Network error';
+      console.error('[SavedPostsPanel] fetch failed:', msg);
+      setErrorMsg(msg);
     }
-  }, []);
 
-  useEffect(() => { fetchPosts(); }, [fetchPosts]);
+    // Always update state regardless of success/failure
+    if (fetchOk) {
+      // Sort newest first
+      incoming.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+      setPosts(incoming);
+      setStatus('ok');
+    } else if (status === 'loading') {
+      // First load failed — show error instead of spinner
+      setStatus('error');
+    }
 
-  // Auto-refresh every 30s
+    if (isManual) setRefreshing(false);
+  }, []); // no deps — never recreated
+
+  // Initial load
   useEffect(() => {
-    const id = setInterval(() => fetchPosts(false), 30_000);
+    fetchPosts();
+  }, [fetchPosts]);
+
+  // Auto-refresh every 20s (shorter so new URLs appear quickly after a run)
+  useEffect(() => {
+    const id = setInterval(() => fetchPosts(false), 20_000);
     return () => clearInterval(id);
   }, [fetchPosts]);
 
+  // ── Mark visited ────────────────────────────────────────────────────────────
   const markVisited = useCallback(async (postId: string) => {
+    // Optimistic update
+    setPosts(prev => prev.map(p => p.id === postId ? { ...p, visited: true } : p));
     try {
       await fetch('/api/saved-posts', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ postId, visited: true }),
       });
-      setPosts(prev => {
-        const next = prev.map(p => p.id === postId ? { ...p, visited: true } : p);
-        postsRef.current = next;
-        return next;
-      });
     } catch {}
   }, []);
 
+  // ── Delete ──────────────────────────────────────────────────────────────────
   const deletePost = useCallback(async (postId: string) => {
+    // Optimistic update
+    setPosts(prev => prev.filter(p => p.id !== postId));
     try {
       await fetch(`/api/saved-posts?id=${postId}`, { method: 'DELETE', credentials: 'include' });
-      setPosts(prev => {
-        const next = prev.filter(p => p.id !== postId);
-        postsRef.current = next;
-        return next;
-      });
     } catch {}
   }, []);
 
+  // ── Open ────────────────────────────────────────────────────────────────────
   const openPost = useCallback((post: SavedPost) => {
-    if (post.postUrl) {
+    if (post.postUrl?.startsWith('http')) {
       window.open(post.postUrl, '_blank', 'noopener,noreferrer');
       markVisited(post.id);
     }
   }, [markVisited]);
 
-  // ── Copy all URLs for a keyword ──────────────────────────────────────────────
-  const [copiedKw, setCopiedKw] = useState<string | null>(null);
+  // ── Copy all for keyword ────────────────────────────────────────────────────
   const copyAllForKeyword = useCallback((keyword: string, kwPosts: SavedPost[]) => {
-    const urls = kwPosts.map(p => p.postUrl).filter(Boolean).join('\n');
+    const urls = kwPosts.map(p => p.postUrl).filter(u => u?.startsWith('http')).join('\n');
+    if (!urls) return;
     navigator.clipboard.writeText(urls).then(() => {
       setCopiedKw(keyword);
       setTimeout(() => setCopiedKw(null), 2000);
     });
   }, []);
 
-  // ── Filter ────────────────────────────────────────────────────────────────────
-  const filtered = posts.filter(post => {
-    if (!searchTerm) return true;
-    const s = searchTerm.toLowerCase();
-    return post.keyword.toLowerCase().includes(s) || post.postUrl.toLowerCase().includes(s);
-  });
+  // ── Filter & group ──────────────────────────────────────────────────────────
+  const filtered = searchTerm
+    ? posts.filter(p => {
+        const s = searchTerm.toLowerCase();
+        return p.keyword?.toLowerCase().includes(s) || p.postUrl?.toLowerCase().includes(s);
+      })
+    : posts;
 
-  // Group by keyword
-  const grouped = filtered.reduce<Record<string, SavedPost[]>>((acc, post) => {
-    (acc[post.keyword] ??= []).push(post);
+  const grouped = filtered.reduce<Record<string, SavedPost[]>>((acc, p) => {
+    const kw = p.keyword || 'Uncategorized';
+    (acc[kw] ??= []).push(p);
     return acc;
   }, {});
   const keywords = Object.keys(grouped).sort();
 
+  // ── Stats ───────────────────────────────────────────────────────────────────
   const totalUrls  = posts.length;
   const freshCount = posts.filter(p => !p.visited).length;
-  const kwCount    = new Set(posts.map(p => p.keyword)).size;
+  const kwCount    = new Set(posts.map(p => p.keyword || '')).size;
 
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -244,10 +229,15 @@ export function SavedPostsPanel() {
         <div>
           <h2 className="text-tile-heading text-primary">Saved Post Links</h2>
           <p className="text-caption text-secondary mt-1">
-            Direct LinkedIn post URLs — grouped by keyword. Click any link to open it.
+            Direct LinkedIn post URLs — grouped by keyword.
           </p>
         </div>
-        <Button onClick={() => fetchPosts(true)} variant="secondary" size="sm" disabled={refreshing}>
+        <Button
+          onClick={() => fetchPosts(true)}
+          variant="secondary"
+          size="sm"
+          disabled={refreshing || status === 'loading'}
+        >
           <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} />
           {refreshing ? 'Syncing…' : 'Refresh'}
         </Button>
@@ -260,7 +250,9 @@ export function SavedPostsPanel() {
           <div className="text-4xl font-bold text-primary leading-none">{totalUrls}</div>
         </div>
         <div className="bg-surface-elevated rounded-lg p-5 border border-apple-blue/30 text-center">
-          <div className="text-xs font-bold uppercase tracking-wider text-apple-blue mb-1">New</div>
+          <div className="text-xs font-bold uppercase tracking-wider text-apple-blue mb-1 flex items-center justify-center gap-1">
+            New <span className="w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse inline-block" />
+          </div>
           <div className="text-4xl font-bold text-primary leading-none">{freshCount}</div>
         </div>
         <div className="bg-surface-elevated rounded-lg p-5 border border-subtle text-center">
@@ -282,11 +274,24 @@ export function SavedPostsPanel() {
       </div>
 
       {/* Content */}
-      {loading ? (
+      {status === 'loading' ? (
         <div className="py-20 text-center">
           <div className="w-8 h-8 rounded-full border-2 border-subtle border-t-apple-blue animate-spin mx-auto mb-4" />
           <p className="text-sm text-secondary">Loading…</p>
         </div>
+
+      ) : status === 'error' ? (
+        <div className="py-16 text-center">
+          <div className="w-12 h-12 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4">
+            <AlertCircle className="w-6 h-6 text-red-400" />
+          </div>
+          <h3 className="text-sm font-semibold text-primary mb-2">Could not load posts</h3>
+          <p className="text-xs text-red-400 max-w-sm mx-auto mb-4">{errorMsg}</p>
+          <Button onClick={() => { setStatus('loading'); fetchPosts(true); }} variant="secondary" size="sm">
+            Retry
+          </Button>
+        </div>
+
       ) : keywords.length === 0 ? (
         <div className="py-20 text-center">
           <div className="w-12 h-12 bg-surface-elevated rounded-full flex items-center justify-center mx-auto mb-4">
@@ -295,44 +300,63 @@ export function SavedPostsPanel() {
           <h3 className="text-sm font-semibold text-primary mb-2">No Links Yet</h3>
           <p className="text-xs text-secondary max-w-sm mx-auto">
             {searchTerm
-              ? 'No results match your search.'
+              ? 'No results match your search. Try a different keyword.'
               : 'Start the extension on a LinkedIn content search page to collect post URLs.'}
           </p>
         </div>
+
       ) : (
         <div className="space-y-4 pb-12">
-          {keywords.map(keyword => (
-            <div key={keyword} className="rounded-xl border border-subtle overflow-hidden" style={{ background: 'var(--dash-surface-1)' }}>
-              {/* Keyword header */}
-              <div className="px-5 py-3 flex items-center gap-3" style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}>
-                <Target className="w-4 h-4 text-apple-blue shrink-0" />
-                <span className="text-sm font-bold text-primary">{keyword}</span>
-                <Badge variant="info" size="sm">{grouped[keyword].length} links</Badge>
-                <div className="ml-auto">
-                  <button
-                    onClick={() => copyAllForKeyword(keyword, grouped[keyword])}
-                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-semibold transition-colors"
-                    style={{ background: 'var(--dash-surface-3)', color: 'var(--text-secondary)' }}
-                    title="Copy all URLs"
-                  >
-                    {copiedKw === keyword
-                      ? <><Check className="w-3.5 h-3.5 text-green-400" /> Copied!</>
-                      : <><Copy className="w-3.5 h-3.5" /> Copy All</>
-                    }
-                  </button>
+          {keywords.map(keyword => {
+            const kwPosts = grouped[keyword];
+            return (
+              <div
+                key={keyword}
+                className="rounded-xl border border-subtle overflow-hidden"
+                style={{ background: 'var(--dash-surface-1)' }}
+              >
+                {/* Keyword header */}
+                <div
+                  className="px-5 py-3 flex items-center gap-3"
+                  style={{ background: 'var(--dash-surface-2)', borderBottom: '1px solid var(--dash-border)' }}
+                >
+                  <Target className="w-4 h-4 text-apple-blue shrink-0" />
+                  <span className="text-sm font-bold text-primary">{keyword}</span>
+                  <Badge variant="info" size="sm">{kwPosts.length} links</Badge>
+                  {kwPosts.some(p => !p.visited) && (
+                    <Badge variant="error" size="sm" dot>
+                      {kwPosts.filter(p => !p.visited).length} new
+                    </Badge>
+                  )}
+                  <div className="ml-auto">
+                    <button
+                      onClick={() => copyAllForKeyword(keyword, kwPosts)}
+                      className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-semibold transition-colors"
+                      style={{ background: 'var(--dash-surface-3)', color: 'var(--text-secondary)' }}
+                      title="Copy all URLs for this keyword"
+                    >
+                      {copiedKw === keyword
+                        ? <><Check className="w-3.5 h-3.5 text-green-400" /> Copied!</>
+                        : <><Copy className="w-3.5 h-3.5" /> Copy All</>
+                      }
+                    </button>
+                  </div>
+                </div>
+
+                {/* URL list */}
+                <div className="px-4 py-3 space-y-1">
+                  {kwPosts.map(post => (
+                    <UrlRow
+                      key={post.id}
+                      post={post}
+                      onOpen={openPost}
+                      onDelete={deletePost}
+                    />
+                  ))}
                 </div>
               </div>
-
-              {/* URL list */}
-              <div className="px-4 py-3 space-y-1">
-                {[...grouped[keyword]]
-                  .sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime())
-                  .map(post => (
-                    <UrlRow key={post.id} post={post} onOpen={openPost} onDelete={deletePost} />
-                  ))}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
