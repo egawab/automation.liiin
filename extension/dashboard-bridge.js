@@ -36,15 +36,21 @@
   }
 
   // Wake up the service worker by sending a KEEP_ALIVE ping
-  function wakeUpSW(callback) {
+  function wakeUpSW(callback, retries) {
+    retries = retries || 0;
     if (!canSend()) {
-      console.warn('[NexoraBridge] chrome.runtime not ready — retrying in 800ms...');
-      setTimeout(() => wakeUpSW(callback), 800);
+      if (retries >= 10) {
+        const msg = 'Extension disconnected. Please refresh this page (F5) and try again.';
+        console.error('[NexoraBridge] ' + msg);
+        notifyDashboard('ENGINE_ERROR', { error: msg });
+        return;
+      }
+      console.warn('[NexoraBridge] chrome.runtime not ready — retrying in 800ms... (' + retries + '/10)');
+      setTimeout(() => wakeUpSW(callback, retries + 1), 800);
       return;
     }
     chrome.runtime.sendMessage({ action: 'KEEP_ALIVE' }, (resp) => {
       if (chrome.runtime.lastError) {
-        // SW was dead — it's now waking up, retry once
         console.warn('[NexoraBridge] SW waking up, retry in 1s...', chrome.runtime.lastError.message);
         setTimeout(() => {
           if (canSend()) callback();
