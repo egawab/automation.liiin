@@ -101,14 +101,13 @@
         const href = a.href || '';
         if (!href) return;
         const decoded = decodeURIComponent(href);
-        // Look for any hrefs containing LinkedIn post indicators or generic 19-digit IDs
+        // Look for any hrefs containing LinkedIn post indicators
         if (
           decoded.includes('feed/update') ||
           decoded.includes('/posts/') ||
           decoded.includes('/detail/') ||
           decoded.includes('activity-') ||
-          decoded.includes('urn:li:') ||
-          /linkedin\.com.*[0-9]{18,22}/.test(decoded)
+          decoded.includes('urn:li:')
         ) {
           addUrn(extractUrn(decoded));
         }
@@ -157,13 +156,17 @@
     const viewH = window.innerHeight || 800;
     const scrollAmt = Math.floor(viewH * 0.80);
 
-    // Window scroll (primary)
+    // Window scroll (primary — works for old layout)
     window.scrollBy({ top: scrollAmt, behavior: 'instant' });
 
-    // Also nudge potential inner containers
+    // documentElement scroll (new React layout uses this)
+    document.documentElement.scrollTop += scrollAmt;
+
+    // Scroll known scaffold containers if present
     const containers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
+      document.getElementById('root'),
       document.querySelector('main'),
     ];
     for (const el of containers) {
@@ -177,11 +180,13 @@
   }
 
   function getScrollY() {
-    // Return the maximum scroll position across window + known containers
+    // Return the maximum scroll position across window + all known containers
     let y = window.scrollY || 0;
+    if (document.documentElement.scrollTop > y) y = document.documentElement.scrollTop;
     const containers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
+      document.getElementById('root'),
       document.querySelector('main'),
     ];
     for (const el of containers) {
@@ -225,28 +230,37 @@
   }
 
   // ── Wait for initial content ───────────────────────────────────────────────────
-  // Give LinkedIn's React router time to hydrate the search results page.
-  await new Promise(r => setTimeout(r, 3500));
+  // Give LinkedIn's React router + data fetch time to complete the first render.
+  await new Promise(r => setTimeout(r, 4000));
 
-  // Wait deterministically for search results to appear rather than guessing via document height.
-  // The new layout renders a tall skeleton loader instantly, which fooled the height check.
+  // Wait for URL count to STABILIZE (not just > 0). This prevents breaking out on
+  // a single nav-link false-positive before the real search results have loaded.
   let waited = 0;
-  while (waited < 15000 && isActive()) {
-    scanDOM(); // perform an initial scan
-    if (urlMap.size > 0) {
-      console.log('[CS] Found URLs, initial page is ready.');
-      break;
-    }
+  let lastCount = -1;
+  let stableRounds = 0;
+  const STABLE_NEEDED = 2; // two consecutive identical scans = data is stable
+
+  while (waited < 18000 && isActive()) {
+    scanDOM();
     const text = document.body.innerText || '';
+
+    // Hard-stop: no results for this keyword
     if (text.includes('No results found') || text.includes('try another search') || text.includes('No posts match')) {
-      console.log('[CS] Page loaded but shows No Results.');
+      console.log('[CS] No results for this keyword.');
       break;
     }
-    if (document.querySelector('.artdeco-pagination')) {
-      console.log('[CS] Pagination loaded (mixed/empty results).');
-      break;
+
+    if (urlMap.size > 0 && urlMap.size === lastCount) {
+      stableRounds++;
+      if (stableRounds >= STABLE_NEEDED) {
+        console.log('[CS] URL count stable at ' + urlMap.size + ' after ' + waited + 'ms. Starting scroll.');
+        break;
+      }
+    } else {
+      stableRounds = 0;
     }
-    
+    lastCount = urlMap.size;
+
     await new Promise(r => setTimeout(r, 800));
     waited += 800;
   }
