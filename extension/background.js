@@ -115,26 +115,52 @@ async function runKeyword() {
   const kw = S.keywords[S.kwIndex];
   if (!kw) { finalizeSession(); return; }
 
-  const url = 'https://www.linkedin.com/search/results/content/?keywords='
+  const targetUrl = 'https://www.linkedin.com/search/results/content/?keywords='
     + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
 
   const myRunId = S.runId;
 
-  try {
-    await chrome.tabs.update(S.tabId, { url, active: true });
-  } catch (e) {
+  // ── Navigate to the search URL ─────────────────────────────────────────────
+  for (let navAttempt = 1; navAttempt <= 2; navAttempt++) {
     try {
-      S.tabId = await resolveLinkedInTab();
-      await chrome.tabs.update(S.tabId, { url, active: true });
-    } catch (e2) {
-      console.error('[BG] Cannot get LinkedIn tab:', e2.message);
-      await stopSession('no_tab');
-      return;
+      await chrome.tabs.update(S.tabId, { url: targetUrl, active: true });
+      break;
+    } catch (e) {
+      console.warn('[BG] Tab update failed (attempt ' + navAttempt + '):', e.message);
+      try {
+        S.tabId = await resolveLinkedInTab();
+        await chrome.tabs.update(S.tabId, { url: targetUrl, active: true });
+        break;
+      } catch (e2) {
+        if (navAttempt === 2) {
+          console.error('[BG] Cannot navigate LinkedIn tab:', e2.message);
+          await stopSession('no_tab');
+          return;
+        }
+      }
     }
   }
 
-  await waitForTabLoad(S.tabId);
+  // ── Wait for tab to finish loading the SEARCH page (not a redirect) ────────
+  const finalUrl = await waitForSearchPage(S.tabId, targetUrl, 30000);
+  console.log('[BG] Tab settled at:', finalUrl);
+
   if (S.state !== 'RUNNING' || S.runId !== myRunId) return;
+
+  // ── Abort if LinkedIn redirected to login / checkpoint / feed ───────────────
+  if (!finalUrl || !finalUrl.includes('/search/results/')) {
+    const isLoginWall = finalUrl?.includes('/login') || finalUrl?.includes('/checkpoint') || finalUrl?.includes('/authwall');
+    if (isLoginWall) {
+      console.warn('[BG] LinkedIn is showing login/checkpoint for this account. Session may have expired.');
+      broadcastStatus('⚠️ LinkedIn login required — please log in then retry.');
+      await stopSession('login_wall');
+      return;
+    }
+    // Non-search page (e.g., feed, profile) — wait a bit more and try again
+    console.warn('[BG] Tab did not reach search page. Got:', finalUrl, '— waiting 5s and retrying inject.');
+    await new Promise(r => setTimeout(r, 5000));
+    if (S.state !== 'RUNNING' || S.runId !== myRunId) return;
+  }
 
   broadcastStatus('Collecting URLs for: ' + kw);
   setBadge('ON', '#10b981');
@@ -273,6 +299,50 @@ async function resolveLinkedInTab() {
   return t4.id;
 }
 
+// waitForSearchPage: waits until the tab is 'complete' AND the URL looks like
+// the expected search page. Handles LinkedIn SPA redirects by waiting for the
+// URL to stabilise rather than just the first 'complete' event.
+async function waitForSearchPage(tabId, expectedUrl, maxMs = 30000) {
+  const deadline = Date.now() + maxMs;
+  let lastUrl = '';
+
+  // First, wait for the tab to reach 'complete' status
+  await new Promise(resolve => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(fn);
+      resolve();
+    }, Math.min(maxMs, 20000));
+
+    function fn(id, info) {
+      if (id !== tabId) return;
+      if (info.url) lastUrl = info.url; // track every URL change
+      if (info.status !== 'complete') return;
+      chrome.tabs.onUpdated.removeListener(fn);
+      clearTimeout(timer);
+      setTimeout(resolve, 2500); // let React router finish
+    }
+    chrome.tabs.onUpdated.addListener(fn);
+  });
+
+  // Now poll the actual tab URL until it contains '/search/results/' or deadline
+  while (Date.now() < deadline) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      const url = tab.url || '';
+      if (url.includes('/search/results/')) return url;
+      // If on login/checkpoint, return immediately so caller can abort
+      if (url.includes('/login') || url.includes('/checkpoint') || url.includes('/authwall')) return url;
+      // Still loading or redirecting — wait and poll again
+      await new Promise(r => setTimeout(r, 1000));
+    } catch (e) {
+      return lastUrl; // tab may have closed
+    }
+  }
+
+  // Timeout — return whatever URL the tab is at now
+  try { const tab = await chrome.tabs.get(tabId); return tab.url || ''; } catch { return lastUrl; }
+}
+
 function waitForTabLoad(tabId, maxMs = 25000) {
   return new Promise(resolve => {
     const timer = setTimeout(() => { chrome.tabs.onUpdated.removeListener(fn); resolve(); }, maxMs);
@@ -280,7 +350,7 @@ function waitForTabLoad(tabId, maxMs = 25000) {
       if (id !== tabId || info.status !== 'complete') return;
       chrome.tabs.onUpdated.removeListener(fn);
       clearTimeout(timer);
-      setTimeout(resolve, 3000); // let page JS settle
+      setTimeout(resolve, 2500);
     }
     chrome.tabs.onUpdated.addListener(fn);
   });
@@ -291,6 +361,17 @@ chrome.tabs.onRemoved.addListener(tabId => {
   if (S.state === 'RUNNING' || S.state === 'STARTING') {
     console.warn('[BG] LinkedIn tab closed during session');
     stopSession('tab_closed');
+  }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  // Detect if the active LinkedIn tab gets redirected to login mid-session
+  if (tabId !== S.tabId || S.state !== 'RUNNING') return;
+  const url = info.url || '';
+  if (url && (url.includes('/login') || url.includes('/authwall') || url.includes('/checkpoint'))) {
+    console.warn('[BG] LinkedIn session expired mid-run. Stopping.');
+    broadcastStatus('⚠️ LinkedIn session expired — please log in and restart.');
+    stopSession('session_expired');
   }
 });
 

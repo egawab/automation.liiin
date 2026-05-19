@@ -6,10 +6,40 @@
   const runId   = cfg.runId;
   const keyword = cfg.keyword;
 
-  // ── Guard: abort if config missing ────────────────────────────────────────
+  // ── Guard: abort if config missing ─────────────────────────────────
   if (!runId || !keyword) {
     console.warn('[CS] Missing config — aborting. cfg:', JSON.stringify(cfg));
     return;
+  }
+
+  // ── Guard: abort if not on a LinkedIn search page ────────────────────
+  const currentUrl = window.location.href;
+  if (!currentUrl.includes('linkedin.com')) {
+    console.warn('[CS] Not on LinkedIn. Aborting.');
+    return;
+  }
+  if (currentUrl.includes('/login') || currentUrl.includes('/authwall') || currentUrl.includes('/checkpoint')) {
+    console.warn('[CS] LinkedIn login wall detected. Aborting. URL:', currentUrl);
+    return;
+  }
+  // If not on search page yet, give it up to 10s for the SPA to route there
+  if (!currentUrl.includes('/search/results/')) {
+    console.warn('[CS] Not on search results yet. URL:', currentUrl, '- waiting up to 10s...');
+    let waited = 0;
+    while (waited < 10000) {
+      await new Promise(r => setTimeout(r, 500));
+      waited += 500;
+      const u = window.location.href;
+      if (u.includes('/search/results/')) { console.log('[CS] Search page loaded.'); break; }
+      if (u.includes('/login') || u.includes('/authwall') || u.includes('/checkpoint')) {
+        console.warn('[CS] Redirected to login wall. Aborting.');
+        return;
+      }
+    }
+    if (!window.location.href.includes('/search/results/')) {
+      console.warn('[CS] Timed out waiting for search page. Aborting.');
+      return;
+    }
   }
 
   // ── Dedup guard: uses a SEPARATE flag from the cfg-stamping step ──────────
@@ -116,27 +146,62 @@
     if (added > 0) console.log('[CS] scanDOM +' + added + ' total=' + urlMap.size);
   }
 
-  // ── Scroll helpers ─────────────────────────────────────────────────────────
-  // LinkedIn search results scroll via window, not a container element.
-  // Always use window.scrollBy + dispatchEvent to trigger lazy loading.
+  // ── Scroll utilities ───────────────────────────────────────────────────
+  // LinkedIn can render search results in two modes:
+  //   1. Window-level scroll (most common on search results pages)
+  //   2. Scaffold container scroll (.scaffold-layout__main or similar)
+  // We measure BOTH and use whichever changed.
   function doScroll() {
-    const viewH = window.innerHeight || document.documentElement.clientHeight;
-    const before = window.scrollY;
-    window.scrollBy({ top: Math.floor(viewH * 0.8), behavior: 'smooth' });
-    // Also fire on documentElement to catch any internal virtualized list
+    const viewH = window.innerHeight || 800;
+    const scrollAmt = Math.floor(viewH * 0.80);
+
+    // Window scroll (primary)
+    window.scrollBy({ top: scrollAmt, behavior: 'instant' });
+
+    // Also nudge potential inner containers
+    const containers = [
+      document.querySelector('.scaffold-layout__main'),
+      document.querySelector('.scaffold-layout-container__main'),
+      document.querySelector('main'),
+    ];
+    for (const el of containers) {
+      if (el && el.scrollHeight > el.clientHeight + 100) {
+        el.scrollTop += scrollAmt;
+      }
+    }
+
     document.documentElement.dispatchEvent(new Event('scroll', { bubbles: true }));
     window.dispatchEvent(new Event('scroll', { bubbles: true }));
-    return window.scrollY;
   }
 
-  function getScrollProgress() {
-    const h = Math.max(
-      document.body.scrollHeight,
-      document.documentElement.scrollHeight
-    );
-    const viewH = window.innerHeight || document.documentElement.clientHeight;
-    const y = window.scrollY;
-    return { y, atBottom: (y + viewH) >= h - 800, pageH: h };
+  function getScrollY() {
+    // Return the maximum scroll position across window + known containers
+    let y = window.scrollY || 0;
+    const containers = [
+      document.querySelector('.scaffold-layout__main'),
+      document.querySelector('.scaffold-layout-container__main'),
+      document.querySelector('main'),
+    ];
+    for (const el of containers) {
+      if (el && el.scrollTop > y) y = el.scrollTop;
+    }
+    return y;
+  }
+
+  function atBottom() {
+    // Check both window and inner containers
+    const winH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    const viewH = window.innerHeight || 800;
+    if ((window.scrollY + viewH) >= winH - 800) return true;
+
+    const containers = [
+      document.querySelector('.scaffold-layout__main'),
+      document.querySelector('.scaffold-layout-container__main'),
+    ];
+    for (const el of containers) {
+      if (el && (el.scrollTop + el.clientHeight) >= el.scrollHeight - 400) return true;
+    }
+    return false;
   }
 
   function clickShowMore() {
@@ -157,28 +222,38 @@
     return false;
   }
 
-  // ── Wait for initial content ───────────────────────────────────────────────
-  // Give LinkedIn's React router time to hydrate the search results page
-  await sleep(3000);
+  // ── Wait for initial content ───────────────────────────────────────────────────
+  // Give LinkedIn's React router time to hydrate the search results page.
+  // Second accounts may load slower (session validation, different server region).
+  await new Promise(r => setTimeout(r, 3500));
 
-  // Wait until the page has scrollable content (max 15s)
+  // Wait until the page has scrollable content (max 20s for slow accounts)
   let waited = 0;
-  while (waited < 15000 && isActive()) {
-    const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-    if (h > window.innerHeight * 1.5) break;
-    await sleep(600);
-    waited += 600;
+  while (waited < 20000 && isActive()) {
+    const winH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    const viewH = window.innerHeight || 800;
+    // Also check for inner containers
+    const containerH = (() => {
+      for (const sel of ['.scaffold-layout__main', 'main']) {
+        const el = document.querySelector(sel);
+        if (el && el.scrollHeight > el.clientHeight + 100) return el.scrollHeight;
+      }
+      return 0;
+    })();
+    if (winH > viewH * 1.3 || containerH > viewH * 1.3) break;
+    await new Promise(r => setTimeout(r, 700));
+    waited += 700;
   }
   if (!isActive()) { window[flagKey] = false; return; }
 
   // First scan before scrolling
   scanDOM();
-  console.log('[CS] After initial wait: urls=' + urlMap.size);
+  console.log('[CS] After initial wait: urls=' + urlMap.size + ' waited=' + waited + 'ms');
 
-  // ── Scroll loop ────────────────────────────────────────────────────────────
+  // ── Scroll loop ─────────────────────────────────────────────────────
   const MAX_STEPS   = 55;
   const MIN_STEPS   = 5;
-  const NO_PROG_MAX = 6;   // consecutive steps with <100px scroll = done
+  const NO_PROG_MAX = 8;   // more tolerance for slow accounts
 
   let step = 0;
   let noProgress = 0;
@@ -187,16 +262,16 @@
   while (step < MAX_STEPS && isActive()) {
     step++;
 
-    const scrollY = doScroll();
+    doScroll();
     // Wait for lazy-loaded content to render
-    await sleep(2800 + Math.floor(Math.random() * 1000));
+    await new Promise(r => setTimeout(r, 2800 + Math.floor(Math.random() * 1000)));
     if (!isActive()) break;
 
-    const { y, atBottom } = getScrollProgress();
+    const y = getScrollY();
+    const bottom = atBottom();
 
-    // Measure actual scroll movement (compare current y to last)
     const moved = Math.abs(y - lastY);
-    if (moved > 80) {
+    if (moved > 50) {
       noProgress = 0;
       lastY = y;
     } else {
@@ -206,12 +281,12 @@
     scanDOM();
     console.log('[CS] step=' + step + ' y=' + Math.round(y) + ' moved=' + Math.round(moved) + ' urls=' + urlMap.size + ' noProg=' + noProgress);
 
-    if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || atBottom)) {
-      console.log('[CS] Scroll complete. atBottom=' + atBottom + ' noProgress=' + noProgress);
+    if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || bottom)) {
+      console.log('[CS] Scroll complete. atBottom=' + bottom + ' noProgress=' + noProgress);
       if (clickShowMore()) {
-        console.log('[CS] Clicked "Show more". Continuing.');
+        console.log('[CS] Clicked “Show more”. Continuing.');
         noProgress = 0;
-        await sleep(3500);
+        await new Promise(r => setTimeout(r, 3500));
         continue;
       }
       break;
