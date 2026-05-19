@@ -250,7 +250,16 @@
 
   // First scan before scrolling
   scanDOM();
-  console.log('[CS] After initial wait: urls=' + urlMap.size + ' waited=' + waited + 'ms');
+  
+  // -- DIAGNOSTIC SNAPSHOT --
+  const diagAnchors = Array.from(document.querySelectorAll('a')).slice(0, 5).map(a => a.href).join(' | ');
+  const diagContainers = ['.scaffold-layout__main', '.search-results-container', 'main', '#main'].map(s => s + ':' + !!document.querySelector(s)).join(', ');
+  const diagHtml = (document.body.innerHTML || '').substring(0, 300).replace(/\n/g, '');
+  const diagMsg = `[CS-DIAG] urls=${urlMap.size} waited=${waited}ms | Containers: ${diagContainers} | Anchors: ${diagAnchors} | HTML: ${diagHtml}`;
+  console.log(diagMsg);
+  if (canSend()) {
+    chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: diagMsg }).catch(()=>{});
+  }
 
   // ── Scroll loop ─────────────────────────────────────────────────────
   const MAX_STEPS   = 55;

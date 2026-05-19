@@ -74,6 +74,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ running: S.state !== 'IDLE' && S.state !== 'DONE', state: S.state, totalSaved: S.totalSaved, keyword: S.keywords[S.kwIndex] || null });
     return false;
   }
+  
+  if (msg.action === 'DEBUG_LOG') {
+    console.warn(msg.msg);
+    sendResponse({ ok: true });
+    return false;
+  }
 
   if (msg.action === 'KEEP_ALIVE') { sendResponse({ ok: true }); return false; }
 });
