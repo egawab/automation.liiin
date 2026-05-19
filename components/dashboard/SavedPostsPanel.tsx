@@ -514,7 +514,7 @@ export function SavedPostsPanel() {
                 <span className="text-sm font-bold text-primary">Search Links</span>
                 <Badge variant="info" size="sm">{linksOnly.length} links</Badge>
               </div>
-              <div className="divide-y" style={{divideColor:'var(--dash-border)'}}>
+              <div className="divide-y divide-border-subtle">
                 {linksKws.map(kw => {
                   const kwLinks = linksGrouped[kw];
                   return (
