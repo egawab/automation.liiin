@@ -104,7 +104,32 @@
         });
       });
     }
+
+    if (action === 'RE_ENRICH') {
+      const auth = extractAuth();
+      const posts = event.data.posts || [];
+      console.log('[NexoraBridge] RE_ENRICH — queuing ' + posts.length + ' posts.');
+      wakeUpSW(() => {
+        sendToBackground({
+          action: 'RE_ENRICH',
+          posts,
+          dashboardUrl: auth.dashboardUrl,
+          userId:       auth.userId,
+        }, (resp) => {
+          console.log('[NexoraBridge] RE_ENRICH queued:', resp);
+        });
+      });
+    }
   });
+
+  // Relay background → dashboard for enrich progress events
+  if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.action === 'ENRICH_PROGRESS' || msg.action === 'ENRICH_DONE') {
+        notifyDashboard(msg.action, msg);
+      }
+    });
+  }
 
   // Initial ping to confirm bridge + SW are alive
   setTimeout(() => {

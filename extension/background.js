@@ -82,6 +82,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === 'KEEP_ALIVE') { sendResponse({ ok: true }); return false; }
+
+  // ── RE_ENRICH: score individual post pages — separate from scraping pipeline ──
+  if (msg.action === 'RE_ENRICH') {
+    sendResponse({ ok: true, queued: (msg.posts || []).length });
+    startEnrichSession(msg.posts || [], msg.dashboardUrl || S.dashboardUrl, msg.userId || S.userId);
+    return false;
+  }
+
+  // ENRICH_RESULT is handled inside enrichSinglePost() via a one-shot listener.
+  // This fallthrough avoids "Could not establish connection" errors for late messages.
+  if (msg.action === 'ENRICH_RESULT') { sendResponse({ ok: true }); return false; }
 });
 
 // ── Session lifecycle ─────────────────────────────────────────────────────────
@@ -393,6 +404,7 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   }
 });
 
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function broadcastStatus(text) {
   chrome.runtime.sendMessage({ action: 'EXTENSION_LIVE_STATUS', text }).catch(() => {});
@@ -400,4 +412,133 @@ function broadcastStatus(text) {
 function setBadge(text, color) {
   chrome.action.setBadgeText({ text }).catch(() => {});
   chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── RE_ENRICH: post-by-post enrichment (completely separate from scraping) ──────
+const E = { running: false }; // enrichment state
+
+async function startEnrichSession(posts, dashboardUrl, userId) {
+  if (E.running) {
+    console.warn('[BG-ENRICH] Already running, ignoring duplicate request.');
+    return;
+  }
+  E.running = true;
+  E.dashUrl  = dashboardUrl;
+  E.userId   = userId;
+
+  const total = posts.length;
+  let enriched = 0, failed = 0;
+  console.log('[BG-ENRICH] Starting enrichment for ' + total + ' posts.');
+  broadcastStatus('Enriching 0/' + total + ' posts...');
+  setBadge('...', '#f59e0b');
+
+  for (const post of posts) {
+    if (!post.url || !post.urn) { failed++; continue; }
+
+    try {
+      const score = await enrichSinglePost(post.url, post.urn);
+      if (score !== null) {
+        await pushEnrichScore(post.urn, score);
+        enriched++;
+        console.log('[BG-ENRICH] ✓ ' + post.urn + ' → score=' + score);
+      } else {
+        failed++;
+        console.log('[BG-ENRICH] ✕ ' + post.urn + ' → null (private/timeout)');
+      }
+    } catch (e) {
+      failed++;
+      console.warn('[BG-ENRICH] Error on ' + post.urn + ':', e.message);
+    }
+
+    const done = enriched + failed;
+    broadcastStatus('Enriching ' + done + '/' + total + ' posts...');
+    // Notify dashboard of progress
+    chrome.runtime.sendMessage({
+      action: 'ENRICH_PROGRESS',
+      done, total, enriched, failed,
+    }).catch(() => {});
+
+    // Gap between posts: give LinkedIn time to breathe
+    if (done < total) await sleep(2500);
+  }
+
+  E.running = false;
+  const msg = 'Enrichment complete: ' + enriched + ' scored, ' + failed + ' unavailable.';
+  console.log('[BG-ENRICH] ' + msg);
+  broadcastStatus(msg);
+  setBadge(String(enriched), '#10b981');
+  chrome.runtime.sendMessage({
+    action: 'ENRICH_DONE',
+    enriched, failed, total,
+  }).catch(() => {});
+}
+
+async function enrichSinglePost(url, urn) {
+  return new Promise(async (resolve) => {
+    let tabId = null;
+    let settled = false;
+
+    function finish(score) {
+      if (settled) return;
+      settled = true;
+      if (tabId !== null) chrome.tabs.remove(tabId).catch(() => {});
+      resolve(score);
+    }
+
+    // Hard timeout: if nothing reports back in 18s, give up
+    const hardTimeout = setTimeout(() => finish(null), 18000);
+
+    // One-shot ENRICH_RESULT listener for this specific tab
+    function onMsg(msg, sender) {
+      if (msg.action !== 'ENRICH_RESULT') return;
+      if (tabId !== null && sender.tab?.id !== tabId) return;
+      chrome.runtime.onMessage.removeListener(onMsg);
+      clearTimeout(hardTimeout);
+      finish(msg.score ?? null);
+    }
+    chrome.runtime.onMessage.addListener(onMsg);
+
+    try {
+      // Open the post URL in a background tab (user doesn't need to interact)
+      const tab = await chrome.tabs.create({ url, active: false });
+      tabId = tab.id;
+
+      // Wait for the page to fully load
+      await waitForTabLoad(tabId, 12000);
+
+      // Stamp the target URN so enrich.js knows which post to report on
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (u) => { window.__nexoraEnrichUrn = u; },
+        args: [urn],
+      });
+
+      // Inject interceptor first (catches any lazy-load API calls)
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['interceptor.js'] });
+      // Small pause to let interceptor process any pending responses
+      await sleep(800);
+      // Inject the enrichment reader
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['enrich.js'] });
+
+    } catch (e) {
+      console.warn('[BG-ENRICH] Tab setup failed for ' + url + ':', e.message);
+      chrome.runtime.onMessage.removeListener(onMsg);
+      clearTimeout(hardTimeout);
+      finish(null);
+    }
+  });
+}
+
+async function pushEnrichScore(urn, score) {
+  const endpoint = E.dashUrl + '/api/extension/enrich';
+  const resp = await fetch(endpoint, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'x-extension-token': E.userId },
+    body: JSON.stringify({ urn, score }),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error('Enrich API HTTP ' + resp.status + ': ' + body.substring(0, 100));
+  }
 }

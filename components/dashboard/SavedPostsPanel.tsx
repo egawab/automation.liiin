@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import {
   ExternalLink, Trash2, Search, Target,
-  Clock, RefreshCw, Copy, Check, AlertCircle,
+  Clock, RefreshCw, Copy, Check, AlertCircle, Zap,
 } from 'lucide-react';
 
 function relativeTime(dateStr: string): string {
@@ -134,6 +134,10 @@ export function SavedPostsPanel() {
   const [engagementFilter, setEngagementFilter] = useState<'all' | 'scored' | 'high'>('all');
   const [copiedKw, setCopiedKw]     = useState<string | null>(null);
 
+  // ── Enrich state ─────────────────────────────────────────────────────────────
+  type EnrichState = { running: boolean; done: number; total: number; enriched: number; failed: number };
+  const [enrich, setEnrich] = useState<EnrichState>({ running: false, done: 0, total: 0, enriched: 0, failed: 0 });
+
   // ── Fetch posts ─────────────────────────────────────────────────────────────
   const fetchPosts = useCallback(async (isManual = false) => {
     if (isManual) setRefreshing(true);
@@ -186,6 +190,23 @@ export function SavedPostsPanel() {
     return () => clearInterval(id);
   }, [fetchPosts]);
 
+  // ── Listen for enrichment progress/done from background.js via bridge ─────────
+  useEffect(() => {
+    function onMsg(e: MessageEvent) {
+      if (!e.data || e.data.source !== 'NEXORA_EXTENSION') return;
+      if (e.data.action === 'ENRICH_PROGRESS') {
+        setEnrich({ running: true, done: e.data.done, total: e.data.total, enriched: e.data.enriched, failed: e.data.failed });
+      }
+      if (e.data.action === 'ENRICH_DONE') {
+        setEnrich({ running: false, done: e.data.total, total: e.data.total, enriched: e.data.enriched, failed: e.data.failed });
+        // Auto-refresh post list so new scores appear immediately
+        fetchPosts(true);
+      }
+    }
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [fetchPosts]);
+
   // ── Mark visited ────────────────────────────────────────────────────────────
   const markVisited = useCallback(async (postId: string) => {
     // Optimistic update
@@ -225,6 +246,32 @@ export function SavedPostsPanel() {
       setTimeout(() => setCopiedKw(null), 2000);
     });
   }, []);
+
+  // ── Start enrichment ─────────────────────────────────────────────────────────
+  const startEnrich = useCallback(async () => {
+    if (enrich.running) return;
+    // Fetch unscored posts from the API
+    const res = await fetch('/api/saved-posts?unscored=true', { credentials: 'include' });
+    if (!res.ok) return;
+    const unscored: SavedPost[] = await res.json();
+    if (!unscored.length) {
+      alert('All posts are already scored — nothing to enrich!');
+      return;
+    }
+    const queue = unscored
+      .filter(p => p.canonicalUrn && p.postUrl)
+      .map(p => ({ urn: p.canonicalUrn!, url: p.postUrl }));
+    if (!queue.length) return;
+
+    setEnrich({ running: true, done: 0, total: queue.length, enriched: 0, failed: 0 });
+
+    // Send to background.js via the existing dashboard-bridge postMessage channel
+    window.postMessage({
+      source: 'NEXORA_DASHBOARD',
+      action: 'RE_ENRICH',
+      posts:  queue,
+    }, '*');
+  }, [enrich.running]);
 
   // ── Filter & group ──────────────────────────────────────────────────────────
   const engFiltered = posts.filter(p => {
@@ -272,16 +319,49 @@ export function SavedPostsPanel() {
             Direct LinkedIn post URLs — grouped by keyword.
           </p>
         </div>
-        <Button
-          onClick={() => fetchPosts(true)}
-          variant="secondary"
-          size="sm"
-          disabled={refreshing || status === 'loading'}
-        >
-          <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} />
-          {refreshing ? 'Syncing…' : 'Refresh'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => fetchPosts(true)}
+            variant="secondary"
+            size="sm"
+            disabled={refreshing || status === 'loading' || enrich.running}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Syncing…' : 'Refresh'}
+          </Button>
+          <Button
+            onClick={startEnrich}
+            variant="secondary"
+            size="sm"
+            disabled={enrich.running || posts.filter(p => p.engagementScore == null).length === 0}
+            title={`Enrich ${posts.filter(p => p.engagementScore == null).length} unscored posts`}
+          >
+            <Zap className={`w-3.5 h-3.5 mr-1.5 ${enrich.running ? 'animate-pulse text-amber-400' : ''}`} />
+            {enrich.running ? `Enriching ${enrich.done}/${enrich.total}…` : 'Enrich Scores'}
+          </Button>
+        </div>
       </div>
+
+      {/* Enrichment progress bar */}
+      {(enrich.running || enrich.total > 0) && (
+        <div className="bg-surface-elevated rounded-lg p-4 border border-amber-500/30">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-amber-400 flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5" />
+              {enrich.running ? 'Enriching engagement scores…' : 'Enrichment complete'}
+            </span>
+            <span className="text-xs text-tertiary">
+              {enrich.enriched} scored · {enrich.failed} unavailable · {enrich.done}/{enrich.total}
+            </span>
+          </div>
+          <div className="w-full bg-zinc-800 rounded-full h-1.5">
+            <div
+              className="h-1.5 rounded-full bg-amber-400 transition-all duration-500"
+              style={{ width: enrich.total > 0 ? `${Math.round((enrich.done / enrich.total) * 100)}%` : '0%' }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">

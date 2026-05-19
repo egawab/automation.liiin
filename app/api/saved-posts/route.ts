@@ -26,6 +26,12 @@ export async function GET(request: NextRequest) {
       whereClause.visited = visited === 'true';
     }
 
+    // unscored=true → return only posts where engagementScore is null (enrichment queue)
+    const unscored = searchParams.get('unscored');
+    if (unscored === 'true') {
+      whereClause.engagementScore = null;
+    }
+
     // Fetch saved posts
     const posts = await prisma.savedPost.findMany({
       where: whereClause,
