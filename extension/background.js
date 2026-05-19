@@ -279,15 +279,16 @@ async function pushToAPI(posts) {
   const kw = S.keywords[S.kwIndex] || '';
   const endpoint = S.dashboardUrl + '/api/extension/results';
 
-  const sample = posts.slice(0, 3).map(p => ({ urn: p.canonicalUrn, author: p.author, likes: p.likes, comments: p.comments }));
-  console.log('[BG] pushToAPI count=' + posts.length + ' sample=' + JSON.stringify(sample));
+  // Detect if this is a search-only batch
+  const source = (posts[0]?.source === 'search_only') ? 'search_only' : 'nexora_v8';
+  console.log('[BG] pushToAPI count=' + posts.length + ' source=' + source);
 
   let resp;
   try {
     resp = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
-      body: JSON.stringify({ posts, keyword: kw, source: 'nexora_v8' }),
+      body: JSON.stringify({ posts, keyword: kw, source }),
     });
   } catch (netErr) {
     // One retry after 3s
@@ -295,7 +296,7 @@ async function pushToAPI(posts) {
     resp = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
-      body: JSON.stringify({ posts, keyword: kw, source: 'nexora_v8' }),
+      body: JSON.stringify({ posts, keyword: kw, source }),
     });
   }
 
