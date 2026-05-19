@@ -145,6 +145,14 @@
       }
     } catch (_) {}
 
+    // Pass 4 — API-intercepted URNs (primary source for new React layout)
+    // The interceptor.js captures LinkedIn's XHR/fetch responses and stores URNs here.
+    try {
+      if (window.__nexoraApiUrns && window.__nexoraApiUrns.size > 0) {
+        window.__nexoraApiUrns.forEach(urn => addUrn(urn));
+      }
+    } catch (_) {}
+
     const added = urlMap.size - before;
     if (added > 0) console.log('[CS] scanDOM +' + added + ' total=' + urlMap.size);
   }

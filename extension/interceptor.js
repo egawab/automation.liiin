@@ -17,17 +17,26 @@
     ) && url.includes('linkedin.com');
   }
 
+  const URN_RE = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
+
   function dispatch(url, body) {
     if (!body || body.length < 200) return;
     const fc = body.trimStart()[0];
     if (fc !== '{' && fc !== '[') return;
-    console.log('[INT] captured', url.substring(0, 80), 'len=', body.length);
-    try {
-      console.log('[INT] dispatching __nexora_net__');
-      window.dispatchEvent(new CustomEvent('__nexora_net__', { detail: { url, body } }));
-    } catch (e) {
-      console.warn('[INT] dispatch error:', e);
+    // Store URNs directly for content.js to harvest
+    window.__nexoraApiUrns = window.__nexoraApiUrns || new Set();
+    URN_RE.lastIndex = 0;
+    let m;
+    let found = 0;
+    while ((m = URN_RE.exec(body)) !== null) {
+      window.__nexoraApiUrns.add('urn:li:' + m[1] + ':' + m[2]);
+      found++;
     }
+    if (found > 0) console.log('[INT] captured ' + found + ' URNs from', url.substring(0, 80));
+    // Also dispatch event for any other listeners
+    try {
+      window.dispatchEvent(new CustomEvent('__nexora_net__', { detail: { url, body } }));
+    } catch (e) {}
   }
 
   // XHR hook

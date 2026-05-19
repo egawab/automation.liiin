@@ -183,12 +183,15 @@ async function runKeyword() {
   // Stamp config then inject URL collector
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
+      // Step 0: inject the network interceptor so it can capture scroll-triggered API calls
+      await chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['interceptor.js'] });
+
       // Step 1: stamp the config into the page context
       await chrome.scripting.executeScript({
         target: { tabId: S.tabId },
         func: (cfg) => {
-          // Only set __nexoraCfg — never touch __nexoraActive_* (owned by content.js)
           window.__nexoraCfg = cfg;
+          window.__nexoraApiUrns = window.__nexoraApiUrns || new Set();
           console.log('[BG-inject] __nexoraCfg stamped. runId=' + cfg.runId + ' kw=' + cfg.keyword);
         },
         args: [{ runId: myRunId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length, searchOnlyMode: true }],
