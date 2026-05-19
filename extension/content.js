@@ -63,13 +63,17 @@
   // ── URN helpers ────────────────────────────────────────────────────────────
   function extractUrn(s) {
     if (!s) return '';
-    // Broad range: LinkedIn IDs vary from ~10 to 25 digits depending on account age
+    // Primary: explicit URN string
     const m = String(s).match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
     if (m) return 'urn:li:' + m[1] + ':' + m[2];
+    // Secondary: activity-NNNN prefix pattern in URLs
     const p = String(s).match(/activity-([0-9]{10,25})/i);
     if (p) return 'urn:li:activity:' + p[1];
-    // Fallback: extract any long ID from post-like paths
-    if (s.includes('/posts/') || s.includes('feed/update') || s.includes('/detail/')) {
+    // Fallback: ONLY fire for /posts/ paths that also contain -activity- in the slug.
+    // This is the standard LinkedIn post permalink format and prevents false positives
+    // from profile pages, hashtag pages, and other /posts/ URLs without a post ID.
+    if ((s.includes('/posts/') || s.includes('feed/update') || s.includes('/detail/')) &&
+        s.includes('-activity-')) {
       const idMatch = String(s).match(/([0-9]{10,25})/);
       if (idMatch) return 'urn:li:activity:' + idMatch[1];
     }
@@ -97,13 +101,20 @@
   function scanDOM() {
     const before = urlMap.size;
 
-    // Pass 1 — Scan EVERY anchor on the page (extremely robust & fast)
+    // Pass 1 — Scan all anchors on the page for LinkedIn post links
     try {
       document.querySelectorAll('a').forEach(a => {
         const href = a.href || '';
         if (!href) return;
         const decoded = decodeURIComponent(href);
-        // Look for any hrefs containing LinkedIn post indicators
+        // Skip known non-post LinkedIn URL patterns that generate false positives:
+        // /safety/go/ = external link redirect wrapper (contains long tracking hashes)
+        // /preload/   = connection pre-invitation URLs
+        // pure /in/   = profile pages without an accompanying activity ID
+        if (decoded.includes('/safety/go/') ||
+            decoded.includes('/preload/') ||
+            (decoded.includes('linkedin.com/in/') && !decoded.includes('activity'))) return;
+        // Match only genuine post URL patterns
         if (
           decoded.includes('feed/update') ||
           decoded.includes('/posts/') ||
@@ -373,13 +384,21 @@
   scanDOM();
   console.log('[CS] Final URL count: ' + urlMap.size);
 
-  const posts = Array.from(urlMap.entries()).map(([urn, url]) => ({
-    canonicalUrn: urn, url, source: 'search_only',
-  }));
+  // Build payload — deduplicate by URL as a second layer after URN-level dedup.
+  // Handles rare cases where the same post is returned under two different URN types
+  // (e.g. urn:li:activity:X and urn:li:ugcPost:X) pointing to equivalent content.
+  const seenUrls = new Set();
+  const posts = Array.from(urlMap.entries())
+    .map(([urn, url]) => ({ canonicalUrn: urn, url, source: 'search_only' }))
+    .filter(p => {
+      if (seenUrls.has(p.url)) return false;
+      seenUrls.add(p.url);
+      return true;
+    });
 
   window[stopKey] = true;
   window.__nexoraRunningId = null;
-  console.log('[CS] DONE. Sending ' + posts.length + ' URLs to background.');
+  console.log('[CS] DONE. Sending ' + posts.length + ' URLs (from ' + urlMap.size + ' URNs, ' + (urlMap.size - posts.length) + ' url-dupes removed).');
 
   if (canSend()) {
     chrome.runtime.sendMessage({

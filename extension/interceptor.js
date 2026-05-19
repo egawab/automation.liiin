@@ -65,8 +65,16 @@
       const url = typeof resource === 'string' ? resource
         : (resource instanceof Request ? resource.url : '');
       if (isTarget(url)) {
-        resp.clone().text().then(body => dispatch(url, body)).catch(e => console.warn('[INT] fetch text err:', e));
-      }
+          resp.clone().text()
+            .then(body => dispatch(url, body))
+            .catch(e => {
+              // AbortError / TypeError are expected — LinkedIn cancels in-flight
+              // requests during scroll. Do not log these as they create noise.
+              if (e?.name !== 'AbortError' && e?.name !== 'TypeError') {
+                console.warn('[INT] fetch text err:', e?.name, e?.message);
+              }
+            });
+        }
     } catch (e) { console.warn('[INT] fetch hook err:', e); }
     return resp;
   };
