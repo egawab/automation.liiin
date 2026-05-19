@@ -63,23 +63,36 @@ export async function POST(req: Request) {
 
     const safeKeyword = sanitize(keyword || 'auto', 50);
 
-    // ── SEARCH-ONLY: links only ───────────────────────────────────────────────
+    // ── SEARCH-ONLY: URL links only ───────────────────────────────────────────
+    // Saves ONLY the canonical post URL. author and preview are always null.
     if (source === 'search_only') {
       let createdCount = 0;
       await Promise.allSettled(posts.map(async (post: any) => {
         const urn = normalizeUrn(post.canonicalUrn || post.url || '');
         if (!urn) return;
-        const safeUrl = normalizeUrl(sanitize(post.url || '', 2000));
-        const lk = post.likes != null ? BigInt(Math.min(Math.abs(Number(post.likes)), 10_000_000)) : null;
-        const cm = post.comments != null ? BigInt(Math.min(Math.abs(Number(post.comments)), 10_000_000)) : null;
+        const safeUrl = normalizeUrl(sanitize(post.url || post.canonicalUrn || '', 2000));
+        if (!safeUrl) return; // skip if we can't build a valid URL
         try {
           await prisma.savedPost.create({
-            data: { userId, canonicalUrn: urn, postUrl: safeUrl, keyword: safeKeyword,
-                    postAuthor: null, postPreview: null, likes: lk, comments: cm, visited: false },
+            data: {
+              userId,
+              canonicalUrn: urn,
+              postUrl:      safeUrl,
+              keyword:      safeKeyword,
+              postAuthor:   null,   // URL-only mode: no author
+              postPreview:  null,   // URL-only mode: no preview
+              likes:        null,   // URL-only mode: no analytics
+              comments:     null,
+              visited:      false,
+            },
           });
           createdCount++;
-        } catch (e: any) { if (e?.code !== 'P2002') throw e; }
+        } catch (e: any) {
+          // P2002 = unique constraint (already saved) — silently skip duplicates
+          if (e?.code !== 'P2002') throw e;
+        }
       }));
+      console.log('[API/results] search_only: created=' + createdCount + ' kw=' + safeKeyword);
       return setCorsHeaders(NextResponse.json({ success: true, createdCount, source: 'search_only' }));
     }
     // ── END SEARCH-ONLY ──────────────────────────────────────────────────────
