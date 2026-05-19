@@ -226,25 +226,29 @@
 
   // ── Wait for initial content ───────────────────────────────────────────────────
   // Give LinkedIn's React router time to hydrate the search results page.
-  // Second accounts may load slower (session validation, different server region).
   await new Promise(r => setTimeout(r, 3500));
 
-  // Wait until the page has scrollable content (max 20s for slow accounts)
+  // Wait deterministically for search results to appear rather than guessing via document height.
+  // The new layout renders a tall skeleton loader instantly, which fooled the height check.
   let waited = 0;
-  while (waited < 20000 && isActive()) {
-    const winH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-    const viewH = window.innerHeight || 800;
-    // Also check for inner containers
-    const containerH = (() => {
-      for (const sel of ['.scaffold-layout__main', 'main']) {
-        const el = document.querySelector(sel);
-        if (el && el.scrollHeight > el.clientHeight + 100) return el.scrollHeight;
-      }
-      return 0;
-    })();
-    if (winH > viewH * 1.3 || containerH > viewH * 1.3) break;
-    await new Promise(r => setTimeout(r, 700));
-    waited += 700;
+  while (waited < 15000 && isActive()) {
+    scanDOM(); // perform an initial scan
+    if (urlMap.size > 0) {
+      console.log('[CS] Found URLs, initial page is ready.');
+      break;
+    }
+    const text = document.body.innerText || '';
+    if (text.includes('No results found') || text.includes('try another search') || text.includes('No posts match')) {
+      console.log('[CS] Page loaded but shows No Results.');
+      break;
+    }
+    if (document.querySelector('.artdeco-pagination')) {
+      console.log('[CS] Pagination loaded (mixed/empty results).');
+      break;
+    }
+    
+    await new Promise(r => setTimeout(r, 800));
+    waited += 800;
   }
   if (!isActive()) { window.__nexoraRunningId = null; return; }
 
