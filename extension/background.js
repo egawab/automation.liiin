@@ -81,7 +81,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // ── Session lifecycle ─────────────────────────────────────────────────────────
 async function startSession(msg) {
   S.state = 'STARTING';
-  S.runId++;
+  S.runId = Date.now(); // Always use a globally unique timestamp runId to avoid collisions across starts
   S.totalSaved = 0;
   S.kwIndex = 0;
   console.log('[BG] startSession BEGIN runId=' + S.runId);
@@ -103,7 +103,7 @@ async function startSession(msg) {
 
 async function stopSession(reason) {
   console.warn('[BG] stopSession reason=' + reason);
-  S.runId++;
+  S.runId = Date.now(); // Invalidate any running content scripts immediately
   S.state = 'IDLE';
   broadcastStatus('Stopped (' + reason + ')');
   setBadge('', '#6b7280');

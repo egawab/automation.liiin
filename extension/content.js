@@ -42,18 +42,18 @@
     }
   }
 
-  // ── Dedup guard: uses a SEPARATE flag from the cfg-stamping step ──────────
-  // background.js stamps __nexoraCfg (not __nexoraRunId), so the flag below
-  // is exclusively owned by this script and can't collide with the injector.
-  const flagKey = '__nexoraActive_' + runId;
-  if (window[flagKey]) {
+  // ── Dedup guard & lifecycle management ─────────────────────────────────────
+  // If the exact same runId is already running, do not re-run.
+  if (window.__nexoraRunningId === runId) {
     console.warn('[CS] Already running runId=' + runId);
     return;
   }
-  window[flagKey] = true;
+  window.__nexoraRunningId = runId;
 
   const sleep    = ms => new Promise(r => setTimeout(r, ms));
-  const isActive = () => !!window[flagKey];
+  // Smart lifecycle guard: if window.__nexoraCfg changes (e.g. background starts
+  // a new keyword, session resets or stops), this running instance terminates immediately.
+  const isActive = () => window.__nexoraCfg?.runId === runId;
   const canSend  = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.sendMessage;
 
   console.log('[CS] URL Collector v2 start. kw="' + keyword + '" runId=' + runId);
@@ -241,7 +241,7 @@
     await new Promise(r => setTimeout(r, 700));
     waited += 700;
   }
-  if (!isActive()) { window[flagKey] = false; return; }
+  if (!isActive()) { window.__nexoraRunningId = null; return; }
 
   // First scan before scrolling
   scanDOM();
@@ -290,7 +290,7 @@
     }
   }
 
-  if (!isActive()) { window[flagKey] = false; return; }
+  if (!isActive()) { window.__nexoraRunningId = null; return; }
 
   // Final scan after scroll done
   await sleep(1500);
@@ -304,7 +304,7 @@
     source: 'search_only',
   }));
 
-  window[flagKey] = false;
+  window.__nexoraRunningId = null;
   console.log('[CS] DONE. Sending ' + posts.length + ' URLs to background.');
 
   if (canSend()) {
