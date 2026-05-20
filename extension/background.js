@@ -94,8 +94,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
 
+  // Dashboard polls this for live progress (push via sendMessage is unreliable in MV3)
+  if (msg.action === 'GET_ENRICH_STATUS') {
+    sendResponse({
+      running:        E.running,
+      done:           E.progress?.done          || 0,
+      total:          E.progress?.total         || 0,
+      enriched:       E.progress?.enriched      || 0,
+      failed:         E.progress?.failed        || 0,
+      deleted:        E.progress?.deleted       || 0,
+      nullCount:      E.progress?.nullCount     || 0,
+      currentKeyword: E.progress?.currentKeyword || '',
+    });
+    return false;
+  }
+
   // ENRICH_RESULT is handled inside enrichSinglePost() via a one-shot listener.
-  // This fallthrough avoids "Could not establish connection" errors for late messages.
   if (msg.action === 'ENRICH_RESULT') { sendResponse({ ok: true }); return false; }
 });
 
@@ -435,7 +449,9 @@ function setBadge(text, color) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── RE_ENRICH: post-by-post enrichment (completely separate from scraping) ──────
-const E = { running: false }; // enrichment state
+// E.progress is polled by the dashboard via GET_ENRICH_STATUS every 1.5s.
+// Push-based sendMessage is unreliable from MV3 service worker to content scripts.
+const E = { running: false, progress: null };
 
 async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
   if (E.running) {
@@ -443,6 +459,7 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
     return;
   }
   E.running = true;
+  E.progress = null;
   E.dashUrl  = dashboardUrl;
   E.userId   = userId;
 
@@ -453,12 +470,9 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
   console.log(`[BG-ENRICH] Starting enrichment for ${total} posts. Keyword: ${currentKeyword}`);
   broadcastStatus('Enriching 0/' + total + ' posts...');
   setBadge('...', '#f59e0b');
-  
-  // Broadcast initial start
-  chrome.runtime.sendMessage({
-    action: 'ENRICH_KEYWORD_START',
-    currentKeyword, total
-  }).catch(() => {});
+
+  // Write initial progress so first poll reflects correct total
+  E.progress = { done: 0, total, enriched: 0, failed: 0, deleted: 0, nullCount: 0, currentKeyword };
 
   for (const post of posts) {
     if (!post.url || !post.urn) { failed++; continue; }
@@ -469,12 +483,12 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
         await pushEnrichScore(post.urn, score);
         enriched++;
         console.log('[BG-ENRICH] ✓ ' + post.urn + ' → score=' + score);
-        
-        // Auto-delete guard
+
+        // Auto-delete guard: null scores are NEVER deleted
         if (autoDelete && score < deleteThreshold) {
-           await deleteEnrichPost(post.urn);
-           deleted++;
-           console.log(`[BG-ENRICH] 🗑 Deleted ${post.urn} (score ${score} < ${deleteThreshold})`);
+          await deleteEnrichPost(post.urn);
+          deleted++;
+          console.log(`[BG-ENRICH] 🗑 Deleted ${post.urn} (score ${score} < ${deleteThreshold})`);
         }
       } else {
         nullCount++;
@@ -486,14 +500,10 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
     }
 
     const done = enriched + nullCount + failed;
+    // Write to E.progress — dashboard polls this every 1.5s
+    E.progress = { done, total, enriched, failed, deleted, nullCount, currentKeyword };
     broadcastStatus('Enriching ' + done + '/' + total + ' posts...');
-    // Notify dashboard of progress
-    chrome.runtime.sendMessage({
-      action: 'ENRICH_PROGRESS',
-      done, total, enriched, failed, deleted, nullCount, currentKeyword
-    }).catch(() => {});
 
-    // Gap between posts: give LinkedIn time to breathe
     if (done < total) await sleep(2500);
   }
 
@@ -502,6 +512,7 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
   console.log('[BG-ENRICH] ' + msg);
   broadcastStatus(msg);
   setBadge(String(enriched), '#10b981');
+  // Final push broadcast — fires once, so unreliability is acceptable
   chrome.runtime.sendMessage({
     action: 'ENRICH_DONE',
     enriched, failed, total, deleted, nullCount, currentKeyword

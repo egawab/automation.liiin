@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import {
@@ -137,27 +137,28 @@ export function SavedPostsPanel() {
   // ── Enrich state ─────────────────────────────────────────────────────────────
   type EnrichState = { running: boolean; done: number; total: number; enriched: number; failed: number; deleted: number; nullCount: number; currentKeyword: string };
   const [enrich, setEnrich] = useState<EnrichState>({ running: false, done: 0, total: 0, enriched: 0, failed: 0, deleted: 0, nullCount: 0, currentKeyword: '' });
+  const enrichRunningRef = useRef(false); // track previous running state to detect finish
 
   const [enrichKeyword, setEnrichKeyword] = useState<string>('all');
+
+  // autoEnrich → persisted in chrome.storage.sync (background.js reads it independently)
   const [autoEnrich, setAutoEnrich] = useState(false);
-  const [autoDelete, setAutoDelete] = useState(false);
-  const [deleteThreshold, setDeleteThreshold] = useState(10);
+
+  // autoDelete + deleteThreshold → persisted in localStorage directly (reliable, no bridge timing)
+  const [autoDelete, setAutoDelete]         = useState<boolean>(() => localStorage.getItem('nexora_autodel') === 'true');
+  const [deleteThreshold, setDeleteThreshold] = useState<number>(() => parseInt(localStorage.getItem('nexora_threshold') || '10', 10));
   const [showDeleteWarning, setShowDeleteWarning] = useState(false);
 
-  // Load auto-enrich config on mount
-  useEffect(() => {
-    window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'GET_AUTO_ENRICH' }, '*');
-  }, []);
-
-  const saveConfig = useCallback((cfg: { autoEnrich?: boolean, autoDelete?: boolean, deleteThreshold?: number }) => {
+  // Save autoEnrich to chrome.storage.sync via bridge (background.js needs it for auto-trigger)
+  const saveAutoEnrichFlag = useCallback((val: boolean) => {
     window.postMessage({
       source: 'NEXORA_DASHBOARD',
       action: 'SAVE_AUTO_ENRICH',
-      autoEnrich: cfg.autoEnrich ?? autoEnrich,
-      autoDelete: cfg.autoDelete ?? autoDelete,
-      deleteThreshold: cfg.deleteThreshold ?? deleteThreshold,
+      autoEnrich: val,
+      autoDelete,
+      deleteThreshold,
     }, '*');
-  }, [autoEnrich, autoDelete, deleteThreshold]);
+  }, [autoDelete, deleteThreshold]);
 
   // ── Fetch posts ─────────────────────────────────────────────────────────────
   const fetchPosts = useCallback(async (isManual = false) => {
@@ -211,35 +212,64 @@ export function SavedPostsPanel() {
     return () => clearInterval(id);
   }, [fetchPosts]);
 
-  // ── Listen for enrichment progress/done from background.js via bridge ─────────
+  // Load auto-enrich config after bridge is ready (delayed so bridge's 500ms init fires first)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'GET_AUTO_ENRICH' }, '*');
+    }, 650);
+    return () => clearTimeout(t);
+  }, []);
+
+  // ── Polling: GET_ENRICH_STATUS every 1.5s while enrichment is running ──────────────
+  // This is the primary progress mechanism. Push-based messages are unreliable in MV3.
+  useEffect(() => {
+    if (!enrich.running) return;
+    const id = setInterval(() => {
+      window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'GET_ENRICH_STATUS' }, '*');
+    }, 1500);
+    return () => clearInterval(id);
+  }, [enrich.running]);
+
+  // ── Listen for enrichment status / config from bridge ────────────────────────────
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       if (!e.data || e.data.source !== 'NEXORA_EXTENSION') return;
-      
+
+      // Config loaded from chrome.storage.sync (only autoEnrich lives here)
       if (e.data.action === 'AUTO_ENRICH_CFG') {
         setAutoEnrich(!!e.data.autoEnrich);
-        setAutoDelete(!!e.data.autoDelete);
-        if (e.data.deleteThreshold) setDeleteThreshold(e.data.deleteThreshold);
+        // autoDelete + threshold are in localStorage — don't override them from storage
       }
-      if (e.data.action === 'ENRICH_KEYWORD_START') {
-        setEnrich(prev => ({ ...prev, currentKeyword: e.data.currentKeyword }));
+
+      // Polled progress response — primary mechanism for live updates
+      if (e.data.action === 'ENRICH_STATUS') {
+        const wasRunning = enrichRunningRef.current;
+        enrichRunningRef.current = !!e.data.running;
+        setEnrich(prev => ({
+          ...prev,
+          running:        !!e.data.running,
+          done:           e.data.done           ?? prev.done,
+          total:          e.data.total          ?? prev.total,
+          enriched:       e.data.enriched       ?? prev.enriched,
+          failed:         e.data.failed         ?? prev.failed,
+          deleted:        e.data.deleted        ?? prev.deleted,
+          nullCount:      e.data.nullCount      ?? prev.nullCount,
+          currentKeyword: e.data.currentKeyword ?? prev.currentKeyword,
+        }));
+        // When enrichment transitions from running → done, refresh post list
+        if (wasRunning && !e.data.running) fetchPosts(true);
       }
-      if (e.data.action === 'ENRICH_PROGRESS') {
-        setEnrich({
-          running: true, done: e.data.done, total: e.data.total,
-          enriched: e.data.enriched, failed: e.data.failed,
-          deleted: e.data.deleted || 0, nullCount: e.data.nullCount || 0,
-          currentKeyword: e.data.currentKeyword || ''
-        });
-      }
+
+      // Final push broadcast from background — backup for ENRICH_STATUS
       if (e.data.action === 'ENRICH_DONE') {
-        setEnrich({
-          running: false, done: e.data.total, total: e.data.total,
-          enriched: e.data.enriched, failed: e.data.failed,
-          deleted: e.data.deleted || 0, nullCount: e.data.nullCount || 0,
-          currentKeyword: e.data.currentKeyword || ''
-        });
-        // Auto-refresh post list so new scores appear immediately
+        enrichRunningRef.current = false;
+        setEnrich(prev => ({
+          ...prev,
+          running: false,
+          done: e.data.total ?? prev.total, total: e.data.total ?? prev.total,
+          enriched: e.data.enriched ?? prev.enriched, failed: e.data.failed ?? prev.failed,
+          deleted: e.data.deleted ?? prev.deleted, nullCount: e.data.nullCount ?? prev.nullCount,
+        }));
         fetchPosts(true);
       }
     }
@@ -382,8 +412,9 @@ export function SavedPostsPanel() {
                   className="rounded border-subtle bg-surface-elevated text-apple-blue focus:ring-0 focus:ring-offset-0"
                   checked={autoEnrich}
                   onChange={(e) => {
-                    setAutoEnrich(e.target.checked);
-                    saveConfig({ autoEnrich: e.target.checked });
+                    const v = e.target.checked;
+                    setAutoEnrich(v);
+                    saveAutoEnrichFlag(v);
                   }}
                 />
                 Auto-Enrich after Scrape
@@ -398,8 +429,10 @@ export function SavedPostsPanel() {
                     if (e.target.checked && !localStorage.getItem('nexora_autodel_ack')) {
                       setShowDeleteWarning(true);
                     } else {
-                      setAutoDelete(e.target.checked);
-                      saveConfig({ autoDelete: e.target.checked });
+                      const v = e.target.checked;
+                      setAutoDelete(v);
+                      localStorage.setItem('nexora_autodel', String(v));
+                      saveAutoEnrichFlag(autoEnrich); // sync chrome.storage too
                     }
                   }}
                 />
@@ -414,7 +447,7 @@ export function SavedPostsPanel() {
                 onChange={(e) => {
                   const val = parseInt(e.target.value) || 10;
                   setDeleteThreshold(val);
-                  saveConfig({ deleteThreshold: val });
+                  localStorage.setItem('nexora_threshold', String(val));
                 }}
                 disabled={!autoDelete}
               />

@@ -124,6 +124,15 @@
       });
     }
 
+    if (action === 'GET_ENRICH_STATUS') {
+      // Use wakeUpSW to ensure service worker is alive before querying
+      wakeUpSW(() => {
+        sendToBackground({ action: 'GET_ENRICH_STATUS' }, (resp) => {
+          notifyDashboard('ENRICH_STATUS', resp || { running: false });
+        });
+      });
+    }
+
     if (action === 'SAVE_AUTO_ENRICH') {
       if (canSend() && chrome.storage && chrome.storage.sync) {
          chrome.storage.sync.set({
