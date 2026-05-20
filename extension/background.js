@@ -66,45 +66,41 @@ async function waitForTab(tabId, maxMs = 20000) {
 // ── Core: Scroll & Collect post links from rendered DOM ──────────────────────
 async function collectPostsFromTab(tabId, keyword) {
   const urlMap = new Map(); // urn → url
-  const SCROLL_STEPS = 10;
-  const SCROLL_PX = 500;
 
-  for (let step = 0; step < SCROLL_STEPS; step++) {
-    if (S.state !== 'RUNNING') break;
+  // Helper: run collector in the page and add results to urlMap
+  async function sweep(label) {
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
-        func: (scrollPx) => {
-          // Collect all post anchor hrefs
+        func: () => {
           const found = [];
+
+          // A tags with post URLs
           document.querySelectorAll('a[href]').forEach(a => {
             const h = a.href || '';
-            if (h.includes('/feed/update/') || h.includes('/posts/') ||
-                (h.includes('linkedin.com') && h.includes('activity-'))) {
+            if (h.includes('/feed/update/') || h.includes('/posts/') || h.includes('activity-'))
               found.push(h);
-            }
           });
 
-          // Also check data attributes
-          ['data-entity-urn', 'data-urn', 'data-activity-urn'].forEach(attr => {
+          // Data attributes
+          ['data-entity-urn','data-urn','data-activity-urn','data-chameleon-result-urn'].forEach(attr => {
             document.querySelectorAll('[' + attr + ']').forEach(el => {
-              found.push(el.getAttribute(attr) || '');
+              const v = el.getAttribute(attr);
+              if (v) found.push(v);
             });
           });
 
-          // Scroll the main content container
-          const scrollEl =
-            document.querySelector('[data-testid="lazy-column"]')?.closest('[style*="overflow"]') ||
-            document.querySelector('main') ||
-            document.scrollingElement ||
-            document.documentElement;
-          if (scrollEl) scrollEl.scrollBy(0, scrollPx);
+          // Raw text scan of body for URN patterns
+          const bodyText = document.body.innerHTML;
+          const urnRe = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
+          let m2; urnRe.lastIndex = 0;
+          while ((m2 = urnRe.exec(bodyText)) !== null) {
+            found.push('urn:li:' + m2[1] + ':' + m2[2]);
+          }
 
           return found;
-        },
-        args: [SCROLL_PX]
+        }
       });
-
       const hrefs = results[0]?.result || [];
       let added = 0;
       hrefs.forEach(h => {
@@ -117,18 +113,65 @@ async function collectPostsFromTab(tabId, keyword) {
         urlMap.set(urn, url);
         added++;
       });
-      if (added > 0) console.log(`[BG] Step ${step + 1}/${SCROLL_STEPS}: +${added} new posts (total=${urlMap.size}) kw=${keyword}`);
+      if (added > 0) console.log(`[BG] ${label}: +${added} posts (total=${urlMap.size}) kw=${keyword}`);
     } catch (e) {
-      console.warn('[BG] executeScript failed at step ' + step + ':', e.message);
+      console.warn('[BG] sweep failed:', e.message);
     }
+  }
 
-    await new Promise(r => setTimeout(r, 1500));
+  // Helper: scroll the page using ALL methods to ensure SDUI virtual scroller responds
+  async function scrollDown(px) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (px) => {
+          // Method 1: window scroll
+          window.scrollBy(0, px);
+
+          // Method 2: scrollingElement
+          if (document.scrollingElement) document.scrollingElement.scrollTop += px;
+
+          // Method 3: find the element with the most scrollable content
+          let best = null;
+          document.querySelectorAll('div, section, main, article').forEach(el => {
+            if (el.scrollHeight > el.clientHeight + 100) {
+              if (!best || el.scrollHeight > best.scrollHeight) best = el;
+            }
+          });
+          if (best) best.scrollTop += px;
+
+          // Method 4: WheelEvent on the lazy column (triggers SDUI virtual scroller)
+          const lc = document.querySelector('[data-testid="lazy-column"]') || document.querySelector('main');
+          if (lc) {
+            lc.dispatchEvent(new WheelEvent('wheel', { deltaY: px, bubbles: true, cancelable: true }));
+          }
+        },
+        args: [px]
+      });
+    } catch (e) {
+      console.warn('[BG] scroll failed:', e.message);
+    }
+  }
+
+  // Initial collect (page already rendered)
+  await new Promise(r => setTimeout(r, 1000));
+  await sweep('Initial');
+
+  // Scroll-then-collect loop: 12 steps × ~400px = 4800px total (covers scrollH=3500)
+  const STEPS = 12;
+  const STEP_PX = 400;
+  for (let step = 1; step <= STEPS; step++) {
+    if (S.state !== 'RUNNING') break;
+    await scrollDown(STEP_PX);
+    await new Promise(r => setTimeout(r, 2000)); // wait for SDUI to render new posts
+    await sweep(`Step ${step}/${STEPS}`);
   }
 
   return Array.from(urlMap.entries()).map(([canonicalUrn, url]) => ({
     canonicalUrn, url, source: 'search_only'
   }));
 }
+
 
 // ── DB Push ──────────────────────────────────────────────────────────────────
 async function pushToAPI(posts, kw) {
