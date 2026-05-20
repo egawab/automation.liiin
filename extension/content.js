@@ -221,11 +221,16 @@
     // it is the same as window.scrollY and would double-scroll the old layout.
 
     // Scroll inner containers (new React layout: main, #root, scaffold)
+    // Also include SDUI layout containers (section[aria-label] and data-sdui-screen wrapper)
     const containers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
       document.getElementById('root'),
       document.querySelector('main'),
+      // ── LinkedIn SDUI layout (server-driven UI, hashed CSS classes) ──
+      document.querySelector('section[aria-label="Primary content"]'),
+      document.querySelector('[data-sdui-screen]'),
+      document.querySelector('[data-testid="lazy-column"]'),
     ];
     for (const el of containers) {
       if (el && el.scrollHeight > el.clientHeight + 100) {
@@ -246,6 +251,10 @@
       document.querySelector('.scaffold-layout-container__main'),
       document.getElementById('root'),
       document.querySelector('main'),
+      // ── LinkedIn SDUI layout ──
+      document.querySelector('section[aria-label="Primary content"]'),
+      document.querySelector('[data-sdui-screen]'),
+      document.querySelector('[data-testid="lazy-column"]'),
     ];
     for (const el of containers) {
       if (el && el.scrollTop > y) y = el.scrollTop;
@@ -260,11 +269,15 @@
     const winH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     const windowAtBottom = (window.scrollY + viewH) >= winH - 800;
 
-    // Check inner containers
+    // Check inner containers (including SDUI layout containers)
     const scrollContainers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
       document.querySelector('main'),
+      // ── LinkedIn SDUI layout ──
+      document.querySelector('section[aria-label="Primary content"]'),
+      document.querySelector('[data-sdui-screen]'),
+      document.querySelector('[data-testid="lazy-column"]'),
     ].filter(el => el && el.scrollHeight > el.clientHeight + 100);
 
     // For old layout (window scrolls): use window bottom check.
