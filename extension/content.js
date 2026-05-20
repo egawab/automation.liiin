@@ -215,13 +215,13 @@
     const viewH = window.innerHeight || 800;
     const scrollAmt = Math.floor(viewH * 0.80);
 
-    // Window-level scroll (old scaffold layout)
+    // Method 1: Window-level scroll (old scaffold layout)
     window.scrollBy({ top: scrollAmt, behavior: 'instant' });
-    // NOTE: do NOT also set document.documentElement.scrollTop here —
-    // it is the same as window.scrollY and would double-scroll the old layout.
 
-    // Scroll inner containers (new React layout: main, #root, scaffold)
-    // Also include SDUI layout containers (section[aria-label] and data-sdui-screen wrapper)
+    // Method 2: document.body scroll (webkit fallback)
+    document.body.scrollTop += scrollAmt;
+
+    // Method 3: Known scroll containers
     const containers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
@@ -235,6 +235,21 @@
     for (const el of containers) {
       if (el && el.scrollHeight > el.clientHeight + 100) {
         el.scrollTop += scrollAmt;
+      }
+    }
+
+    // Method 4: SDUI virtual scroller — scroll last visible item into view
+    // LinkedIn's LazyColumn uses IntersectionObserver to load more posts.
+    // Scrolling the last visible item into view triggers the observer to fetch the next batch.
+    if (document.querySelector('[data-sdui-screen]')) {
+      const candidates = [
+        ...document.querySelectorAll('article'),
+        ...document.querySelectorAll('[data-component-type]'),
+        ...document.querySelectorAll('[data-occludable-update-urn]'),
+        ...document.querySelectorAll('[data-urn]'),
+      ];
+      if (candidates.length > 0) {
+        candidates[candidates.length - 1].scrollIntoView({ block: 'end', behavior: 'instant' });
       }
     }
 
@@ -358,7 +373,11 @@
   // ── Scroll loop ─────────────────────────────────────────────────────
   const MAX_STEPS   = 55;
   const MIN_STEPS   = 5;
-  const NO_PROG_MAX = 8;   // more tolerance for slow accounts
+  // For SDUI virtual scroller, noProgress must be higher — the scroll position
+  // may not change even when new content IS loading. We use URL count as a
+  // secondary progress signal to avoid premature exit.
+  const isSdui      = !!document.querySelector('[data-sdui-screen]');
+  const NO_PROG_MAX = isSdui ? 14 : 8;
 
   let step = 0;
   let noProgress = 0;
@@ -367,9 +386,10 @@
   while (step < MAX_STEPS && isActive()) {
     step++;
 
+    const urlsBefore = urlMap.size;
     doScroll();
-    // Wait for lazy-loaded content to render
-    await new Promise(r => setTimeout(r, 2800 + Math.floor(Math.random() * 1000)));
+    // SDUI lazy-loading takes longer to render new posts
+    await new Promise(r => setTimeout(r, (isSdui ? 3500 : 2800) + Math.floor(Math.random() * 1000)));
     if (!isActive()) break;
 
     const y = getScrollY();
