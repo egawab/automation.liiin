@@ -238,20 +238,22 @@
       }
     }
 
-    // Method 4: SDUI virtual scroller — scroll last child of LazyColumn into view
-    // LinkedIn's LazyColumn uses IntersectionObserver on its LAST CHILD (sentinel element)
-    // to trigger loading the next batch. We must scroll that specific element, not the container.
-    if (document.querySelector('[data-sdui-screen]')) {
-      // Method 4a: scroll the last child of the LazyColumn sentinel
+    // Method 4: SDUI virtual scroller — use the REAL scroll container found above
+    if (isSdui) {
+      // 4a: scroll the actual overflow container (found by walking DOM)
+      if (sduiScrollEl) {
+        sduiScrollEl.scrollTop += scrollAmt;
+      }
+      // 4b: force window to bottom (catches window-scroll SDUI variant)
+      window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+      // 4c: scrollIntoView on last child of LazyColumn (triggers IntersectionObserver sentinel)
       const lazyCol = document.querySelector('[data-testid="lazy-column"]');
       if (lazyCol && lazyCol.lastElementChild) {
         lazyCol.lastElementChild.scrollIntoView({ block: 'end', behavior: 'instant' });
       }
-      // Method 4b: force scroll to bottom (window-level for SDUI)
-      window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
-      // Method 4c: scroll last article/post element found anywhere
-      const lastArticle = [...document.querySelectorAll('article, [data-occludable-update-urn], [data-urn]')].pop();
-      if (lastArticle) lastArticle.scrollIntoView({ block: 'end', behavior: 'instant' });
+      // 4d: scroll last post element anywhere
+      const lastPost = [...document.querySelectorAll('article, [data-occludable-update-urn], [data-urn]')].pop();
+      if (lastPost) lastPost.scrollIntoView({ block: 'end', behavior: 'instant' });
     }
 
     document.documentElement.dispatchEvent(new Event('scroll', { bubbles: true }));
@@ -259,15 +261,15 @@
   }
 
   function getScrollY() {
-    // Return the maximum scroll position across window + all known containers
     let y = window.scrollY || 0;
     if (document.documentElement.scrollTop > y) y = document.documentElement.scrollTop;
+    // SDUI: use the real scroll container if found
+    if (sduiScrollEl && sduiScrollEl.scrollTop > y) return sduiScrollEl.scrollTop;
     const containers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
       document.getElementById('root'),
       document.querySelector('main'),
-      // ── LinkedIn SDUI layout ──
       document.querySelector('section[aria-label="Primary content"]'),
       document.querySelector('[data-sdui-screen]'),
       document.querySelector('[data-testid="lazy-column"]'),
@@ -280,29 +282,24 @@
 
   function atBottom() {
     const viewH = window.innerHeight || 800;
-
-    // Check window scroll position
     const winH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     const windowAtBottom = (window.scrollY + viewH) >= winH - 800;
 
-    // Check inner containers (including SDUI layout containers)
+    // SDUI: check the real scroll container if found
+    if (sduiScrollEl) {
+      return (sduiScrollEl.scrollTop + sduiScrollEl.clientHeight) >= sduiScrollEl.scrollHeight - 400;
+    }
+
     const scrollContainers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
       document.querySelector('main'),
-      // ── LinkedIn SDUI layout ──
       document.querySelector('section[aria-label="Primary content"]'),
       document.querySelector('[data-sdui-screen]'),
       document.querySelector('[data-testid="lazy-column"]'),
     ].filter(el => el && el.scrollHeight > el.clientHeight + 100);
 
-    // For old layout (window scrolls): use window bottom check.
-    // For new layout (container scrolls, winH is tiny ~583px): use container check.
-    if (scrollContainers.length === 0) {
-      // Old layout — pure window scroll
-      return windowAtBottom;
-    }
-    // New layout — check the container
+    if (scrollContainers.length === 0) return windowAtBottom;
     return scrollContainers.every(el => (el.scrollTop + el.clientHeight) >= el.scrollHeight - 400);
   }
 
@@ -374,11 +371,26 @@
   // ── Scroll loop ─────────────────────────────────────────────────────
   const MAX_STEPS   = 55;
   const MIN_STEPS   = 5;
-  // For SDUI virtual scroller, noProgress must be higher — the scroll position
-  // may not change even when new content IS loading. We use URL count as a
-  // secondary progress signal to avoid premature exit.
   const isSdui      = !!document.querySelector('[data-sdui-screen]');
   const NO_PROG_MAX = isSdui ? 14 : 8;
+
+  // For SDUI: find the REAL scroll container by walking up DOM from LazyColumn.
+  // This is definitive — we don't guess, we measure computed styles.
+  let sduiScrollEl = null;
+  if (isSdui) {
+    const lazyCol = document.querySelector('[data-testid="lazy-column"]');
+    if (lazyCol) {
+      let el = lazyCol.parentElement;
+      while (el && el !== document.documentElement) {
+        const ov = window.getComputedStyle(el).overflowY;
+        if (ov === 'auto' || ov === 'scroll') { sduiScrollEl = el; break; }
+        el = el.parentElement;
+      }
+    }
+    console.log('[CS] SDUI scroll container:', sduiScrollEl
+      ? sduiScrollEl.tagName + ' scrollH=' + sduiScrollEl.scrollHeight + ' clientH=' + sduiScrollEl.clientHeight
+      : 'none — will use window fallback');
+  }
 
   let step = 0;
   let noProgress = 0;
