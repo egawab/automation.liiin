@@ -1,11 +1,11 @@
-// background.js — Nexora Tab Scraper v5
-// Fix: runId-gated FLUSH_POSTS + forced reload to kill stale content scripts
+// background.js — Nexora Headless Scraper (Final Clean Version)
+// Fetches LinkedIn search page HTML directly (no tab/DOM needed).
+// Gets ~5-10 posts per keyword from LinkedIn's SSR HTML. No pagination (SDUI ignores start=).
 
-console.log('[BG] Nexora Tab Scraper v5 loaded');
+console.log('[BG] Nexora Headless Scraper loaded');
 
 const S = {
   state: 'IDLE',
-  tabId: null,
   runId: 0,
   totalSaved: 0,
   dashboardUrl: '',
@@ -21,7 +21,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
     console.log('[BG] hb state=RUNNING kw=' + (S.keywords[S.kwIndex] || ''));
 });
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── URN helpers ───────────────────────────────────────────────────────────────
 function extractUrn(s) {
   if (!s) return '';
   const m = String(s).match(/(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/i);
@@ -38,33 +38,54 @@ function urnToUrl(urn) {
   return 'https://www.linkedin.com/feed/update/' + urn;
 }
 
-// ── Tab utilities ─────────────────────────────────────────────────────────────
-async function resolveLinkedInTab() {
-  const [t] = await chrome.tabs.query({ url: '*://*.linkedin.com/*', active: true });
-  if (t) return t.id;
-  const [t2] = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
-  if (t2) return t2.id;
-  const t3 = await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/', active: true });
-  await new Promise(r => setTimeout(r, 5000));
-  return t3.id;
+function extractPostsFromText(text) {
+  const urlMap = new Map();
+  const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
+  let m; URN_RE.lastIndex = 0;
+  while ((m = URN_RE.exec(text)) !== null) {
+    const raw = 'urn:li:' + m[1] + ':' + m[2];
+    const urn = extractUrn(raw) || raw;
+    if (urn && !urlMap.has(urn)) {
+      const url = urnToUrl(urn);
+      if (url) urlMap.set(urn, url);
+    }
+  }
+  return Array.from(urlMap.entries()).map(([canonicalUrn, url]) => ({ canonicalUrn, url, source: 'search_only' }));
 }
 
-function waitForTabLoad(tabId, maxMs = 25000) {
-  return new Promise(resolve => {
-    const timer = setTimeout(resolve, maxMs);
-    function fn(id, info) {
-      if (id !== tabId || info.status !== 'complete') return;
-      chrome.tabs.onUpdated.removeListener(fn);
-      clearTimeout(timer);
-      setTimeout(resolve, 2500); // extra wait for React paint
+// ── HTML Fetch ────────────────────────────────────────────────────────────────
+async function fetchPostsForKeyword(keyword) {
+  const url = 'https://www.linkedin.com/search/results/content/?keywords='
+    + encodeURIComponent(keyword) + '&origin=GLOBAL_SEARCH_HEADER';
+
+  console.log('[BG] Fetching: ' + url);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
+        'cache-control': 'no-cache'
+      }
+    });
+    if (!res.ok) {
+      console.warn('[BG] Fetch failed HTTP ' + res.status + ' for kw=' + keyword);
+      return [];
     }
-    chrome.tabs.onUpdated.addListener(fn);
-  });
+    const text = await res.text();
+    const posts = extractPostsFromText(text);
+    console.log('[BG] HTML fetch found ' + posts.length + ' posts for kw=' + keyword);
+    return posts;
+  } catch (e) {
+    console.warn('[BG] Fetch error for kw=' + keyword + ':', e.message);
+    return [];
+  }
 }
 
 // ── DB Push ──────────────────────────────────────────────────────────────────
 async function pushToAPI(posts, kw) {
   if (!posts || posts.length === 0) return 0;
+  console.log('[BG] Pushing ' + posts.length + ' posts for kw=' + kw);
   const endpoint = S.dashboardUrl + '/api/extension/results';
   const headers = { 'Content-Type': 'application/json', 'x-extension-token': S.userId };
   const body = JSON.stringify({ posts, keyword: kw, source: 'search_only' });
@@ -77,7 +98,8 @@ async function pushToAPI(posts, kw) {
       resp = await fetch(endpoint, { method: 'POST', headers, body });
     }
     if (!resp.ok) {
-      console.warn('[BG] DB push HTTP ' + resp.status);
+      const txt = await resp.text().catch(() => '');
+      console.warn('[BG] DB push failed HTTP ' + resp.status + ': ' + txt.slice(0, 200));
       return 0;
     }
     const data = await resp.json().catch(() => ({}));
@@ -88,9 +110,11 @@ async function pushToAPI(posts, kw) {
   }
 }
 
-// ── Keyword Fetch ──────────────────────────────────────────────────────────────
-async function fetchKeywords(dashUrl, userId) {
-  const resp = await fetch(dashUrl + '/api/extension/jobs', { headers: { 'x-extension-token': userId } });
+// ── Keyword Fetch ─────────────────────────────────────────────────────────────
+async function fetchKeywords() {
+  const resp = await fetch(S.dashboardUrl + '/api/extension/jobs', {
+    headers: { 'x-extension-token': S.userId }
+  });
   if (!resp.ok) throw new Error('Jobs API ' + resp.status);
   const jobs = await resp.json();
   if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
@@ -108,110 +132,40 @@ async function fetchKeywords(dashUrl, userId) {
   return [...new Set(kws)];
 }
 
-// ── Run one keyword ───────────────────────────────────────────────────────────
-async function runKeyword() {
-  if (S.state !== 'RUNNING') return;
-  const kw = S.keywords[S.kwIndex];
-  if (!kw) { finalizeSession(); return; }
+// ── Main engine loop ──────────────────────────────────────────────────────────
+async function runEngine() {
+  console.log('[BG] RUNNING. keywords=' + JSON.stringify(S.keywords));
 
-  const myRunId = S.runId;
-  const targetUrl = 'https://www.linkedin.com/search/results/content/?keywords='
-    + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
+  for (S.kwIndex = 0; S.kwIndex < S.keywords.length; S.kwIndex++) {
+    if (S.state !== 'RUNNING') break;
+    const kw = S.keywords[S.kwIndex];
 
-  console.log('[BG] Navigating to kw=' + kw);
+    const posts = await fetchPostsForKeyword(kw);
 
-  // ── Force full reload to kill any stale content.js from previous runs ──────
-  try {
-    await chrome.tabs.update(S.tabId, { url: targetUrl, active: true });
-  } catch (_) {
-    S.tabId = await resolveLinkedInTab();
-    await chrome.tabs.update(S.tabId, { url: targetUrl, active: true });
-  }
-  await waitForTabLoad(S.tabId, 25000);
-
-  if (S.state !== 'RUNNING' || S.runId !== myRunId) return;
-
-  // ── Stamp config ─────────────────────────────────────────────────────────────
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: S.tabId },
-      func: (cfg) => { window.__nexoraCfg = cfg; console.log('[CS] Config stamped:', cfg.runId); },
-      args: [{ runId: myRunId, keyword: kw }]
-    });
-  } catch (e) {
-    console.warn('[BG] Config stamp failed:', e.message);
-    advanceKeyword();
-    return;
-  }
-
-  // ── Wait for FLUSH_POSTS with THIS runId (one-shot listener, 50s timeout) ──
-  const posts = await new Promise((resolve) => {
-    const TIMEOUT_MS = 50000; // 12 steps × 2s + 2.5s initial + buffer
-    let done = false;
-
-    const timer = setTimeout(() => {
-      if (!done) { done = true; chrome.runtime.onMessage.removeListener(listener); resolve([]); }
-    }, TIMEOUT_MS);
-
-    function listener(msg, _sender, sendResponse) {
-      if (msg.action !== 'FLUSH_POSTS') return false;
-      if (msg.runId !== myRunId) {
-        // Stale message from a previous content.js — ignore silently
-        console.warn('[BG] Stale FLUSH_POSTS ignored (runId mismatch)');
-        sendResponse({ ok: false, reason: 'stale' });
-        return true;
-      }
-      if (!done) {
-        done = true;
-        clearTimeout(timer);
-        chrome.runtime.onMessage.removeListener(listener);
-        sendResponse({ ok: true });
-        resolve(msg.posts || []);
-      }
-      return true;
+    if (posts.length > 0) {
+      const saved = await pushToAPI(posts, kw);
+      S.totalSaved += saved;
+      console.log('[BG] Saved ' + saved + '/' + posts.length + ' kw=' + kw + ' total=' + S.totalSaved);
+    } else {
+      console.warn('[BG] 0 posts found for kw=' + kw);
     }
 
-    chrome.runtime.onMessage.addListener(listener);
-
-    // Inject content.js NOW (after listener is set up so we can't miss the message)
-    chrome.scripting.executeScript({ target: { tabId: S.tabId }, files: ['content.js'] })
-      .then(() => console.log('[BG] content.js injected for kw=' + kw))
-      .catch(e => {
-        console.warn('[BG] Inject failed:', e.message);
-        if (!done) { done = true; clearTimeout(timer); chrome.runtime.onMessage.removeListener(listener); resolve([]); }
-      });
-  });
-
-  if (S.state !== 'RUNNING' || S.runId !== myRunId) return;
-
-  console.log('[BG] kw=' + kw + ' found ' + posts.length + ' posts');
-  if (posts.length > 0) {
-    const saved = await pushToAPI(posts, kw);
-    S.totalSaved += saved;
-    console.log('[BG] Saved ' + saved + '/' + posts.length + ' kw=' + kw + ' total=' + S.totalSaved);
+    // Delay between keywords (anti-rate-limit)
+    if (S.kwIndex < S.keywords.length - 1 && S.state === 'RUNNING') {
+      console.log('[BG] Waiting 5s before next keyword...');
+      await new Promise(r => setTimeout(r, 5000));
+    }
   }
 
-  advanceKeyword();
-}
-
-function advanceKeyword() {
-  if (S.state !== 'RUNNING') return;
-  S.kwIndex++;
-  if (S.kwIndex >= S.keywords.length) {
-    finalizeSession();
-  } else {
-    console.log('[BG] Next keyword: ' + S.keywords[S.kwIndex]);
-    setTimeout(() => { if (S.state === 'RUNNING') runKeyword().catch(e => console.error('[BG]', e.message)); }, 3000);
+  if (S.state === 'RUNNING') {
+    S.state = 'IDLE';
+    console.log('[BG] All keywords done. totalSaved=' + S.totalSaved);
+    broadcastStatus('Done! ' + S.totalSaved + ' posts saved.');
+    setBadge(String(S.totalSaved), '#3b82f6');
   }
 }
 
-function finalizeSession() {
-  S.state = 'IDLE';
-  console.log('[BG] All keywords done. totalSaved=' + S.totalSaved);
-  broadcastStatus('Done! ' + S.totalSaved + ' posts saved.');
-  setBadge(String(S.totalSaved), '#3b82f6');
-}
-
+// ── Broadcast / Badge ─────────────────────────────────────────────────────────
 function broadcastStatus(msg) {
   chrome.runtime.sendMessage({ action: 'STATUS_UPDATE', message: msg }).catch(() => {});
 }
@@ -220,54 +174,49 @@ function setBadge(text, color) {
   chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
 }
 
-// ── Messages ─────────────────────────────────────────────────────────────────
+// ── Messages ──────────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.action === 'GET_STATUS' || msg.action === 'PING') {
-    sendResponse({ running: S.state === 'RUNNING', state: S.state, runId: S.runId, totalSaved: S.totalSaved, keyword: S.keywords[S.kwIndex] || null });
+    sendResponse({
+      running: S.state === 'RUNNING',
+      state: S.state,
+      runId: S.runId,
+      totalSaved: S.totalSaved,
+      keyword: S.keywords[S.kwIndex] || null
+    });
   }
+
   else if (msg.action === 'START_ENGINE' || msg.action === 'START_SESSION') {
     if (S.state === 'RUNNING') { sendResponse({ ok: false, reason: 'already_running' }); return true; }
+    S.state = 'RUNNING';
+    S.runId = Date.now();
+    S.kwIndex = 0;
+    S.totalSaved = 0;
+    S.dashboardUrl = msg.dashboardUrl || msg.cfg?.dashboardUrl || '';
+    S.userId = msg.userId || msg.cfg?.userId || '';
     sendResponse({ ok: true });
     (async () => {
       try {
-        S.state = 'RUNNING';
-        S.runId = Date.now();
-        S.kwIndex = 0;
-        S.totalSaved = 0;
-        S.dashboardUrl = msg.dashboardUrl || msg.cfg?.dashboardUrl;
-        S.userId = msg.userId || msg.cfg?.userId;
-        S.keywords = await fetchKeywords(S.dashboardUrl, S.userId);
-        console.log('[BG] RUNNING. keywords=' + JSON.stringify(S.keywords));
-        S.tabId = await resolveLinkedInTab();
-        await runKeyword();
+        S.keywords = await fetchKeywords();
+        await runEngine();
       } catch (e) {
-        console.error('[BG] Engine crash:', e.message);
+        console.error('[BG] Engine error:', e.message);
         S.state = 'IDLE';
         broadcastStatus('Error: ' + e.message);
       }
     })();
   }
+
   else if (msg.action === 'STOP_ENGINE' || msg.action === 'STOP_SESSION') {
-    const oldRunId = S.runId;
-    S.runId = Date.now(); // invalidate any pending FLUSH_POSTS
     S.state = 'IDLE';
-    if (S.tabId) {
-      chrome.scripting.executeScript({
-        target: { tabId: S.tabId },
-        func: (key) => { window[key] = true; },
-        args: ['__nexoraStop_' + oldRunId]
-      }).catch(() => {});
-    }
     broadcastStatus('Stopped.');
     setBadge('', '#6b7280');
     sendResponse({ ok: true });
   }
-  else if (msg.action === 'KEEP_ALIVE') { sendResponse({ ok: true }); }
-  else if (msg.action === 'FLUSH_POSTS') {
-    // Only reached if no keyword-specific listener is active (e.g. very stale message)
-    console.warn('[BG] Orphan FLUSH_POSTS ignored (no active listener), runId=' + msg.runId);
-    sendResponse({ ok: false, reason: 'no_listener' });
+
+  else if (msg.action === 'KEEP_ALIVE') {
+    sendResponse({ ok: true });
   }
 
   return true;
