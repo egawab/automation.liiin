@@ -1,4 +1,4 @@
-﻿node_modules/
+node_modules/
 .next/
 coverage/
 .DS_Store
@@ -32,3 +32,6 @@ tmp_rovodev_*
 # COMPLETE_ANALYSIS.md
 # SETUP_CHECKLIST.md
 .vercel
+
+# Generated extension ZIP (rebuilt automatically on every deployment via scripts/build-extension-zip.js)
+public/nexora-extension.zip
