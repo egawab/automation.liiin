@@ -434,6 +434,21 @@
     console.log('[CS] step=' + step + ' y=' + Math.round(y) + ' moved=' + Math.round(moved) + ' urls=' + urlMap.size + ' +' + urlsAdded + ' noProg=' + noProgress + (isSdui ? ' [SDUI]' : ''));
 
     if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || bottom)) {
+      // For SDUI: when we hit the bottom of <main>, LinkedIn's LazyColumn may load
+      // a new batch and increase scrollHeight. Wait 3s and check before giving up.
+      if (isSdui && bottom && sduiScrollEl) {
+        const scrollHBefore = sduiScrollEl.scrollHeight;
+        console.log('[CS] SDUI at bottom. scrollH=' + scrollHBefore + '. Waiting for new batch...');
+        await new Promise(r => setTimeout(r, 3500));
+        scanDOM();
+        const scrollHAfter = sduiScrollEl.scrollHeight;
+        if (scrollHAfter > scrollHBefore + 100) {
+          console.log('[CS] SDUI new batch loaded! scrollH grew ' + scrollHBefore + ' → ' + scrollHAfter + '. Continuing.');
+          noProgress = 0;
+          lastY = -1; // reset so next scroll registers as progress
+          continue;
+        }
+      }
       console.log('[CS] Scroll complete. atBottom=' + bottom + ' noProgress=' + noProgress);
       if (clickShowMore()) {
         console.log('[CS] Clicked "Show more". Continuing.');
