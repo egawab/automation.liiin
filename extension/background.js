@@ -181,22 +181,40 @@ async function runHeadlessLoop() {
   }
 }
 
+// ── Keyword Fetch ──────────────────────────────────────────────────────────────
+async function fetchKeywords(dashUrl, uid) {
+  try {
+    const res = await fetch(`${dashUrl}/api/extension/config?userId=${uid}`);
+    if (!res.ok) throw new Error('API config fetch failed: ' + res.status);
+    const data = await res.json();
+    return data.keywords || [];
+  } catch (e) {
+    console.error('[BG] Failed to fetch keywords:', e);
+    return [];
+  }
+}
+
 // ── Messages ─────────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.action === 'PING') {
-    sendResponse({ state: S.state, runId: S.runId, totalSaved: S.totalSaved });
+  if (msg.action === 'GET_STATUS' || msg.action === 'PING') {
+    sendResponse({ 
+      running: S.state !== 'IDLE' && S.state !== 'DONE', 
+      state: S.state, 
+      runId: S.runId, 
+      totalSaved: S.totalSaved, 
+      keyword: S.keywords[S.kwIndex] || null 
+    });
   }
-  else if (msg.action === 'START_SESSION') {
-    console.log('[BG] START_SESSION', msg.cfg);
+  else if (msg.action === 'START_ENGINE' || msg.action === 'START_SESSION') {
+    console.log('[BG] START_ENGINE', msg);
     if (S.state === 'RUNNING') {
       if (S.abortController) S.abortController.abort();
     }
     
     S.state = 'RUNNING';
-    S.runId = msg.cfg.runId;
-    S.userId = msg.cfg.userId;
-    S.dashboardUrl = msg.cfg.dashboardUrl;
-    S.keywords = msg.cfg.keywords || [];
+    S.runId = Date.now();
+    S.dashboardUrl = msg.dashboardUrl || msg.cfg?.dashboardUrl;
+    S.userId = msg.userId || msg.cfg?.userId;
     S.kwIndex = 0;
     S.pageIndex = 0;
     S.totalSaved = 0;
@@ -205,15 +223,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     
     // Start engine asynchronously
-    runHeadlessLoop().catch(e => {
-      console.error('[BG] Engine crash:', e);
-      S.state = 'IDLE';
-    });
+    (async () => {
+      try {
+        if (!msg.cfg?.keywords) {
+          S.keywords = await fetchKeywords(S.dashboardUrl, S.userId);
+        } else {
+          S.keywords = msg.cfg.keywords;
+        }
+        
+        if (!S.keywords || S.keywords.length === 0) {
+          console.warn('[BG] No keywords found.');
+          S.state = 'IDLE';
+          return;
+        }
+        
+        await runHeadlessLoop();
+      } catch (e) {
+        console.error('[BG] Engine crash:', e);
+        S.state = 'IDLE';
+      }
+    })();
   }
-  else if (msg.action === 'STOP_SESSION') {
-    console.log('[BG] STOP_SESSION');
+  else if (msg.action === 'STOP_ENGINE' || msg.action === 'STOP_SESSION') {
+    console.log('[BG] STOP_ENGINE');
     S.state = 'IDLE';
     if (S.abortController) S.abortController.abort();
+    sendResponse({ ok: true });
+  }
+  else if (msg.action === 'KEEP_ALIVE') {
     sendResponse({ ok: true });
   }
   return true;
