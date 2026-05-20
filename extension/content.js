@@ -156,11 +156,27 @@
         const keys = Object.keys(node);
         for (const k of keys) {
           if (k.startsWith('__reactProps$') || k.startsWith('__reactFiber$')) {
-            const propsStr = JSON.stringify(node[k]);
-            const m = propsStr.match(/(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi);
-            if (m) {
-              m.forEach(u => addUrn(extractUrn(decodeURIComponent(u))));
+            // React Fiber/Props have circular references. JSON.stringify will throw.
+            // We use a safe string scanner to find URNs deep in the object.
+            const seen = new Set();
+            function extractStringsFromObj(obj) {
+              if (!obj || typeof obj !== 'object' || seen.has(obj)) return;
+              seen.add(obj);
+              for (const key in obj) {
+                try {
+                  const val = obj[key];
+                  if (typeof val === 'string') {
+                    if (val.includes('urn:li:activity:') || val.includes('urn%3Ali%3Aactivity%3A')) {
+                      const m = val.match(/(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi);
+                      if (m) m.forEach(u => addUrn(extractUrn(decodeURIComponent(u))));
+                    }
+                  } else if (typeof val === 'object') {
+                    extractStringsFromObj(val);
+                  }
+                } catch (_) {}
+              }
             }
+            extractStringsFromObj(node[k]);
           }
         }
       } catch (_) {}
