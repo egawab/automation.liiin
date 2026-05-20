@@ -136,90 +136,56 @@
   function scanDOM() {
     const before = urlMap.size;
 
-    // Pass 1 — Scan all anchors on the page for LinkedIn post links
-    try {
-      document.querySelectorAll('a').forEach(a => {
-        const href = a.href || '';
-        if (!href) return;
-        const decoded = decodeURIComponent(href);
-        // Skip known non-post LinkedIn URL patterns that generate false positives:
-        // /safety/go/ = external link redirect wrapper (contains long tracking hashes)
-        // /preload/   = connection pre-invitation URLs
-        // pure /in/   = profile pages without an accompanying activity ID
-        if (decoded.includes('/safety/go/') ||
-            decoded.includes('/preload/') ||
-            (decoded.includes('linkedin.com/in/') && !decoded.includes('activity'))) return;
-        // Match only genuine post URL patterns
-        if (
-          decoded.includes('feed/update') ||
-          decoded.includes('/posts/') ||
-          decoded.includes('/detail/') ||
-          decoded.includes('activity-') ||
-          decoded.includes('urn:li:')
-        ) {
-          addUrn(extractUrn(decoded));
+    // ── Deep Shadow DOM Walker ────────────────────────────────────────────────
+    // If LinkedIn SDUI uses Web Components, standard DOM queries will fail.
+    function walkDOM(node) {
+      if (!node) return;
+      
+      // Check for A tags
+      if (node.tagName === 'A') {
+        const href = node.href || '';
+        if (href.includes('/posts/') || href.includes('/feed/update/')) {
+          addUrn(extractUrn(href));
         }
-      });
-    } catch (_) {}
-
-    // Pass 2 — data-urn / data-entity-urn / data-activity-urn attributes
-    const DATA_ATTRS = [
-      'data-urn',
-      'data-activity-urn',
-      'data-entity-urn',
-      'data-chameleon-result-urn',
-      'data-id',
-    ];
-    for (const attr of DATA_ATTRS) {
-      try {
-        document.querySelectorAll('[' + attr + ']').forEach(el => {
-          const val = el.getAttribute(attr) || '';
+      }
+      
+      // Check for data attributes
+      if (node.getAttribute) {
+        const attrs = ['data-urn', 'data-activity-urn', 'data-entity-urn', 'data-chameleon-result-urn', 'data-id'];
+        for (const attr of attrs) {
+          const val = node.getAttribute(attr);
           if (val) addUrn(extractUrn(val));
-        });
-      } catch (_) {}
+        }
+      }
+
+      // Check text content of code blocks or scripts for URNs
+      if (node.tagName === 'CODE' || node.tagName === 'SCRIPT') {
+        const txt = node.textContent || '';
+        if (txt.includes('urn:li:activity:') || txt.includes('urn%3Ali%3Aactivity%3A')) {
+           const m = txt.match(/(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi);
+           if (m) m.forEach(u => addUrn(extractUrn(decodeURIComponent(u))));
+        }
+      }
+
+      // Traverse children
+      let child = node.firstChild;
+      while (child) {
+        walkDOM(child);
+        child = child.nextSibling;
+      }
+
+      // Traverse shadow root if exists
+      if (node.shadowRoot) {
+        let shadowChild = node.shadowRoot.firstChild;
+        while (shadowChild) {
+          walkDOM(shadowChild);
+          shadowChild = shadowChild.nextSibling;
+        }
+      }
     }
 
-    // Pass 3a — Raw innerHTML scan (decoded URNs)
     try {
-      const re = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
-      const src = document.body.innerHTML || '';
-      let m; re.lastIndex = 0;
-      while ((m = re.exec(src)) !== null) addUrn('urn:li:' + m[1] + ':' + m[2]);
-    } catch (_) {}
-
-    // Pass 3b — URL-encoded URN scan (urn%3Ali%3Aactivity%3A...)
-    // LinkedIn's new React layout stores URNs URL-encoded in HTML attributes and script tags
-    try {
-      const re = /urn%3Ali%3A(activity|ugcPost|share)%3A([0-9]{10,25})/gi;
-      const src = document.body.innerHTML || '';
-      let m; re.lastIndex = 0;
-      while ((m = re.exec(src)) !== null) addUrn('urn:li:' + m[1] + ':' + m[2]);
-    } catch (_) {}
-
-    // Pass 3c — JSON-escaped URN scan (urn\\u003Ali\\u003A...)
-    // React SSR sometimes stores URNs as unicode-escaped JSON
-    try {
-      const re = /urn(?:\\u003a|%3a|:)li(?:\\u003a|%3a|:)(activity|ugcPost|share)(?:\\u003a|%3a|:)([0-9]{10,25})/gi;
-      const src = document.body.innerHTML || '';
-      let m; re.lastIndex = 0;
-      while ((m = re.exec(src)) !== null) addUrn('urn:li:' + m[1] + ':' + m[2]);
-    } catch (_) {}
-
-    // Pass 4 — Hidden <code> SSR elements (LinkedIn hydration state)
-    // LinkedIn's new React SSR embeds initial state as JSON in <code id="bpr-guid-*"> elements
-    try {
-      document.querySelectorAll('code[id], code[style*="display:none"], code[style*="display: none"]').forEach(el => {
-        const txt = el.textContent || '';
-        if (txt.length < 50) return;
-        // Extract any nested activity URNs within fs_feedUpdate or similar wrappers
-        const re = /(?:activity|ugcPost|share)[%:\\u003a]+([0-9]{10,25})/gi;
-        let m; re.lastIndex = 0;
-        while ((m = re.exec(txt)) !== null) {
-          const type = m[0].split(/[%:\\u003a]/)[0].toLowerCase();
-          const knownType = type === 'ugcpost' ? 'ugcPost' : (type === 'share' ? 'share' : 'activity');
-          addUrn('urn:li:' + knownType + ':' + m[1]);
-        }
-      });
+      walkDOM(document.body);
     } catch (_) {}
 
     // Pass 5 — API-intercepted URNs with engagement scores (Map from interceptor.js)
