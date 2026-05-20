@@ -51,6 +51,15 @@
     }
     const fc = text.trimStart()[0];
     if (fc !== '{' && fc !== '[') return;
+
+    // DIAGNOSTIC: capture the first urn:li: to see the exact format in SDUI
+    if (!window.__nexoraDiagLogged && text.includes('urn:li:')) {
+      const idx = text.indexOf('urn:li:');
+      const snippet = text.slice(Math.max(0, idx - 100), idx + 200).replace(/\s+/g, ' ');
+      try { window.dispatchEvent(new CustomEvent('__nexora_net__', { detail: { action: 'DIAG', snippet } })); } catch(e){}
+      window.__nexoraDiagLogged = true;
+    }
+
     // Store as Map(urn → engagementScore|null) — content.js harvests this
     window.__nexoraApiUrns = window.__nexoraApiUrns || new Map();
     URN_RE.lastIndex = 0;

@@ -112,6 +112,10 @@
   const _netRe = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
   window.addEventListener('__nexora_net__', (e) => {
     try {
+      if (e.detail?.action === 'DIAG') {
+        if (canSend()) chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: '[CS-API-DIAG] ' + e.detail.snippet }).catch(()=>{});
+        return;
+      }
       let text = e.detail?.body || '';
       // Strip XSSI prefix if present
       if (text.startsWith(")]}'\n") || text.startsWith(")]}'")) {
