@@ -14,7 +14,9 @@
     return true; // capture ALL other linkedin.com requests
   }
 
-  const URN_RE = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
+  // Match both plain (urn:li:activity:NNNN) and URL-encoded (urn%3Ali%3Aactivity%3ANNNN) formats.
+  // LinkedIn SDUI API wraps post URNs inside fs_feedUpdate compound URNs with %3A encoding.
+  const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
 
   // Extract engagement score from a text window near a URN.
   // Uses regex instead of JSON.parse — resilient to truncated/aborted responses.

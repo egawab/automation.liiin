@@ -109,7 +109,7 @@
   // The interceptor runs in MAIN world and dispatches CustomEvents on window.
   // CustomEvents cross the MAIN→ISOLATED boundary, so we listen here to receive
   // URNs captured from LinkedIn's API responses in real-time during scrolling.
-  const _netRe = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
+  const _netRe = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
   window.addEventListener('__nexora_net__', (e) => {
     try {
       let text = e.detail?.body || '';
