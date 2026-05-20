@@ -53,34 +53,47 @@ function extractPostsFromText(text) {
   return Array.from(urlMap.entries()).map(([canonicalUrn, url]) => ({ canonicalUrn, url, source: 'search_only' }));
 }
 
-// ── HTML Fetch ────────────────────────────────────────────────────────────────
+// ── HTML Fetch (tries multiple URL variants to maximise unique posts) ─────────
 async function fetchPostsForKeyword(keyword) {
-  const url = 'https://www.linkedin.com/search/results/content/?keywords='
-    + encodeURIComponent(keyword) + '&origin=GLOBAL_SEARCH_HEADER';
+  const urlMap = new Map(); // urn → post, deduped across all fetches
 
-  console.log('[BG] Fetching: ' + url);
+  // Different URL variants that LinkedIn may return different SSR content for
+  const variants = [
+    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
+    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
+    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`,
+    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month`,
+  ];
 
-  try {
-    const res = await fetch(url, {
-      headers: {
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'accept-language': 'en-US,en;q=0.9',
-        'cache-control': 'no-cache'
-      }
-    });
-    if (!res.ok) {
-      console.warn('[BG] Fetch failed HTTP ' + res.status + ' for kw=' + keyword);
-      return [];
+  for (const url of variants) {
+    if (S.state !== 'RUNNING') break;
+    console.log('[BG] Fetching: ' + url);
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'accept-language': 'en-US,en;q=0.9',
+          'cache-control': 'no-cache'
+        }
+      });
+      if (!res.ok) { console.warn('[BG] Fetch HTTP ' + res.status + ' url=' + url); continue; }
+      const text = await res.text();
+      const posts = extractPostsFromText(text);
+      let added = 0;
+      posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
+      console.log('[BG] +' + added + ' new posts (total=' + urlMap.size + ') from variant: ' + url.split('?')[1]);
+    } catch (e) {
+      console.warn('[BG] Fetch error:', e.message);
     }
-    const text = await res.text();
-    const posts = extractPostsFromText(text);
-    console.log('[BG] HTML fetch found ' + posts.length + ' posts for kw=' + keyword);
-    return posts;
-  } catch (e) {
-    console.warn('[BG] Fetch error for kw=' + keyword + ':', e.message);
-    return [];
+    // Small delay between variants
+    await new Promise(r => setTimeout(r, 2000));
   }
+
+  const posts = Array.from(urlMap.values());
+  console.log('[BG] Total unique posts for kw=' + keyword + ': ' + posts.length);
+  return posts;
 }
+
 
 // ── DB Push ──────────────────────────────────────────────────────────────────
 async function pushToAPI(posts, kw) {
