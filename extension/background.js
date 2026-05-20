@@ -230,7 +230,7 @@ async function runKeyword() {
           window.__nexoraApiUrns = window.__nexoraApiUrns || new Set();
           console.log('[BG-inject] __nexoraCfg stamped. runId=' + cfg.runId + ' kw=' + cfg.keyword);
         },
-        args: [{ runId: myRunId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length, searchOnlyMode: true, pageMode: true, pageIndex: S.pageIndex, maxPages: S.maxPages }],
+        args: [{ runId: myRunId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length, searchOnlyMode: true, pageMode: false, pageIndex: S.pageIndex, maxPages: S.maxPages }],
       });
 
       // Step 2: small pause to ensure the stamp is committed before content.js reads it

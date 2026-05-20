@@ -105,6 +105,29 @@
     urlMap.set(urn, { url, engagementScore });
   }
 
+  // ── MAIN→ISOLATED bridge ────────────────────────────────────────────────────
+  // The interceptor runs in MAIN world and dispatches CustomEvents on window.
+  // CustomEvents cross the MAIN→ISOLATED boundary, so we listen here to receive
+  // URNs captured from LinkedIn's API responses in real-time during scrolling.
+  const _netRe = /urn:li:(activity|ugcPost|share):([0-9]{10,25})/g;
+  window.addEventListener('__nexora_net__', (e) => {
+    try {
+      let text = e.detail?.body || '';
+      // Strip XSSI prefix if present
+      if (text.startsWith(")]}'\n") || text.startsWith(")]}'")) {
+        text = text.slice(text.indexOf('\n') + 1);
+      }
+      _netRe.lastIndex = 0;
+      let m;
+      let cnt = 0;
+      while ((m = _netRe.exec(text)) !== null) {
+        addUrn('urn:li:' + m[1] + ':' + m[2]);
+        cnt++;
+      }
+      if (cnt > 0) console.log('[CS] bridge +' + cnt + ' URNs from API (total=' + urlMap.size + ')');
+    } catch (_) {}
+  });
+
   // ── DOM scan ───────────────────────────────────────────────────────────────
   function scanDOM() {
     const before = urlMap.size;
