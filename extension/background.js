@@ -53,44 +53,100 @@ function extractPostsFromText(text) {
   return Array.from(urlMap.entries()).map(([canonicalUrn, url]) => ({ canonicalUrn, url, source: 'search_only' }));
 }
 
-// ── HTML Fetch (tries multiple URL variants to maximise unique posts) ─────────
-async function fetchPostsForKeyword(keyword) {
-  const urlMap = new Map(); // urn → post, deduped across all fetches
+// ── CSRF Token ───────────────────────────────────────────────────────────────
+function getCsrfToken() {
+  return new Promise(resolve => {
+    chrome.cookies.get({ url: 'https://www.linkedin.com', name: 'JSESSIONID' }, c => {
+      resolve(c ? c.value.replace(/"/g, '') : null);
+    });
+  });
+}
 
-  // Different URL variants that LinkedIn may return different SSR content for
-  const variants = [
-    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
-    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
-    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`,
-    `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month`,
-  ];
+// ── Fetch HTML helper ─────────────────────────────────────────────────────────
+async function fetchHtml(url) {
+  const res = await fetch(url, {
+    headers: {
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'en-US,en;q=0.9',
+      'cache-control': 'no-cache'
+    }
+  });
+  if (!res.ok) { console.warn('[BG] HTML fetch HTTP ' + res.status + ' ' + url); return ''; }
+  return res.text();
+}
 
-  for (const url of variants) {
+// ── Voyager GraphQL API (10 posts per call, paginated) ────────────────────────
+async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
+  const MAX_PAGES = 6; // up to 60 posts
+  for (let start = 0; start < MAX_PAGES * 10; start += 10) {
     if (S.state !== 'RUNNING') break;
-    console.log('[BG] Fetching: ' + url);
+    const apiUrl = `https://www.linkedin.com/voyager/api/graphql?variables=(count:10,keywords:${encodeURIComponent(keyword)},origin:GLOBAL_SEARCH_HEADER,q:blended,start:${start})&queryId=${queryId}`;
     try {
-      const res = await fetch(url, {
+      const res = await fetch(apiUrl, {
         headers: {
-          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'accept-language': 'en-US,en;q=0.9',
-          'cache-control': 'no-cache'
+          'accept': 'application/vnd.linkedin.normalized+json+2.1',
+          'csrf-token': csrf || '',
+          'x-restli-protocol-version': '2.0.0',
+          'x-li-lang': 'en_US',
         }
       });
-      if (!res.ok) { console.warn('[BG] Fetch HTTP ' + res.status + ' url=' + url); continue; }
+      if (!res.ok) { console.warn('[BG] Voyager API HTTP ' + res.status + ' start=' + start); break; }
       const text = await res.text();
       const posts = extractPostsFromText(text);
       let added = 0;
       posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
-      console.log('[BG] +' + added + ' new posts (total=' + urlMap.size + ') from variant: ' + url.split('?')[1]);
+      console.log('[BG] Voyager start=' + start + ': +' + added + ' new (total=' + urlMap.size + ')');
+      if (added === 0) break; // no new posts — stop paginating
     } catch (e) {
-      console.warn('[BG] Fetch error:', e.message);
+      console.warn('[BG] Voyager error:', e.message);
+      break;
     }
-    // Small delay between variants
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 1500));
+  }
+}
+
+// ── Main fetch strategy for one keyword ──────────────────────────────────────
+async function fetchPostsForKeyword(keyword) {
+  const urlMap = new Map();
+  const enc = encodeURIComponent;
+  const slug = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // ── Step 1: Base HTML fetch (always works, gets ~5 SSR posts + queryId) ────
+  const baseUrl = `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+  const htmlText = await fetchHtml(baseUrl);
+  extractPostsFromText(htmlText).forEach(p => { if (!urlMap.has(p.canonicalUrn)) urlMap.set(p.canonicalUrn, p); });
+  console.log('[BG] Base HTML: ' + urlMap.size + ' posts for kw=' + keyword);
+
+  // ── Step 2: Try to extract Voyager queryId and paginate the real API ────────
+  const qidMatch = htmlText.match(/["']?(voyagerSearchDashClusters\.[a-f0-9]{32})["']?/);
+  if (qidMatch) {
+    console.log('[BG] queryId found: ' + qidMatch[1] + ' — using Voyager API');
+    const csrf = await getCsrfToken();
+    await fetchViaVoyager(keyword, qidMatch[1], csrf, urlMap);
+  } else {
+    console.log('[BG] No queryId in HTML — using fallback URL variants');
+    // ── Step 3: Fallback — try more URL variants for extra SSR posts ─────────
+    const fallbackUrls = [
+      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
+      `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
+      `https://www.linkedin.com/feed/hashtag/${slug}/`,
+      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-24h`,
+      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week&sortBy=date_posted`,
+    ];
+    for (const url of fallbackUrls) {
+      if (S.state !== 'RUNNING') break;
+      const text = await fetchHtml(url).catch(() => '');
+      let added = 0;
+      extractPostsFromText(text).forEach(p => {
+        if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; }
+      });
+      if (added > 0) console.log('[BG] +' + added + ' from: ' + url.split('?')[1]);
+      await new Promise(r => setTimeout(r, 1500));
+    }
   }
 
   const posts = Array.from(urlMap.values());
-  console.log('[BG] Total unique posts for kw=' + keyword + ': ' + posts.length);
+  console.log('[BG] ✅ Total unique posts for kw=' + keyword + ': ' + posts.length);
   return posts;
 }
 
