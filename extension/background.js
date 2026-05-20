@@ -124,20 +124,27 @@ async function fetchPageHeadless(keyword, start) {
 async function pushToAPI(posts, kw) {
   if (!posts || posts.length === 0) return;
   console.log(`[BG] pushToAPI count=${posts.length} kw=${kw}`);
+  const endpoint = S.dashboardUrl + '/api/extension/results';
+  const headers = { 'Content-Type': 'application/json', 'x-extension-token': S.userId };
+  const body = JSON.stringify({ posts, keyword: kw, source: 'search_only' });
   try {
-    const payload = {
-      action: 'savePosts',
-      runId: S.runId,
-      userId: S.userId,
-      keyword: kw,
-      posts: posts,
-    };
-    const res = await fetch('http://localhost:3000/api/extension/collect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) console.warn('[BG] DB push failed HTTP ' + res.status);
+    let resp;
+    try {
+      resp = await fetch(endpoint, { method: 'POST', headers, body });
+    } catch (_) {
+      // One retry after 3s on network error
+      await new Promise(r => setTimeout(r, 3000));
+      resp = await fetch(endpoint, { method: 'POST', headers, body });
+    }
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      console.warn('[BG] DB push failed HTTP ' + resp.status + ': ' + txt.substring(0, 200));
+      return;
+    }
+    const data = await resp.json().catch(() => ({}));
+    const saved = data.createdCount ?? data.savedCount ?? posts.length;
+    S.totalSaved += saved;
+    console.log(`[BG] Saved ${saved}/${posts.length} total=${S.totalSaved}`);
   } catch (e) {
     console.warn('[BG] DB push error:', e.message);
   }
