@@ -238,19 +238,20 @@
       }
     }
 
-    // Method 4: SDUI virtual scroller — scroll last visible item into view
-    // LinkedIn's LazyColumn uses IntersectionObserver to load more posts.
-    // Scrolling the last visible item into view triggers the observer to fetch the next batch.
+    // Method 4: SDUI virtual scroller — scroll last child of LazyColumn into view
+    // LinkedIn's LazyColumn uses IntersectionObserver on its LAST CHILD (sentinel element)
+    // to trigger loading the next batch. We must scroll that specific element, not the container.
     if (document.querySelector('[data-sdui-screen]')) {
-      const candidates = [
-        ...document.querySelectorAll('article'),
-        ...document.querySelectorAll('[data-component-type]'),
-        ...document.querySelectorAll('[data-occludable-update-urn]'),
-        ...document.querySelectorAll('[data-urn]'),
-      ];
-      if (candidates.length > 0) {
-        candidates[candidates.length - 1].scrollIntoView({ block: 'end', behavior: 'instant' });
+      // Method 4a: scroll the last child of the LazyColumn sentinel
+      const lazyCol = document.querySelector('[data-testid="lazy-column"]');
+      if (lazyCol && lazyCol.lastElementChild) {
+        lazyCol.lastElementChild.scrollIntoView({ block: 'end', behavior: 'instant' });
       }
+      // Method 4b: force scroll to bottom (window-level for SDUI)
+      window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+      // Method 4c: scroll last article/post element found anywhere
+      const lastArticle = [...document.querySelectorAll('article, [data-occludable-update-urn], [data-urn]')].pop();
+      if (lastArticle) lastArticle.scrollIntoView({ block: 'end', behavior: 'instant' });
     }
 
     document.documentElement.dispatchEvent(new Event('scroll', { bubbles: true }));
@@ -386,6 +387,10 @@
   while (step < MAX_STEPS && isActive()) {
     step++;
 
+    // CRITICAL for SDUI virtual scrollers: scan BEFORE scrolling.
+    // The virtual scroller removes old DOM nodes when new ones load.
+    // Scanning before the scroll captures posts that will be removed.
+    scanDOM();
     const urlsBefore = urlMap.size;
     doScroll();
     // SDUI lazy-loading takes longer to render new posts
@@ -395,21 +400,25 @@
     const y = getScrollY();
     const bottom = atBottom();
 
+    scanDOM(); // scan AFTER scroll to capture newly loaded posts
+    const urlsAfter = urlMap.size;
+    const urlsAdded = urlsAfter - urlsBefore;
+
     const moved = Math.abs(y - lastY);
-    if (moved > 50) {
+    // Progress = scroll moved OR new URLs found (SDUI virtual scroller keeps y≈0)
+    if (moved > 50 || urlsAdded > 0) {
       noProgress = 0;
       lastY = y;
     } else {
       noProgress++;
     }
 
-    scanDOM();
-    console.log('[CS] step=' + step + ' y=' + Math.round(y) + ' moved=' + Math.round(moved) + ' urls=' + urlMap.size + ' noProg=' + noProgress);
+    console.log('[CS] step=' + step + ' y=' + Math.round(y) + ' moved=' + Math.round(moved) + ' urls=' + urlMap.size + ' +' + urlsAdded + ' noProg=' + noProgress + (isSdui ? ' [SDUI]' : ''));
 
     if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || bottom)) {
       console.log('[CS] Scroll complete. atBottom=' + bottom + ' noProgress=' + noProgress);
       if (clickShowMore()) {
-        console.log('[CS] Clicked “Show more”. Continuing.');
+        console.log('[CS] Clicked "Show more". Continuing.');
         noProgress = 0;
         await new Promise(r => setTimeout(r, 3500));
         continue;
