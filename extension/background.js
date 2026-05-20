@@ -182,12 +182,25 @@ async function runHeadlessLoop() {
 }
 
 // ── Keyword Fetch ──────────────────────────────────────────────────────────────
-async function fetchKeywords(dashUrl, uid) {
+async function fetchKeywords(dashUrl, userId) {
   try {
-    const res = await fetch(`${dashUrl}/api/extension/config?userId=${uid}`);
-    if (!res.ok) throw new Error('API config fetch failed: ' + res.status);
-    const data = await res.json();
-    return data.keywords || [];
+    const resp = await fetch(dashUrl + '/api/extension/jobs', { headers: { 'x-extension-token': userId } });
+    if (!resp.ok) throw new Error('Jobs API ' + resp.status);
+    const jobs = await resp.json();
+    if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
+  
+    let kws = [];
+    if (jobs.settings?.searchConfigJson) {
+      try {
+        const cfg = JSON.parse(jobs.settings.searchConfigJson);
+        if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
+      } catch (_) {}
+    }
+    if (kws.length === 0 && Array.isArray(jobs.keywords)) {
+      kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
+    }
+    if (kws.length === 0) throw new Error('No keywords configured.');
+    return [...new Set(kws)];
   } catch (e) {
     console.error('[BG] Failed to fetch keywords:', e);
     return [];
