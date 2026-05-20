@@ -13,6 +13,8 @@ const S = {
   userId:     '',
   keywords:   [],
   kwIndex:    0,
+  pageIndex:  0,   // current page within keyword (0-based)
+  maxPages:   12,  // pages per keyword → 12 × ~10 posts ≈ 120 posts/keyword
 };
 
 // ── Keep-alive ────────────────────────────────────────────────────────────────
@@ -62,10 +64,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     (async () => {
       const posts = msg.posts || [];
-      console.log('[BG] FLUSH_POSTS count=' + posts.length + ' kw=' + (S.keywords[S.kwIndex] || ''));
+      const kw = S.keywords[S.kwIndex] || '';
+      console.log('[BG] FLUSH_POSTS count=' + posts.length + ' kw=' + kw + ' page=' + (S.pageIndex + 1) + '/' + S.maxPages);
       try { await pushToAPI(posts); } catch (e) { console.warn('[BG] API flush failed:', e.message); }
       sendResponse({ ok: true });
-      advanceKeyword();
+
+      // ── Pagination: advance to next page before switching keyword ──
+      S.pageIndex++;
+      if (S.pageIndex < S.maxPages) {
+        const delay = 6000 + Math.floor(Math.random() * 4000); // 6-10s between pages (anti-bot)
+        console.log('[BG] Page ' + S.pageIndex + '/' + S.maxPages + ' queued in ' + Math.round(delay/1000) + 's');
+        setTimeout(() => {
+          if (S.state === 'RUNNING') runKeyword().catch(e => console.error('[BG] runKeyword:', e.message));
+        }, delay);
+      } else {
+        S.pageIndex = 0;
+        advanceKeyword();
+      }
     })();
     return true;
   }
@@ -94,31 +109,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
 
-  // Dashboard polls this for live progress (push via sendMessage is unreliable in MV3)
-  if (msg.action === 'GET_ENRICH_STATUS') {
-    sendResponse({
-      running:        E.running,
-      done:           E.progress?.done          || 0,
-      total:          E.progress?.total         || 0,
-      enriched:       E.progress?.enriched      || 0,
-      failed:         E.progress?.failed        || 0,
-      deleted:        E.progress?.deleted       || 0,
-      nullCount:      E.progress?.nullCount     || 0,
-      currentKeyword: E.progress?.currentKeyword || '',
-    });
-    return false;
-  }
-
   // ENRICH_RESULT is handled inside enrichSinglePost() via a one-shot listener.
+  // This fallthrough avoids "Could not establish connection" errors for late messages.
   if (msg.action === 'ENRICH_RESULT') { sendResponse({ ok: true }); return false; }
 });
 
 // ── Session lifecycle ─────────────────────────────────────────────────────────
 async function startSession(msg) {
   S.state = 'STARTING';
-  S.runId = Date.now(); // Always use a globally unique timestamp runId to avoid collisions across starts
+  S.runId = Date.now();
   S.totalSaved = 0;
   S.kwIndex = 0;
+  S.pageIndex = 0;
   console.log('[BG] startSession BEGIN runId=' + S.runId);
 
   const cfg = await chrome.storage.sync.get(['dashboardUrl', 'userId']);
@@ -159,8 +161,13 @@ async function runKeyword() {
   const kw = S.keywords[S.kwIndex];
   if (!kw) { finalizeSession(); return; }
 
+  // Build paginated URL — LinkedIn content search supports &start= for pagination.
+  // Page 0 → start=0 (first 10 posts), page 1 → start=10, etc.
+  const start = S.pageIndex * 10;
   const targetUrl = 'https://www.linkedin.com/search/results/content/?keywords='
-    + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
+    + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER'
+    + (start > 0 ? '&start=' + start : '');
+  console.log('[BG] Navigating to kw=' + kw + ' page=' + (S.pageIndex+1) + ' start=' + start);
 
   const myRunId = S.runId;
 
@@ -223,7 +230,7 @@ async function runKeyword() {
           window.__nexoraApiUrns = window.__nexoraApiUrns || new Set();
           console.log('[BG-inject] __nexoraCfg stamped. runId=' + cfg.runId + ' kw=' + cfg.keyword);
         },
-        args: [{ runId: myRunId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length, searchOnlyMode: true }],
+        args: [{ runId: myRunId, keyword: kw, kwIndex: S.kwIndex, totalKeywords: S.keywords.length, searchOnlyMode: true, pageMode: true, pageIndex: S.pageIndex, maxPages: S.maxPages }],
       });
 
       // Step 2: small pause to ensure the stamp is committed before content.js reads it
@@ -449,9 +456,7 @@ function setBadge(text, color) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── RE_ENRICH: post-by-post enrichment (completely separate from scraping) ──────
-// E.progress is polled by the dashboard via GET_ENRICH_STATUS every 1.5s.
-// Push-based sendMessage is unreliable from MV3 service worker to content scripts.
-const E = { running: false, progress: null };
+const E = { running: false }; // enrichment state
 
 async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
   if (E.running) {
@@ -459,7 +464,6 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
     return;
   }
   E.running = true;
-  E.progress = null;
   E.dashUrl  = dashboardUrl;
   E.userId   = userId;
 
@@ -470,9 +474,12 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
   console.log(`[BG-ENRICH] Starting enrichment for ${total} posts. Keyword: ${currentKeyword}`);
   broadcastStatus('Enriching 0/' + total + ' posts...');
   setBadge('...', '#f59e0b');
-
-  // Write initial progress so first poll reflects correct total
-  E.progress = { done: 0, total, enriched: 0, failed: 0, deleted: 0, nullCount: 0, currentKeyword };
+  
+  // Broadcast initial start
+  chrome.runtime.sendMessage({
+    action: 'ENRICH_KEYWORD_START',
+    currentKeyword, total
+  }).catch(() => {});
 
   for (const post of posts) {
     if (!post.url || !post.urn) { failed++; continue; }
@@ -483,12 +490,12 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
         await pushEnrichScore(post.urn, score);
         enriched++;
         console.log('[BG-ENRICH] ✓ ' + post.urn + ' → score=' + score);
-
-        // Auto-delete guard: null scores are NEVER deleted
+        
+        // Auto-delete guard
         if (autoDelete && score < deleteThreshold) {
-          await deleteEnrichPost(post.urn);
-          deleted++;
-          console.log(`[BG-ENRICH] 🗑 Deleted ${post.urn} (score ${score} < ${deleteThreshold})`);
+           await deleteEnrichPost(post.urn);
+           deleted++;
+           console.log(`[BG-ENRICH] 🗑 Deleted ${post.urn} (score ${score} < ${deleteThreshold})`);
         }
       } else {
         nullCount++;
@@ -500,10 +507,14 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
     }
 
     const done = enriched + nullCount + failed;
-    // Write to E.progress — dashboard polls this every 1.5s
-    E.progress = { done, total, enriched, failed, deleted, nullCount, currentKeyword };
     broadcastStatus('Enriching ' + done + '/' + total + ' posts...');
+    // Notify dashboard of progress
+    chrome.runtime.sendMessage({
+      action: 'ENRICH_PROGRESS',
+      done, total, enriched, failed, deleted, nullCount, currentKeyword
+    }).catch(() => {});
 
+    // Gap between posts: give LinkedIn time to breathe
     if (done < total) await sleep(2500);
   }
 
@@ -512,7 +523,6 @@ async function startEnrichSession(posts, dashboardUrl, userId, opts = {}) {
   console.log('[BG-ENRICH] ' + msg);
   broadcastStatus(msg);
   setBadge(String(enriched), '#10b981');
-  // Final push broadcast — fires once, so unreliability is acceptable
   chrome.runtime.sendMessage({
     action: 'ENRICH_DONE',
     enriched, failed, total, deleted, nullCount, currentKeyword

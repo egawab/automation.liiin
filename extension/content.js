@@ -206,52 +206,35 @@
     if (added > 0) console.log('[CS] scanDOM +' + added + ' total=' + urlMap.size);
   }
 
-  // ── Scroll utilities ───────────────────────────────────────────────────
-  // LinkedIn can render search results in two modes:
-  //   1. Window-level scroll (most common on search results pages)
-  //   2. Scaffold container scroll (.scaffold-layout__main or similar)
-  // We measure BOTH and use whichever changed.
-  function doScroll() {
+  function doScroll(sduiEl) {
     const viewH = window.innerHeight || 800;
     const scrollAmt = Math.floor(viewH * 0.80);
 
-    // Method 1: Window-level scroll (old scaffold layout)
+    // 1: Window scroll (standard layout)
     window.scrollBy({ top: scrollAmt, behavior: 'instant' });
 
-    // Method 2: document.body scroll (webkit fallback)
+    // 2: Body scroll (webkit fallback)
     document.body.scrollTop += scrollAmt;
 
-    // Method 3: Known scroll containers
+    // 3: Known containers
     const containers = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
       document.getElementById('root'),
       document.querySelector('main'),
-      // ── LinkedIn SDUI layout (server-driven UI, hashed CSS classes) ──
-      document.querySelector('section[aria-label="Primary content"]'),
-      document.querySelector('[data-sdui-screen]'),
-      document.querySelector('[data-testid="lazy-column"]'),
     ];
     for (const el of containers) {
-      if (el && el.scrollHeight > el.clientHeight + 100) {
-        el.scrollTop += scrollAmt;
-      }
+      if (el && el.scrollHeight > el.clientHeight + 100) el.scrollTop += scrollAmt;
     }
 
-    // Method 4: SDUI virtual scroller — use the REAL scroll container found above
-    if (isSdui) {
-      // 4a: scroll the actual overflow container (found by walking DOM)
-      if (sduiScrollEl) {
-        sduiScrollEl.scrollTop += scrollAmt;
-      }
-      // 4b: force window to bottom (catches window-scroll SDUI variant)
+    // 4: SDUI real scroll container + LazyColumn sentinel
+    if (sduiEl) {
+      sduiEl.scrollTop += scrollAmt;
       window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
-      // 4c: scrollIntoView on last child of LazyColumn (triggers IntersectionObserver sentinel)
       const lazyCol = document.querySelector('[data-testid="lazy-column"]');
       if (lazyCol && lazyCol.lastElementChild) {
         lazyCol.lastElementChild.scrollIntoView({ block: 'end', behavior: 'instant' });
       }
-      // 4d: scroll last post element anywhere
       const lastPost = [...document.querySelectorAll('article, [data-occludable-update-urn], [data-urn]')].pop();
       if (lastPost) lastPost.scrollIntoView({ block: 'end', behavior: 'instant' });
     }
@@ -260,61 +243,40 @@
     window.dispatchEvent(new Event('scroll', { bubbles: true }));
   }
 
-  function getScrollY() {
+  function getScrollY(sduiEl) {
     let y = window.scrollY || 0;
     if (document.documentElement.scrollTop > y) y = document.documentElement.scrollTop;
-    // SDUI: use the real scroll container if found
-    if (sduiScrollEl && sduiScrollEl.scrollTop > y) return sduiScrollEl.scrollTop;
-    const containers = [
+    if (sduiEl && sduiEl.scrollTop > y) return sduiEl.scrollTop;
+    const els = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
       document.getElementById('root'),
       document.querySelector('main'),
-      document.querySelector('section[aria-label="Primary content"]'),
-      document.querySelector('[data-sdui-screen]'),
-      document.querySelector('[data-testid="lazy-column"]'),
     ];
-    for (const el of containers) {
-      if (el && el.scrollTop > y) y = el.scrollTop;
-    }
+    for (const el of els) { if (el && el.scrollTop > y) y = el.scrollTop; }
     return y;
   }
 
-  function atBottom() {
+  function atBottom(sduiEl) {
     const viewH = window.innerHeight || 800;
     const winH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-    const windowAtBottom = (window.scrollY + viewH) >= winH - 800;
-
-    // SDUI: check the real scroll container if found
-    if (sduiScrollEl) {
-      return (sduiScrollEl.scrollTop + sduiScrollEl.clientHeight) >= sduiScrollEl.scrollHeight - 400;
-    }
-
-    const scrollContainers = [
+    if (sduiEl) return (sduiEl.scrollTop + sduiEl.clientHeight) >= sduiEl.scrollHeight - 400;
+    const scrollEls = [
       document.querySelector('.scaffold-layout__main'),
       document.querySelector('.scaffold-layout-container__main'),
       document.querySelector('main'),
-      document.querySelector('section[aria-label="Primary content"]'),
-      document.querySelector('[data-sdui-screen]'),
-      document.querySelector('[data-testid="lazy-column"]'),
     ].filter(el => el && el.scrollHeight > el.clientHeight + 100);
-
-    if (scrollContainers.length === 0) return windowAtBottom;
-    return scrollContainers.every(el => (el.scrollTop + el.clientHeight) >= el.scrollHeight - 400);
+    if (scrollEls.length === 0) return (window.scrollY + viewH) >= winH - 800;
+    return scrollEls.every(el => (el.scrollTop + el.clientHeight) >= el.scrollHeight - 400);
   }
 
   function clickShowMore() {
-    // Pagination "Next" button (search results mode)
     const NEXT_SELS = [
       '.artdeco-pagination__button--next:not([disabled])',
       'button[aria-label="Next"]:not([disabled])',
       'button[aria-label="Go to next page"]:not([disabled])',
     ];
-    for (const s of NEXT_SELS) {
-      const b = document.querySelector(s);
-      if (b) { b.click(); return true; }
-    }
-    // "Show more" infinite-scroll trigger
+    for (const s of NEXT_SELS) { const b = document.querySelector(s); if (b) { b.click(); return true; } }
     const more = [...document.querySelectorAll('button,[role="button"]')]
       .find(b => /show more|load more|see more results/i.test(b.innerText || ''));
     if (more && !more.disabled) { more.click(); return true; }
@@ -322,60 +284,36 @@
   }
 
   // ── Wait for initial content ──────────────────────────────────────────────
-  // 5s hard sleep — lets LinkedIn's React fetch+render complete before we scan.
   await new Promise(r => setTimeout(r, 5000));
-
-  // Poll until URL count stabilizes (same for 2 checks) or timeout.
-  // ALWAYS continue to the scroll phase even if we found 0 URLs —
-  // LinkedIn lazy-loads results on scroll on the new React layout.
-  let waited = 0;
-  let lastCount = -1;
-  let stableRounds = 0;
-
+  let waited = 0, lastCount = -1, stableRounds = 0;
   while (waited < 15000 && isActive()) {
     scanDOM();
     const text = document.body.innerText || '';
     if (text.includes('No results found') || text.includes('try another search') || text.includes('No posts match')) {
-      console.log('[CS] No results for this keyword.');
-      break;
+      console.log('[CS] No results for this keyword.'); break;
     }
     if (urlMap.size > 0 && urlMap.size === lastCount) {
       stableRounds++;
-      if (stableRounds >= 2) {
-        console.log('[CS] URL count stable at ' + urlMap.size + ' after ' + waited + 'ms.');
-        break;
-      }
-    } else {
-      stableRounds = 0;
-    }
+      if (stableRounds >= 2) { console.log('[CS] URL count stable at ' + urlMap.size); break; }
+    } else { stableRounds = 0; }
     lastCount = urlMap.size;
     await new Promise(r => setTimeout(r, 800));
     waited += 800;
   }
-  // NOTE: do NOT return early here even if urls=0.
-  // The scroll phase will lazy-load content on the new React layout.
   if (!isActive()) { window[stopKey] = true; window.__nexoraRunningId = null; return; }
 
-  // First scan before scrolling
   scanDOM();
 
-  // Diagnostic snapshot — show raw HTML from inside main to identify post ID storage format
+  // Diagnostic
   const mainEl = document.querySelector('main');
   const diagRawHtml = (mainEl ? mainEl.innerHTML : document.body.innerHTML).substring(0, 600).replace(/\s+/g, ' ');
   const diagApiUrns = (window.__nexoraApiUrns ? window.__nexoraApiUrns.size : 0);
-  const diagCodeEls = document.querySelectorAll('code[id]').length;
-  const diagMsg = `[CS-DIAG] urls=${urlMap.size} apiUrns=${diagApiUrns} codeEls=${diagCodeEls} | RAW: ${diagRawHtml}`;
+  const diagMsg = `[CS-DIAG] urls=${urlMap.size} apiUrns=${diagApiUrns} codeEls=${document.querySelectorAll('code[id]').length} | RAW: ${diagRawHtml}`;
   console.log(diagMsg);
-  if (canSend()) chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: diagMsg }).catch(()=>{});
+  if (canSend()) chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: diagMsg }).catch(() => {});
 
-  // ── Scroll loop ─────────────────────────────────────────────────────
-  const MAX_STEPS   = 55;
-  const MIN_STEPS   = 5;
-  const isSdui      = !!document.querySelector('[data-sdui-screen]');
-  const NO_PROG_MAX = isSdui ? 14 : 8;
-
-  // For SDUI: find the REAL scroll container by walking up DOM from LazyColumn.
-  // IMPORTANT: only accept elements that are genuinely scrollable (scrollHeight > clientHeight).
+  // ── SDUI scroll container detection ──────────────────────────────────────
+  const isSdui = !!document.querySelector('[data-sdui-screen]');
   let sduiScrollEl = null;
   if (isSdui) {
     const lazyCol = document.querySelector('[data-testid="lazy-column"]');
@@ -383,11 +321,7 @@
       let el = lazyCol.parentElement;
       while (el && el !== document.documentElement) {
         const ov = window.getComputedStyle(el).overflowY;
-        // Must have overflow scroll/auto AND actually have scrollable content
-        if ((ov === 'auto' || ov === 'scroll') && el.scrollHeight > el.clientHeight + 100) {
-          sduiScrollEl = el;
-          break;
-        }
+        if ((ov === 'auto' || ov === 'scroll') && el.scrollHeight > el.clientHeight + 100) { sduiScrollEl = el; break; }
         el = el.parentElement;
       }
     }
@@ -398,64 +332,50 @@
     if (canSend()) chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: sduiMsg }).catch(() => {});
   }
 
-  let step = 0;
-  let noProgress = 0;
-  let lastY = -1;
+  // ── Scroll loop ───────────────────────────────────────────────────────────
+  // pageMode = called from pagination mode (background.js manages pages externally)
+  // → use only 4 steps to quickly extract posts from this single page.
+  const pageMode    = !!window.__nexoraCfg?.pageMode;
+  const MAX_STEPS   = pageMode ? 4 : 55;
+  const MIN_STEPS   = pageMode ? 2 : 5;
+  const NO_PROG_MAX = isSdui ? 14 : 8;
+
+  let step = 0, noProgress = 0, lastY = -1;
 
   while (step < MAX_STEPS && isActive()) {
     step++;
 
-    // CRITICAL for SDUI virtual scrollers: scan BEFORE scrolling.
-    // The virtual scroller removes old DOM nodes when new ones load.
-    // Scanning before the scroll captures posts that will be removed.
-    scanDOM();
+    scanDOM(); // capture posts BEFORE scroll (virtual scroller removes old nodes)
     const urlsBefore = urlMap.size;
-    doScroll();
-    // SDUI lazy-loading takes longer to render new posts
+    doScroll(sduiScrollEl);
     await new Promise(r => setTimeout(r, (isSdui ? 3500 : 2800) + Math.floor(Math.random() * 1000)));
     if (!isActive()) break;
 
-    const y = getScrollY();
-    const bottom = atBottom();
+    const y = getScrollY(sduiScrollEl);
+    const bottom = atBottom(sduiScrollEl);
 
-    scanDOM(); // scan AFTER scroll to capture newly loaded posts
+    scanDOM(); // capture posts AFTER scroll (newly loaded)
     const urlsAfter = urlMap.size;
     const urlsAdded = urlsAfter - urlsBefore;
 
     const moved = Math.abs(y - lastY);
-    // Progress = scroll moved OR new URLs found (SDUI virtual scroller keeps y≈0)
-    if (moved > 50 || urlsAdded > 0) {
-      noProgress = 0;
-      lastY = y;
-    } else {
-      noProgress++;
-    }
+    if (moved > 50 || urlsAdded > 0) { noProgress = 0; lastY = y; }
+    else { noProgress++; }
 
-    console.log('[CS] step=' + step + ' y=' + Math.round(y) + ' moved=' + Math.round(moved) + ' urls=' + urlMap.size + ' +' + urlsAdded + ' noProg=' + noProgress + (isSdui ? ' [SDUI]' : ''));
+    console.log('[CS] step=' + step + ' y=' + Math.round(y) + ' +' + urlsAdded + ' urls=' + urlMap.size + ' noProg=' + noProgress + (isSdui ? ' [SDUI]' : '') + (pageMode ? ' [PAGE]' : ''));
 
     if (step >= MIN_STEPS && (noProgress >= NO_PROG_MAX || bottom)) {
-      // For SDUI: when we hit the bottom of <main>, LinkedIn's LazyColumn may load
-      // a new batch and increase scrollHeight. Wait 3s and check before giving up.
-      if (isSdui && bottom && sduiScrollEl) {
+      // SDUI: when atBottom, wait to see if LazyColumn loads a new batch
+      if (isSdui && bottom && sduiScrollEl && !pageMode) {
         const scrollHBefore = sduiScrollEl.scrollHeight;
-        console.log('[CS] SDUI at bottom. scrollH=' + scrollHBefore + '. Waiting for new batch...');
         await new Promise(r => setTimeout(r, 3500));
         scanDOM();
-        const scrollHAfter = sduiScrollEl.scrollHeight;
-        if (scrollHAfter > scrollHBefore + 100) {
-          console.log('[CS] SDUI new batch loaded! scrollH grew ' + scrollHBefore + ' → ' + scrollHAfter + '. Continuing.');
-          noProgress = 0;
-          lastY = -1; // reset so next scroll registers as progress
-          continue;
+        if (sduiScrollEl.scrollHeight > scrollHBefore + 100) {
+          console.log('[CS] SDUI new batch loaded ' + scrollHBefore + '→' + sduiScrollEl.scrollHeight);
+          noProgress = 0; lastY = -1; continue;
         }
       }
-      console.log('[CS] Scroll complete. atBottom=' + bottom + ' noProgress=' + noProgress);
-      if (clickShowMore()) {
-        console.log('[CS] Clicked "Show more". Continuing.');
-        noProgress = 0;
-        await new Promise(r => setTimeout(r, 3500));
-        continue;
-      }
+      if (clickShowMore()) { noProgress = 0; await new Promise(r => setTimeout(r, 3500)); continue; }
       break;
     }
   }
