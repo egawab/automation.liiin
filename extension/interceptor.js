@@ -41,22 +41,27 @@
 
   function dispatch(url, body) {
     if (!body || body.length < 200) return;
-    const fc = body.trimStart()[0];
+    // LinkedIn SDUI prepends ")]}'" (XSSI protection) to API responses.
+    // Strip it before checking for JSON.
+    let text = body;
+    if (text.startsWith(")]}'\n") || text.startsWith(")]}'")) {
+      text = text.slice(text.indexOf('\n') + 1).trimStart();
+    }
+    const fc = text.trimStart()[0];
     if (fc !== '{' && fc !== '[') return;
     // Store as Map(urn → engagementScore|null) — content.js harvests this
     window.__nexoraApiUrns = window.__nexoraApiUrns || new Map();
     URN_RE.lastIndex = 0;
     let m;
     let found = 0;
-    while ((m = URN_RE.exec(body)) !== null) {
+    while ((m = URN_RE.exec(text)) !== null) {
       const urn = 'urn:li:' + m[1] + ':' + m[2];
       // Extract engagement from the ~3000 chars surrounding this URN
-      const nearby = body.slice(Math.max(0, m.index - 200), Math.min(body.length, m.index + 3000));
+      const nearby = text.slice(Math.max(0, m.index - 200), Math.min(text.length, m.index + 3000));
       const score = extractEngagement(nearby);
       if (!window.__nexoraApiUrns.has(urn)) {
         window.__nexoraApiUrns.set(urn, score);
       } else if (score !== null && window.__nexoraApiUrns.get(urn) === null) {
-        // Upgrade null → known score if a later response provides it
         window.__nexoraApiUrns.set(urn, score);
       }
       found++;

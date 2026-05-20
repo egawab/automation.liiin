@@ -14,7 +14,7 @@ const S = {
   keywords:   [],
   kwIndex:    0,
   pageIndex:  0,   // current page within keyword (0-based)
-  maxPages:   12,  // pages per keyword → 12 × ~10 posts ≈ 120 posts/keyword
+  maxPages:   1,  // LinkedIn SDUI ignores &start= param — single page + scroll
 };
 
 // ── Keep-alive ────────────────────────────────────────────────────────────────
