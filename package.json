@@ -8,7 +8,7 @@
     "scripts": {
         "dev": "next dev",
         "start": "node dist/worker.js",
-        "build": "node scripts/build-extension-zip.js && npx prisma generate && npx prisma db push --accept-data-loss && next build",
+        "build": "node scripts/build-extension-zip.js && npx prisma generate && next build",
         "build:worker": "npx tsc -p tsconfig.worker.json",
         "postinstall": "prisma generate",
         "lint": "eslint .",
@@ -16,6 +16,7 @@
         "worker": "tsx worker.ts",
         "worker:search": "tsx worker-search-only.ts",
         "test:recovery": "tsx test-account-recovery.ts",
+        "db:push": "npx prisma db push --accept-data-loss",
         "build:ext": "node scripts/build-extension-zip.js",
         "build:ext:win": "powershell -Command \"Remove-Item -Path LinkedInExtension.zip -ErrorAction SilentlyContinue; Remove-Item -Path public\\LinkedInExtension.zip -ErrorAction SilentlyContinue; Compress-Archive -Path extension\\* -DestinationPath LinkedInExtension.zip; Copy-Item -Path LinkedInExtension.zip -Destination public\\LinkedInExtension.zip\""
     },
