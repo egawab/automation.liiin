@@ -1,30 +1,27 @@
-// background.js — Nexora Headless API Scraper
-// Bypasses SDUI completely by fetching search results directly from LinkedIn servers.
+// background.js — Nexora Tab-Based Scraper v3
+// Opens a LinkedIn tab, navigates, scrolls slowly, and collects post links from the rendered DOM.
 
-console.log('[BG] Nexora Headless API Scraper loaded');
+console.log('[BG] Nexora Tab Scraper v3 loaded');
 
 const S = {
   state: 'IDLE',
+  tabId: null,
   runId: 0,
   totalSaved: 0,
   dashboardUrl: '',
   userId: '',
   keywords: [],
   kwIndex: 0,
-  pageIndex: 0,
-  maxPages: 12, // 12 pages = ~120 posts
-  abortController: null
 };
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-function getCsrfToken() {
-  return new Promise((resolve) => {
-    chrome.cookies.get({ url: 'https://www.linkedin.com', name: 'JSESSIONID' }, (cookie) => {
-      resolve(cookie ? cookie.value.replace(/"/g, '') : null);
-    });
-  });
-}
+// ── Keep-alive ────────────────────────────────────────────────────────────────
+chrome.alarms.create('nexora_hb', { periodInMinutes: 0.4 });
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === 'nexora_hb' && S.state === 'RUNNING')
+    console.log('[BG] hb state=RUNNING kw=' + (S.keywords[S.kwIndex] || ''));
+});
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function extractUrn(s) {
   if (!s) return '';
   const m = String(s).match(/(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/i);
@@ -42,88 +39,100 @@ function urnToUrl(urn) {
   return 'https://www.linkedin.com/feed/update/' + urn;
 }
 
-async function extractPostsFromText(text) {
-  const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
-  const urlMap = new Map();
-  let m;
-  URN_RE.lastIndex = 0;
-  while ((m = URN_RE.exec(text)) !== null) {
-    const urn = extractUrn(m[0]);
-    if (urn) {
-      urlMap.set(urn, urnToUrl(urn));
-    }
-  }
-  return Array.from(urlMap.entries()).map(([urn, url]) => ({
-    canonicalUrn: urn,
-    url: url,
-    source: 'headless_api'
-  }));
+// ── Tab utilities ─────────────────────────────────────────────────────────────
+async function resolveLinkedInTab() {
+  const [t] = await chrome.tabs.query({ url: '*://*.linkedin.com/*', active: true });
+  if (t) return t.id;
+  const [t2] = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
+  if (t2) return t2.id;
+  const t3 = await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/', active: true });
+  await new Promise(r => setTimeout(r, 5000));
+  return t3.id;
 }
 
-// ── Headless Fetching ────────────────────────────────────────────────────────
-async function fetchPageHeadless(keyword, start) {
-  const csrf = await getCsrfToken();
-  if (!csrf) {
-    console.warn('[BG] No JSESSIONID found. User might be logged out.');
-  }
-
-  // Strategy 1: Voyager Blended Search API (Fastest, raw JSON)
-  try {
-    const apiUrl = `https://www.linkedin.com/voyager/api/search/blended?count=10&filters=List(resultType-%3ECONTENT)&keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&q=all&start=${start}`;
-    console.log(`[BG] Fetching API: ${apiUrl}`);
-    
-    const apiRes = await fetch(apiUrl, {
-      signal: S.abortController.signal,
-      headers: {
-        'csrf-token': csrf || '',
-        'accept': 'application/vnd.linkedin.normalized+json+2.1',
-        'x-restli-protocol-version': '2.0.0'
-      }
-    });
-
-    if (apiRes.ok) {
-      const text = await apiRes.text();
-      const posts = await extractPostsFromText(text);
-      if (posts.length > 0) {
-        console.log(`[BG] API Success: Found ${posts.length} posts for ${keyword} (start=${start})`);
-        return posts;
-      }
-    } else {
-      console.warn(`[BG] API returned ${apiRes.status}`);
+async function waitForTab(tabId, maxMs = 20000) {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, maxMs);
+    function fn(id, info) {
+      if (id !== tabId || info.status !== 'complete') return;
+      chrome.tabs.onUpdated.removeListener(fn);
+      clearTimeout(timer);
+      setTimeout(resolve, 2500); // wait for React to paint
     }
-  } catch (err) {
-    console.warn(`[BG] API Error: ${err.message}`);
-  }
+    chrome.tabs.onUpdated.addListener(fn);
+  });
+}
 
-  // Strategy 2: HTML Fetch Fallback (Bulletproof SSR Extraction)
-  console.log(`[BG] Falling back to HTML Fetch for ${keyword} (start=${start})`);
-  try {
-    const htmlUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&start=${start}`;
-    const htmlRes = await fetch(htmlUrl, {
-      signal: S.abortController.signal,
-      headers: {
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'accept-language': 'en-US,en;q=0.9'
-      }
-    });
+// ── Core: Scroll & Collect post links from rendered DOM ──────────────────────
+async function collectPostsFromTab(tabId, keyword) {
+  const urlMap = new Map(); // urn → url
+  const SCROLL_STEPS = 10;
+  const SCROLL_PX = 500;
 
-    if (htmlRes.ok) {
-      const text = await htmlRes.text();
-      const posts = await extractPostsFromText(text);
-      console.log(`[BG] HTML Success: Found ${posts.length} posts for ${keyword} (start=${start})`);
-      return posts;
+  for (let step = 0; step < SCROLL_STEPS; step++) {
+    if (S.state !== 'RUNNING') break;
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (scrollPx) => {
+          // Collect all post anchor hrefs
+          const found = [];
+          document.querySelectorAll('a[href]').forEach(a => {
+            const h = a.href || '';
+            if (h.includes('/feed/update/') || h.includes('/posts/') ||
+                (h.includes('linkedin.com') && h.includes('activity-'))) {
+              found.push(h);
+            }
+          });
+
+          // Also check data attributes
+          ['data-entity-urn', 'data-urn', 'data-activity-urn'].forEach(attr => {
+            document.querySelectorAll('[' + attr + ']').forEach(el => {
+              found.push(el.getAttribute(attr) || '');
+            });
+          });
+
+          // Scroll the main content container
+          const scrollEl =
+            document.querySelector('[data-testid="lazy-column"]')?.closest('[style*="overflow"]') ||
+            document.querySelector('main') ||
+            document.scrollingElement ||
+            document.documentElement;
+          if (scrollEl) scrollEl.scrollBy(0, scrollPx);
+
+          return found;
+        },
+        args: [SCROLL_PX]
+      });
+
+      const hrefs = results[0]?.result || [];
+      let added = 0;
+      hrefs.forEach(h => {
+        if (!h) return;
+        const decoded = decodeURIComponent(h);
+        const urn = extractUrn(decoded) || extractUrn(h);
+        if (!urn || urlMap.has(urn)) return;
+        const url = urnToUrl(urn);
+        if (!url) return;
+        urlMap.set(urn, url);
+        added++;
+      });
+      if (added > 0) console.log(`[BG] Step ${step + 1}/${SCROLL_STEPS}: +${added} new posts (total=${urlMap.size}) kw=${keyword}`);
+    } catch (e) {
+      console.warn('[BG] executeScript failed at step ' + step + ':', e.message);
     }
-  } catch (err) {
-    console.warn(`[BG] HTML Error: ${err.message}`);
+
+    await new Promise(r => setTimeout(r, 1500));
   }
 
-  return [];
+  return Array.from(urlMap.entries()).map(([canonicalUrn, url]) => ({
+    canonicalUrn, url, source: 'search_only'
+  }));
 }
 
 // ── DB Push ──────────────────────────────────────────────────────────────────
 async function pushToAPI(posts, kw) {
-  if (!posts || posts.length === 0) return;
-  console.log(`[BG] pushToAPI count=${posts.length} kw=${kw}`);
+  if (!posts || posts.length === 0) return 0;
   const endpoint = S.dashboardUrl + '/api/extension/results';
   const headers = { 'Content-Type': 'application/json', 'x-extension-token': S.userId };
   const body = JSON.stringify({ posts, keyword: kw, source: 'search_only' });
@@ -132,146 +141,137 @@ async function pushToAPI(posts, kw) {
     try {
       resp = await fetch(endpoint, { method: 'POST', headers, body });
     } catch (_) {
-      // One retry after 3s on network error
       await new Promise(r => setTimeout(r, 3000));
       resp = await fetch(endpoint, { method: 'POST', headers, body });
     }
     if (!resp.ok) {
       const txt = await resp.text().catch(() => '');
-      console.warn('[BG] DB push failed HTTP ' + resp.status + ': ' + txt.substring(0, 200));
-      return;
+      console.warn('[BG] DB push failed HTTP ' + resp.status + ': ' + txt.slice(0, 200));
+      return 0;
     }
     const data = await resp.json().catch(() => ({}));
-    const saved = data.createdCount ?? data.savedCount ?? posts.length;
-    S.totalSaved += saved;
-    console.log(`[BG] Saved ${saved}/${posts.length} total=${S.totalSaved}`);
+    return (typeof data.createdCount === 'number') ? data.createdCount : posts.length;
   } catch (e) {
     console.warn('[BG] DB push error:', e.message);
-  }
-}
-
-// ── Engine Loop ──────────────────────────────────────────────────────────────
-async function runHeadlessLoop() {
-  while (S.kwIndex < S.keywords.length && S.state === 'RUNNING') {
-    const kw = S.keywords[S.kwIndex];
-    
-    while (S.pageIndex < S.maxPages && S.state === 'RUNNING') {
-      const start = S.pageIndex * 10;
-      console.log(`[BG] Processing: kw=${kw} page=${S.pageIndex + 1}/${S.maxPages} (start=${start})`);
-      
-      const posts = await fetchPageHeadless(kw, start);
-      
-      if (posts.length > 0) {
-        await pushToAPI(posts, kw);
-        S.totalSaved += posts.length;
-      } else {
-        console.log(`[BG] No posts found on page ${S.pageIndex + 1}. Ending keyword early.`);
-        break; // No more results for this keyword
-      }
-
-      S.pageIndex++;
-      
-      // Delay between pages to avoid rate limiting
-      if (S.pageIndex < S.maxPages) {
-        await new Promise(r => setTimeout(r, 4000 + Math.random() * 2000));
-      }
-    }
-
-    S.kwIndex++;
-    S.pageIndex = 0;
-  }
-
-  if (S.state === 'RUNNING') {
-    console.log(`[BG] All keywords done. totalSaved=${S.totalSaved}`);
-    S.state = 'IDLE';
-    S.dashboardUrl && chrome.tabs.create({ url: S.dashboardUrl });
+    return 0;
   }
 }
 
 // ── Keyword Fetch ──────────────────────────────────────────────────────────────
 async function fetchKeywords(dashUrl, userId) {
-  try {
-    const resp = await fetch(dashUrl + '/api/extension/jobs', { headers: { 'x-extension-token': userId } });
-    if (!resp.ok) throw new Error('Jobs API ' + resp.status);
-    const jobs = await resp.json();
-    if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
-  
-    let kws = [];
-    if (jobs.settings?.searchConfigJson) {
-      try {
-        const cfg = JSON.parse(jobs.settings.searchConfigJson);
-        if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
-      } catch (_) {}
-    }
-    if (kws.length === 0 && Array.isArray(jobs.keywords)) {
-      kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
-    }
-    if (kws.length === 0) throw new Error('No keywords configured.');
-    return [...new Set(kws)];
-  } catch (e) {
-    console.error('[BG] Failed to fetch keywords:', e);
-    return [];
+  const resp = await fetch(dashUrl + '/api/extension/jobs', { headers: { 'x-extension-token': userId } });
+  if (!resp.ok) throw new Error('Jobs API ' + resp.status);
+  const jobs = await resp.json();
+  if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
+  let kws = [];
+  if (jobs.settings?.searchConfigJson) {
+    try {
+      const cfg = JSON.parse(jobs.settings.searchConfigJson);
+      if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
+    } catch (_) {}
   }
+  if (kws.length === 0 && Array.isArray(jobs.keywords)) {
+    kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
+  }
+  if (kws.length === 0) throw new Error('No keywords configured.');
+  return [...new Set(kws)];
+}
+
+// ── Engine Loop ──────────────────────────────────────────────────────────────
+async function runEngine() {
+  console.log('[BG] RUNNING. keywords=' + JSON.stringify(S.keywords));
+  S.tabId = await resolveLinkedInTab();
+
+  while (S.kwIndex < S.keywords.length && S.state === 'RUNNING') {
+    const kw = S.keywords[S.kwIndex];
+    const targetUrl = 'https://www.linkedin.com/search/results/content/?keywords='
+      + encodeURIComponent(kw) + '&origin=GLOBAL_SEARCH_HEADER';
+
+    console.log(`[BG] Navigating to kw=${kw}`);
+
+    try {
+      await chrome.tabs.update(S.tabId, { url: targetUrl, active: true });
+    } catch (_) {
+      S.tabId = await resolveLinkedInTab();
+      await chrome.tabs.update(S.tabId, { url: targetUrl, active: true });
+    }
+
+    await waitForTab(S.tabId, 20000);
+
+    if (S.state !== 'RUNNING') break;
+
+    const posts = await collectPostsFromTab(S.tabId, kw);
+    console.log(`[BG] kw=${kw} found ${posts.length} unique posts`);
+
+    if (posts.length > 0) {
+      const saved = await pushToAPI(posts, kw);
+      S.totalSaved += saved;
+      console.log(`[BG] Saved ${saved}/${posts.length} kw=${kw} total=${S.totalSaved}`);
+    } else {
+      console.warn(`[BG] kw=${kw} found 0 posts`);
+    }
+
+    S.kwIndex++;
+    if (S.kwIndex < S.keywords.length && S.state === 'RUNNING') {
+      console.log(`[BG] Waiting 5s before next keyword...`);
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+
+  if (S.state === 'RUNNING') {
+    console.log('[BG] All keywords done. totalSaved=' + S.totalSaved);
+    S.state = 'IDLE';
+    broadcastStatus('Done! ' + S.totalSaved + ' posts saved.');
+    setBadge(String(S.totalSaved), '#3b82f6');
+  }
+}
+
+// ── Broadcast / Badge ─────────────────────────────────────────────────────────
+function broadcastStatus(msg) {
+  chrome.runtime.sendMessage({ action: 'STATUS_UPDATE', message: msg }).catch(() => {});
+}
+function setBadge(text, color) {
+  chrome.action.setBadgeText({ text }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'GET_STATUS' || msg.action === 'PING') {
-    sendResponse({ 
-      running: S.state !== 'IDLE' && S.state !== 'DONE', 
-      state: S.state, 
-      runId: S.runId, 
-      totalSaved: S.totalSaved, 
-      keyword: S.keywords[S.kwIndex] || null 
+    sendResponse({
+      running: S.state === 'RUNNING',
+      state: S.state,
+      runId: S.runId,
+      totalSaved: S.totalSaved,
+      keyword: S.keywords[S.kwIndex] || null
     });
   }
   else if (msg.action === 'START_ENGINE' || msg.action === 'START_SESSION') {
-    console.log('[BG] START_ENGINE', msg);
-    if (S.state === 'RUNNING') {
-      if (S.abortController) S.abortController.abort();
-    }
-    
+    if (S.state === 'RUNNING') { sendResponse({ ok: false, reason: 'already_running' }); return true; }
     S.state = 'RUNNING';
     S.runId = Date.now();
+    S.kwIndex = 0;
+    S.totalSaved = 0;
     S.dashboardUrl = msg.dashboardUrl || msg.cfg?.dashboardUrl;
     S.userId = msg.userId || msg.cfg?.userId;
-    S.kwIndex = 0;
-    S.pageIndex = 0;
-    S.totalSaved = 0;
-    S.abortController = new AbortController();
-    
     sendResponse({ ok: true });
-    
-    // Start engine asynchronously
     (async () => {
       try {
-        if (!msg.cfg?.keywords) {
-          S.keywords = await fetchKeywords(S.dashboardUrl, S.userId);
-        } else {
-          S.keywords = msg.cfg.keywords;
-        }
-        
-        if (!S.keywords || S.keywords.length === 0) {
-          console.warn('[BG] No keywords found.');
-          S.state = 'IDLE';
-          return;
-        }
-        
-        await runHeadlessLoop();
+        S.keywords = await fetchKeywords(S.dashboardUrl, S.userId);
+        await runEngine();
       } catch (e) {
-        console.error('[BG] Engine crash:', e);
+        console.error('[BG] Engine crash:', e.message);
         S.state = 'IDLE';
+        broadcastStatus('Error: ' + e.message);
       }
     })();
   }
   else if (msg.action === 'STOP_ENGINE' || msg.action === 'STOP_SESSION') {
-    console.log('[BG] STOP_ENGINE');
     S.state = 'IDLE';
-    if (S.abortController) S.abortController.abort();
+    broadcastStatus('Stopped.');
+    setBadge('', '#6b7280');
     sendResponse({ ok: true });
   }
-  else if (msg.action === 'KEEP_ALIVE') {
-    sendResponse({ ok: true });
-  }
+  else if (msg.action === 'KEEP_ALIVE') { sendResponse({ ok: true }); }
   return true;
 });
