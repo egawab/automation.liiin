@@ -375,7 +375,7 @@
   const NO_PROG_MAX = isSdui ? 14 : 8;
 
   // For SDUI: find the REAL scroll container by walking up DOM from LazyColumn.
-  // This is definitive — we don't guess, we measure computed styles.
+  // IMPORTANT: only accept elements that are genuinely scrollable (scrollHeight > clientHeight).
   let sduiScrollEl = null;
   if (isSdui) {
     const lazyCol = document.querySelector('[data-testid="lazy-column"]');
@@ -383,13 +383,19 @@
       let el = lazyCol.parentElement;
       while (el && el !== document.documentElement) {
         const ov = window.getComputedStyle(el).overflowY;
-        if (ov === 'auto' || ov === 'scroll') { sduiScrollEl = el; break; }
+        // Must have overflow scroll/auto AND actually have scrollable content
+        if ((ov === 'auto' || ov === 'scroll') && el.scrollHeight > el.clientHeight + 100) {
+          sduiScrollEl = el;
+          break;
+        }
         el = el.parentElement;
       }
     }
-    console.log('[CS] SDUI scroll container:', sduiScrollEl
+    const sduiMsg = '[CS] SDUI scroll container: ' + (sduiScrollEl
       ? sduiScrollEl.tagName + ' scrollH=' + sduiScrollEl.scrollHeight + ' clientH=' + sduiScrollEl.clientHeight
-      : 'none — will use window fallback');
+      : 'none — using window scroll');
+    console.log(sduiMsg);
+    if (canSend()) chrome.runtime.sendMessage({ action: 'DEBUG_LOG', msg: sduiMsg }).catch(() => {});
   }
 
   let step = 0;
