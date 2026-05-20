@@ -148,6 +148,22 @@
           addUrn(extractUrn(href));
         }
       }
+
+      // ── REACT INTERNAL STATE EXTRACTOR ──
+      // This is the ultimate bypass for SDUI. We extract the raw React props
+      // attached to the DOM nodes and search them for URNs.
+      try {
+        const keys = Object.keys(node);
+        for (const k of keys) {
+          if (k.startsWith('__reactProps$') || k.startsWith('__reactFiber$')) {
+            const propsStr = JSON.stringify(node[k]);
+            const m = propsStr.match(/(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi);
+            if (m) {
+              m.forEach(u => addUrn(extractUrn(decodeURIComponent(u))));
+            }
+          }
+        }
+      } catch (_) {}
       
       // Check for data attributes
       if (node.getAttribute) {
