@@ -243,9 +243,6 @@ export default function Dashboard() {
       window.postMessage({
         source: 'NEXORA_DASHBOARD',
         action: 'START_ENGINE',
-        autoEnrich:      localStorage.getItem('nexora_autoenrich') === 'true',
-        autoDelete:      localStorage.getItem('nexora_autodel') === 'true',
-        deleteThreshold: parseInt(localStorage.getItem('nexora_threshold') || '10', 10),
       }, '*');
     }
   };
@@ -406,7 +403,7 @@ export default function Dashboard() {
         return <SupportPanel />;
 
       case 'saved-posts':
-        return <SavedPostsPanel />;
+        return <SavedPostsPanel settings={settings} />;
       
       case 'dashboard':
         // Mock chart data

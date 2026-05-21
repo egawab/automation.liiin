@@ -125,7 +125,7 @@ const UrlRow = memo(function UrlRow({
 });
 
 // ─── Main panel ───────────────────────────────────────────────────────────────
-export function SavedPostsPanel() {
+export function SavedPostsPanel({ settings }: { settings?: any }) {
   const [posts, setPosts]           = useState<SavedPost[]>([]);
   const [status, setStatus]         = useState<'loading' | 'ok' | 'error'>('loading');
   const [errorMsg, setErrorMsg]     = useState('');
@@ -141,12 +141,10 @@ export function SavedPostsPanel() {
 
   const [enrichKeyword, setEnrichKeyword] = useState<string>('all');
 
-  // autoEnrich → localStorage (reliable, synchronous) + chrome.storage.sync as secondary
-  const [autoEnrich, setAutoEnrich] = useState<boolean>(() => localStorage.getItem('nexora_autoenrich') === 'true');
-
-  // autoDelete + deleteThreshold → persisted in localStorage directly (reliable, no bridge timing)
-  const [autoDelete, setAutoDelete]         = useState<boolean>(() => localStorage.getItem('nexora_autodel') === 'true');
-  const [deleteThreshold, setDeleteThreshold] = useState<number>(() => parseInt(localStorage.getItem('nexora_threshold') || '10', 10));
+  // Initialize from settings (DB) for perfect sync, fallback to false
+  const [autoEnrich, setAutoEnrich] = useState<boolean>(settings?.autoEnrich || false);
+  const [autoDelete, setAutoDelete] = useState<boolean>(settings?.autoDelete || false);
+  const [deleteThreshold, setDeleteThreshold] = useState<number>(settings?.deleteThreshold || 10);
   const [showDeleteWarning, setShowDeleteWarning] = useState(false);
 
   // Save autoEnrich to localStorage + DB + chrome.storage.sync via bridge

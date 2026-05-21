@@ -85,23 +85,13 @@
 
     if (action === 'START_ENGINE') {
       const auth = extractAuth();
-      // Use enrich settings passed directly in the message (from localStorage via dashboard/page.tsx)
-      // This is the single reliable path — no chrome.storage timing issues
-      const enrichCfg = {
-        autoEnrich:      event.data.autoEnrich      ?? false,
-        autoDelete:      event.data.autoDelete      ?? false,
-        deleteThreshold: event.data.deleteThreshold ?? 10,
-      };
-      console.log('[NexoraBridge] START_ENGINE — autoEnrich=' + enrichCfg.autoEnrich + ' autoDelete=' + enrichCfg.autoDelete);
+      console.log('[NexoraBridge] START_ENGINE');
       wakeUpSW(() => {
         sendToBackground(
           {
             action: 'START_ENGINE',
             dashboardUrl:    auth.dashboardUrl,
             userId:          auth.userId,
-            autoEnrich:      enrichCfg.autoEnrich,
-            autoDelete:      enrichCfg.autoDelete,
-            deleteThreshold: enrichCfg.deleteThreshold,
           },
           (resp) => {
             console.log('[NexoraBridge] START_ENGINE reply:', resp);

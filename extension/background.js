@@ -333,22 +333,10 @@ async function runAutoEnrich(autoDelete, deleteThreshold) {
 
 // ── Main engine loop ──────────────────────────────────────────────────────────
 async function runEngine(settings, msgEnrich = {}) {
-  // Priority: msgEnrich (from START_ENGINE msg) > chrome.storage.sync > jobs API > default
-  const storedCfg = await new Promise(resolve =>
-    chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], resolve)
-  );
-  
-  const resolveSetting = (msgVal, storedVal, apiVal, fallback) => {
-    if (msgVal !== null && msgVal !== undefined) return msgVal;
-    if (storedVal !== null && storedVal !== undefined) return storedVal;
-    if (apiVal !== null && apiVal !== undefined) return apiVal;
-    return fallback;
-  };
-
-  const autoEnrich      = resolveSetting(msgEnrich.autoEnrich, storedCfg.autoEnrich, settings.autoEnrich, false);
-  const autoDelete      = resolveSetting(msgEnrich.autoDelete, storedCfg.autoDelete, settings.autoDelete, false);
-  const deleteThreshold = Number(resolveSetting(msgEnrich.deleteThreshold, storedCfg.deleteThreshold, settings.deleteThreshold, 10)) || 10;
-
+  // Always use the database truth from API
+  const autoEnrich      = settings.autoEnrich ?? false;
+  const autoDelete      = settings.autoDelete ?? false;
+  const deleteThreshold = Number(settings.deleteThreshold) || 10;
 
   console.log('[BG] RUNNING. keywords=' + JSON.stringify(S.keywords));
   console.log('[BG] autoEnrich=' + autoEnrich + ' autoDelete=' + autoDelete + ' threshold=' + deleteThreshold);
