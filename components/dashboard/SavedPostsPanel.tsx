@@ -419,14 +419,10 @@ export function SavedPostsPanel() {
                   className="rounded border-subtle bg-surface-elevated text-red-500 focus:ring-0 focus:ring-offset-0"
                   checked={autoDelete}
                   onChange={(e) => {
-                    if (e.target.checked && !localStorage.getItem('nexora_autodel_ack')) {
-                      setShowDeleteWarning(true);
-                    } else {
-                      const v = e.target.checked;
-                      setAutoDelete(v);
-                      localStorage.setItem('nexora_autodel', String(v));
-                      saveAutoEnrichFlag(autoEnrich); // sync chrome.storage too
-                    }
+                    const v = e.target.checked;
+                    setAutoDelete(v);
+                    localStorage.setItem('nexora_autodel', String(v));
+                    saveAutoEnrichFlag(autoEnrich); // sync chrome.storage too
                   }}
                 />
                 Auto-Delete if score &lt;
