@@ -366,11 +366,19 @@ async function runEngine(settings) {
   broadcastStatus('Scraping done! ' + S.totalSaved + ' posts saved.');
   setBadge(String(S.totalSaved), '#3b82f6');
 
-  // Auto-Enrich after scraping
-  if (autoEnrich) {
+  // Re-read autoEnrich RIGHT NOW (user may have ticked it during scraping)
+  const freshCfg = await new Promise(resolve =>
+    chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], resolve)
+  );
+  const doEnrich   = freshCfg.autoEnrich    ?? autoEnrich;
+  const doDel      = freshCfg.autoDelete    ?? autoDelete;
+  const doThresh   = Number(freshCfg.deleteThreshold ?? deleteThreshold) || 10;
+  console.log('[BG] Post-scrape check: autoEnrich=' + doEnrich + ' autoDelete=' + doDel);
+
+  if (doEnrich) {
     console.log('[BG-ENRICH] Auto-enrich enabled — starting in 5s...');
     await sleep(5000);
-    await runAutoEnrich(autoDelete, deleteThreshold);
+    await runAutoEnrich(doDel, doThresh);
   }
 }
 
@@ -423,7 +431,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.action === 'RE_ENRICH') {
     sendResponse({ ok: true });
     (async () => {
-      const posts = (msg.posts || []).filter(p => p.canonicalUrn && p.postUrl).map(p => ({ urn: p.canonicalUrn, url: p.postUrl }));
+      // Accept both {urn, url} (from Dashboard) and {canonicalUrn, postUrl} (legacy)
+      const posts = (msg.posts || [])
+        .map(p => ({ urn: p.urn || p.canonicalUrn, url: p.url || p.postUrl }))
+        .filter(p => p.urn && p.url);
+      console.log('[BG] RE_ENRICH received ' + (msg.posts||[]).length + ' posts, valid=' + posts.length);
       await startEnrichSession(posts, { autoDelete: msg.autoDelete, deleteThreshold: msg.deleteThreshold });
     })();
   }
