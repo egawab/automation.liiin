@@ -149,9 +149,16 @@ export function SavedPostsPanel() {
   const [deleteThreshold, setDeleteThreshold] = useState<number>(() => parseInt(localStorage.getItem('nexora_threshold') || '10', 10));
   const [showDeleteWarning, setShowDeleteWarning] = useState(false);
 
-  // Save autoEnrich to localStorage + chrome.storage.sync via bridge
+  // Save autoEnrich to localStorage + DB + chrome.storage.sync via bridge
   const saveAutoEnrichFlag = useCallback((val: boolean) => {
     localStorage.setItem('nexora_autoenrich', String(val));
+    // Persist to DB directly (bulletproof)
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoEnrich: val })
+    }).catch(() => {});
+
     window.postMessage({
       source: 'NEXORA_DASHBOARD',
       action: 'SAVE_AUTO_ENRICH',
@@ -264,6 +271,13 @@ export function SavedPostsPanel() {
           deleted: e.data.deleted ?? prev.deleted, nullCount: e.data.nullCount ?? prev.nullCount,
         }));
         fetchPosts(true);
+      }
+
+      // Handle bridge errors (like extension context invalidated)
+      if (e.data.action === 'ENGINE_ERROR') {
+        alert(e.data.error || 'Extension communication error.');
+        setEnrich(prev => ({ ...prev, running: false }));
+        enrichRunningRef.current = false;
       }
     }
     window.addEventListener('message', onMsg);
@@ -422,6 +436,12 @@ export function SavedPostsPanel() {
                     const v = e.target.checked;
                     setAutoDelete(v);
                     localStorage.setItem('nexora_autodel', String(v));
+                    // Persist to DB directly
+                    fetch('/api/settings', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ autoDelete: v })
+                    }).catch(() => {});
                     saveAutoEnrichFlag(autoEnrich); // sync chrome.storage too
                   }}
                 />
@@ -437,6 +457,12 @@ export function SavedPostsPanel() {
                   const val = parseInt(e.target.value) || 10;
                   setDeleteThreshold(val);
                   localStorage.setItem('nexora_threshold', String(val));
+                  // Persist to DB directly
+                  fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ deleteThreshold: val })
+                  }).catch(() => {});
                 }}
                 disabled={!autoDelete}
               />
