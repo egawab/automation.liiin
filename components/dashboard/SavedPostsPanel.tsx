@@ -147,15 +147,28 @@ export function SavedPostsPanel({ settings }: { settings?: any }) {
   const [deleteThreshold, setDeleteThreshold] = useState<number>(settings?.deleteThreshold || 10);
   const [showDeleteWarning, setShowDeleteWarning] = useState(false);
 
-  // Save autoEnrich to localStorage + DB + chrome.storage.sync via bridge
-  const saveAutoEnrichFlag = useCallback((val: boolean) => {
-    localStorage.setItem('nexora_autoenrich', String(val));
+  // Sync state when settings prop updates from parent
+  useEffect(() => {
+    if (settings) {
+      setAutoEnrich(settings.autoEnrich ?? false);
+      setAutoDelete(settings.autoDelete ?? false);
+      setDeleteThreshold(settings.deleteThreshold ?? 10);
+    }
+  }, [settings]);
+
+  // Save autoEnrich to DB + chrome.storage.sync via bridge
+  const saveAutoEnrichFlag = useCallback(async (val: boolean) => {
     // Persist to DB directly (bulletproof)
-    fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ autoEnrich: val })
-    }).catch(() => {});
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoEnrich: val })
+      });
+      if (!res.ok) throw new Error('DB Save failed');
+    } catch (e: any) {
+      alert('Failed to save setting to DB: ' + e.message);
+    }
 
     window.postMessage({
       source: 'NEXORA_DASHBOARD',
@@ -433,13 +446,14 @@ export function SavedPostsPanel({ settings }: { settings?: any }) {
                   onChange={(e) => {
                     const v = e.target.checked;
                     setAutoDelete(v);
-                    localStorage.setItem('nexora_autodel', String(v));
                     // Persist to DB directly
                     fetch('/api/settings', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ autoDelete: v })
-                    }).catch(() => {});
+                    }).then(res => {
+                      if (!res.ok) throw new Error('DB Save failed');
+                    }).catch(e => alert('Failed to save autoDelete to DB: ' + e.message));
                     saveAutoEnrichFlag(autoEnrich); // sync chrome.storage too
                   }}
                 />
@@ -454,13 +468,14 @@ export function SavedPostsPanel({ settings }: { settings?: any }) {
                 onChange={(e) => {
                   const val = parseInt(e.target.value) || 10;
                   setDeleteThreshold(val);
-                  localStorage.setItem('nexora_threshold', String(val));
                   // Persist to DB directly
                   fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ deleteThreshold: val })
-                  }).catch(() => {});
+                  }).then(res => {
+                    if (!res.ok) throw new Error('DB Save failed');
+                  }).catch(e => alert('Failed to save threshold to DB: ' + e.message));
                 }}
                 disabled={!autoDelete}
               />
