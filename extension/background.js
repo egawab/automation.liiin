@@ -248,21 +248,22 @@ async function enrichSinglePost(url, urn) {
 
 async function pushEnrichScore(urn, score) {
   try {
-    await fetch(S.dashboardUrl + '/api/extension/enrich', {
-      method: 'POST',
+    const res = await fetch(S.dashboardUrl + '/api/extension/enrich', {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
-      body: JSON.stringify({ canonicalUrn: urn, engagementScore: score })
+      body: JSON.stringify({ urn, score })
     });
+    if (!res.ok) console.warn('[BG-ENRICH] push HTTP', res.status);
   } catch (e) { console.warn('[BG-ENRICH] score push error:', e.message); }
 }
 
 async function deleteEnrichPost(urn) {
   try {
-    await fetch(S.dashboardUrl + '/api/extension/action', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
-      body: JSON.stringify({ action: 'delete', canonicalUrn: urn })
+    const res = await fetch(S.dashboardUrl + '/api/extension/enrich?urn=' + encodeURIComponent(urn), {
+      method: 'DELETE',
+      headers: { 'x-extension-token': S.userId }
     });
+    if (!res.ok) console.warn('[BG-ENRICH] delete HTTP', res.status);
   } catch (e) { console.warn('[BG-ENRICH] delete error:', e.message); }
 }
 
