@@ -1,11 +1,9 @@
-// background.js — Nexora Headless Scraper (Final Clean Version)
-// Fetches LinkedIn search page HTML directly (no tab/DOM needed).
-// Gets ~5-10 posts per keyword from LinkedIn's SSR HTML. No pagination (SDUI ignores start=).
-
-console.log('[BG] Nexora Headless Scraper loaded');
+// background.js — Nexora Headless Scraper + Auto-Enrich + Auto-Delete
+console.log('[BG] Nexora Headless Scraper v6 loaded');
 
 const S = {
   state: 'IDLE',
+  tabId: null,
   runId: 0,
   totalSaved: 0,
   dashboardUrl: '',
@@ -13,6 +11,10 @@ const S = {
   keywords: [],
   kwIndex: 0,
 };
+
+const E = { running: false };
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── Keep-alive ────────────────────────────────────────────────────────────────
 chrome.alarms.create('nexora_hb', { periodInMinutes: 0.4 });
@@ -45,15 +47,15 @@ function extractPostsFromText(text) {
   while ((m = URN_RE.exec(text)) !== null) {
     const raw = 'urn:li:' + m[1] + ':' + m[2];
     const urn = extractUrn(raw) || raw;
-    if (urn && !urlMap.has(urn)) {
+    if (urn) {
       const url = urnToUrl(urn);
-      if (url) urlMap.set(urn, url);
+      if (url && !urlMap.has(urn)) urlMap.set(urn, url);
     }
   }
   return Array.from(urlMap.entries()).map(([canonicalUrn, url]) => ({ canonicalUrn, url, source: 'search_only' }));
 }
 
-// ── CSRF Token ───────────────────────────────────────────────────────────────
+// ── CSRF Token ────────────────────────────────────────────────────────────────
 function getCsrfToken() {
   return new Promise(resolve => {
     chrome.cookies.get({ url: 'https://www.linkedin.com', name: 'JSESSIONID' }, c => {
@@ -62,22 +64,27 @@ function getCsrfToken() {
   });
 }
 
-// ── Fetch HTML helper ─────────────────────────────────────────────────────────
+// ── HTML fetch helper ─────────────────────────────────────────────────────────
 async function fetchHtml(url) {
-  const res = await fetch(url, {
-    headers: {
-      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'accept-language': 'en-US,en;q=0.9',
-      'cache-control': 'no-cache'
-    }
-  });
-  if (!res.ok) { console.warn('[BG] HTML fetch HTTP ' + res.status + ' ' + url); return ''; }
-  return res.text();
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
+        'cache-control': 'no-cache'
+      }
+    });
+    if (!res.ok) { console.warn('[BG] HTML ' + res.status + ' ' + url); return ''; }
+    return res.text();
+  } catch (e) {
+    console.warn('[BG] fetchHtml error:', e.message);
+    return '';
+  }
 }
 
-// ── Voyager GraphQL API (10 posts per call, paginated) ────────────────────────
+// ── Voyager GraphQL paginator ─────────────────────────────────────────────────
 async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
-  const MAX_PAGES = 6; // up to 60 posts
+  const MAX_PAGES = 10; // up to 100 posts
   for (let start = 0; start < MAX_PAGES * 10; start += 10) {
     if (S.state !== 'RUNNING') break;
     const apiUrl = `https://www.linkedin.com/voyager/api/graphql?variables=(count:10,keywords:${encodeURIComponent(keyword)},origin:GLOBAL_SEARCH_HEADER,q:blended,start:${start})&queryId=${queryId}`;
@@ -90,87 +97,76 @@ async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
           'x-li-lang': 'en_US',
         }
       });
-      if (!res.ok) { console.warn('[BG] Voyager API HTTP ' + res.status + ' start=' + start); break; }
+      if (!res.ok) { console.warn('[BG] Voyager HTTP ' + res.status + ' start=' + start); break; }
       const text = await res.text();
       const posts = extractPostsFromText(text);
       let added = 0;
       posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
-      console.log('[BG] Voyager start=' + start + ': +' + added + ' new (total=' + urlMap.size + ')');
-      if (added === 0) break; // no new posts — stop paginating
+      console.log('[BG] Voyager start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
+      if (added === 0) break;
     } catch (e) {
       console.warn('[BG] Voyager error:', e.message);
       break;
     }
-    await new Promise(r => setTimeout(r, 1500));
+    await sleep(1200);
   }
 }
 
-// ── Main fetch strategy for one keyword ──────────────────────────────────────
+// ── Main fetch strategy per keyword ──────────────────────────────────────────
 async function fetchPostsForKeyword(keyword) {
   const urlMap = new Map();
   const enc = encodeURIComponent;
   const slug = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-  // ── Step 1: Base HTML fetch (always works, gets ~5 SSR posts + queryId) ────
+  // Step 1: Base HTML (always works + extracts queryId)
   const baseUrl = `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
   const htmlText = await fetchHtml(baseUrl);
   extractPostsFromText(htmlText).forEach(p => { if (!urlMap.has(p.canonicalUrn)) urlMap.set(p.canonicalUrn, p); });
-  console.log('[BG] Base HTML: ' + urlMap.size + ' posts for kw=' + keyword);
+  console.log('[BG] Base HTML: ' + urlMap.size + ' posts kw=' + keyword);
 
-  // ── Step 2: Try to extract Voyager queryId and paginate the real API ────────
+  // Step 2: Voyager API via queryId (if present in HTML) → 100 posts
   const qidMatch = htmlText.match(/["']?(voyagerSearchDashClusters\.[a-f0-9]{32})["']?/);
   if (qidMatch) {
-    console.log('[BG] queryId found: ' + qidMatch[1] + ' — using Voyager API');
+    console.log('[BG] queryId found → Voyager API pagination');
     const csrf = await getCsrfToken();
     await fetchViaVoyager(keyword, qidMatch[1], csrf, urlMap);
   } else {
-    console.log('[BG] No queryId in HTML — using fallback URL variants');
-    // ── Step 3: Fallback — try more URL variants for extra SSR posts ─────────
-    const fallbackUrls = [
+    // Step 3: Fallback — multiple URL variants + hashtag
+    console.log('[BG] Voyager queryId not found → fallback variants');
+    const variants = [
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
       `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
       `https://www.linkedin.com/feed/hashtag/${slug}/`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-24h`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week&sortBy=date_posted`,
+      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month`,
     ];
-    for (const url of fallbackUrls) {
+    for (const url of variants) {
       if (S.state !== 'RUNNING') break;
-      const text = await fetchHtml(url).catch(() => '');
+      const text = await fetchHtml(url);
       let added = 0;
-      extractPostsFromText(text).forEach(p => {
-        if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; }
-      });
+      extractPostsFromText(text).forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
       if (added > 0) console.log('[BG] +' + added + ' from: ' + url.split('?')[1]);
-      await new Promise(r => setTimeout(r, 1500));
+      await sleep(1500);
     }
   }
 
   const posts = Array.from(urlMap.values());
-  console.log('[BG] ✅ Total unique posts for kw=' + keyword + ': ' + posts.length);
+  console.log('[BG] ✅ kw=' + keyword + ' total=' + posts.length + ' posts');
   return posts;
 }
 
-
-// ── DB Push ──────────────────────────────────────────────────────────────────
+// ── DB Push ───────────────────────────────────────────────────────────────────
 async function pushToAPI(posts, kw) {
   if (!posts || posts.length === 0) return 0;
-  console.log('[BG] Pushing ' + posts.length + ' posts for kw=' + kw);
   const endpoint = S.dashboardUrl + '/api/extension/results';
   const headers = { 'Content-Type': 'application/json', 'x-extension-token': S.userId };
   const body = JSON.stringify({ posts, keyword: kw, source: 'search_only' });
   try {
     let resp;
-    try {
-      resp = await fetch(endpoint, { method: 'POST', headers, body });
-    } catch (_) {
-      await new Promise(r => setTimeout(r, 3000));
-      resp = await fetch(endpoint, { method: 'POST', headers, body });
-    }
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => '');
-      console.warn('[BG] DB push failed HTTP ' + resp.status + ': ' + txt.slice(0, 200));
-      return 0;
-    }
+    try { resp = await fetch(endpoint, { method: 'POST', headers, body }); }
+    catch (_) { await sleep(3000); resp = await fetch(endpoint, { method: 'POST', headers, body }); }
+    if (!resp.ok) { console.warn('[BG] DB push HTTP ' + resp.status); return 0; }
     const data = await resp.json().catch(() => ({}));
     return typeof data.createdCount === 'number' ? data.createdCount : posts.length;
   } catch (e) {
@@ -181,9 +177,7 @@ async function pushToAPI(posts, kw) {
 
 // ── Keyword Fetch ─────────────────────────────────────────────────────────────
 async function fetchKeywords() {
-  const resp = await fetch(S.dashboardUrl + '/api/extension/jobs', {
-    headers: { 'x-extension-token': S.userId }
-  });
+  const resp = await fetch(S.dashboardUrl + '/api/extension/jobs', { headers: { 'x-extension-token': S.userId } });
   if (!resp.ok) throw new Error('Jobs API ' + resp.status);
   const jobs = await resp.json();
   if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
@@ -194,43 +188,189 @@ async function fetchKeywords() {
       if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
     } catch (_) {}
   }
-  if (kws.length === 0 && Array.isArray(jobs.keywords)) {
+  if (kws.length === 0 && Array.isArray(jobs.keywords))
     kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
-  }
   if (kws.length === 0) throw new Error('No keywords configured.');
-  return [...new Set(kws)];
+  return { keywords: [...new Set(kws)], settings: jobs.settings || {} };
+}
+
+// ── Auto-Enrich: open each post in background tab, inject enrich.js ───────────
+async function enrichSinglePost(url, urn) {
+  return new Promise(async (resolve) => {
+    let tabId = null;
+    let settled = false;
+    function finish(score) {
+      if (settled) return;
+      settled = true;
+      if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+      resolve(score);
+    }
+    const hardTimeout = setTimeout(() => finish(null), 18000);
+
+    function onMsg(msg, sender) {
+      if (msg.action !== 'ENRICH_RESULT') return;
+      if (tabId !== null && sender.tab?.id !== tabId) return;
+      chrome.runtime.onMessage.removeListener(onMsg);
+      clearTimeout(hardTimeout);
+      finish(msg.score ?? null);
+    }
+    chrome.runtime.onMessage.addListener(onMsg);
+
+    try {
+      const tab = await chrome.tabs.create({ url, active: false });
+      tabId = tab.id;
+      await new Promise(r => {
+        function fn(id, info) {
+          if (id !== tabId || info.status !== 'complete') return;
+          chrome.tabs.onUpdated.removeListener(fn);
+          setTimeout(r, 2000);
+        }
+        chrome.tabs.onUpdated.addListener(fn);
+        setTimeout(r, 15000); // fallback
+      });
+      if (!settled) {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: (u) => { window.__nexoraEnrichUrn = u; },
+          args: [urn]
+        });
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['enrich.js'] });
+      }
+    } catch (e) {
+      clearTimeout(hardTimeout);
+      finish(null);
+    }
+  });
+}
+
+async function pushEnrichScore(urn, score) {
+  try {
+    await fetch(S.dashboardUrl + '/api/extension/enrich', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
+      body: JSON.stringify({ canonicalUrn: urn, engagementScore: score })
+    });
+  } catch (e) { console.warn('[BG-ENRICH] score push error:', e.message); }
+}
+
+async function deleteEnrichPost(urn) {
+  try {
+    await fetch(S.dashboardUrl + '/api/extension/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
+      body: JSON.stringify({ action: 'delete', canonicalUrn: urn })
+    });
+  } catch (e) { console.warn('[BG-ENRICH] delete error:', e.message); }
+}
+
+// ── Auto-Enrich Session ───────────────────────────────────────────────────────
+async function startEnrichSession(posts, opts = {}) {
+  if (E.running) { console.warn('[BG-ENRICH] Already running'); return; }
+  E.running = true;
+  const { autoDelete = false, deleteThreshold = 10 } = opts;
+  const total = posts.length;
+  let enriched = 0, deleted = 0, nullCount = 0, failed = 0;
+
+  console.log('[BG-ENRICH] Starting enrichment for ' + total + ' posts');
+  broadcastStatus('Enriching 0/' + total + '...');
+  setBadge('...', '#f59e0b');
+
+  for (const post of posts) {
+    if (!post.url || !post.urn) { failed++; continue; }
+    try {
+      const score = await enrichSinglePost(post.url, post.urn);
+      if (score !== null) {
+        await pushEnrichScore(post.urn, score);
+        enriched++;
+        console.log('[BG-ENRICH] ✓ score=' + score + ' ' + post.urn);
+        if (autoDelete && score < deleteThreshold) {
+          await deleteEnrichPost(post.urn);
+          deleted++;
+          console.log('[BG-ENRICH] 🗑 Deleted (score=' + score + '<' + deleteThreshold + ')');
+        }
+      } else {
+        nullCount++;
+      }
+    } catch (e) {
+      failed++;
+      console.warn('[BG-ENRICH] Error:', e.message);
+    }
+    const done = enriched + nullCount + failed;
+    broadcastStatus('Enriching ' + done + '/' + total + '...');
+    chrome.runtime.sendMessage({ action: 'ENRICH_PROGRESS', done, total, enriched, deleted, failed, nullCount }).catch(() => {});
+    if (done < total) await sleep(2500);
+  }
+
+  E.running = false;
+  console.log('[BG-ENRICH] Done. enriched=' + enriched + ' deleted=' + deleted + ' null=' + nullCount);
+  broadcastStatus('Enrichment done! ' + enriched + ' scored, ' + deleted + ' deleted.');
+  setBadge(String(enriched), '#3b82f6');
+}
+
+// ── Run Auto-Enrich after scraping completes ──────────────────────────────────
+async function runAutoEnrich(autoDelete, deleteThreshold) {
+  if (E.running) return;
+  console.log('[BG-ENRICH] Auto-enrich: fetching unscored posts...');
+  try {
+    const kwParam = encodeURIComponent(S.keywords.join(','));
+    const resp = await fetch(S.dashboardUrl + '/api/extension/posts?unscored=true&keywords=' + kwParam, {
+      headers: { 'x-extension-token': S.userId }
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const posts = await resp.json();
+    if (!Array.isArray(posts) || posts.length === 0) { console.log('[BG-ENRICH] No unscored posts found.'); return; }
+    const queue = posts.filter(p => p.canonicalUrn && p.postUrl).map(p => ({ urn: p.canonicalUrn, url: p.postUrl }));
+    if (queue.length === 0) { console.log('[BG-ENRICH] Queue empty after filter.'); return; }
+    console.log('[BG-ENRICH] Queuing ' + queue.length + ' posts for enrichment');
+    await startEnrichSession(queue, { autoDelete, deleteThreshold });
+  } catch (e) {
+    console.error('[BG-ENRICH] Auto-enrich error:', e.message);
+  }
 }
 
 // ── Main engine loop ──────────────────────────────────────────────────────────
-async function runEngine() {
+async function runEngine(settings) {
+  // Read autoEnrich settings: jobs API has them after migration,
+  // fall back to chrome.storage.sync (saved by the Dashboard UI checkboxes)
+  const storedCfg = await new Promise(resolve =>
+    chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], resolve)
+  );
+  const autoEnrich     = settings.autoEnrich    ?? storedCfg.autoEnrich    ?? false;
+  const autoDelete     = settings.autoDelete    ?? storedCfg.autoDelete    ?? false;
+  const deleteThreshold = Number(settings.deleteThreshold ?? storedCfg.deleteThreshold) || 10;
+
   console.log('[BG] RUNNING. keywords=' + JSON.stringify(S.keywords));
+  console.log('[BG] autoEnrich=' + autoEnrich + ' autoDelete=' + autoDelete + ' threshold=' + deleteThreshold);
 
   for (S.kwIndex = 0; S.kwIndex < S.keywords.length; S.kwIndex++) {
     if (S.state !== 'RUNNING') break;
     const kw = S.keywords[S.kwIndex];
-
     const posts = await fetchPostsForKeyword(kw);
-
     if (posts.length > 0) {
       const saved = await pushToAPI(posts, kw);
       S.totalSaved += saved;
       console.log('[BG] Saved ' + saved + '/' + posts.length + ' kw=' + kw + ' total=' + S.totalSaved);
     } else {
-      console.warn('[BG] 0 posts found for kw=' + kw);
+      console.warn('[BG] 0 posts for kw=' + kw);
     }
-
-    // Delay between keywords (anti-rate-limit)
     if (S.kwIndex < S.keywords.length - 1 && S.state === 'RUNNING') {
-      console.log('[BG] Waiting 5s before next keyword...');
-      await new Promise(r => setTimeout(r, 5000));
+      console.log('[BG] 5s delay before next keyword...');
+      await sleep(5000);
     }
   }
 
-  if (S.state === 'RUNNING') {
-    S.state = 'IDLE';
-    console.log('[BG] All keywords done. totalSaved=' + S.totalSaved);
-    broadcastStatus('Done! ' + S.totalSaved + ' posts saved.');
-    setBadge(String(S.totalSaved), '#3b82f6');
+  if (S.state !== 'RUNNING') return;
+
+  S.state = 'IDLE';
+  console.log('[BG] ✅ Scraping done. totalSaved=' + S.totalSaved);
+  broadcastStatus('Scraping done! ' + S.totalSaved + ' posts saved.');
+  setBadge(String(S.totalSaved), '#3b82f6');
+
+  // Auto-Enrich after scraping
+  if (autoEnrich) {
+    console.log('[BG-ENRICH] Auto-enrich enabled — starting in 5s...');
+    await sleep(5000);
+    await runAutoEnrich(autoDelete, deleteThreshold);
   }
 }
 
@@ -247,13 +387,7 @@ function setBadge(text, color) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.action === 'GET_STATUS' || msg.action === 'PING') {
-    sendResponse({
-      running: S.state === 'RUNNING',
-      state: S.state,
-      runId: S.runId,
-      totalSaved: S.totalSaved,
-      keyword: S.keywords[S.kwIndex] || null
-    });
+    sendResponse({ running: S.state === 'RUNNING', state: S.state, runId: S.runId, totalSaved: S.totalSaved, keyword: S.keywords[S.kwIndex] || null });
   }
 
   else if (msg.action === 'START_ENGINE' || msg.action === 'START_SESSION') {
@@ -267,8 +401,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     (async () => {
       try {
-        S.keywords = await fetchKeywords();
-        await runEngine();
+        const { keywords, settings } = await fetchKeywords();
+        S.keywords = keywords;
+        await runEngine(settings);
       } catch (e) {
         console.error('[BG] Engine error:', e.message);
         S.state = 'IDLE';
@@ -279,14 +414,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   else if (msg.action === 'STOP_ENGINE' || msg.action === 'STOP_SESSION') {
     S.state = 'IDLE';
+    E.running = false;
     broadcastStatus('Stopped.');
     setBadge('', '#6b7280');
     sendResponse({ ok: true });
   }
 
-  else if (msg.action === 'KEEP_ALIVE') {
+  else if (msg.action === 'RE_ENRICH') {
     sendResponse({ ok: true });
+    (async () => {
+      const posts = (msg.posts || []).filter(p => p.canonicalUrn && p.postUrl).map(p => ({ urn: p.canonicalUrn, url: p.postUrl }));
+      await startEnrichSession(posts, { autoDelete: msg.autoDelete, deleteThreshold: msg.deleteThreshold });
+    })();
   }
+
+  else if (msg.action === 'ENRICH_RESULT') { sendResponse({ ok: true }); }
+  else if (msg.action === 'KEEP_ALIVE') { sendResponse({ ok: true }); }
 
   return true;
 });

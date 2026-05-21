@@ -57,6 +57,11 @@ model Settings {
   minDelayBetweenSearchesMinutes Int @default(5)
   maxKeywordsPerCycle   Int     @default(3)
   
+  // Auto-Enrich after scrape
+  autoEnrich            Boolean @default(false)
+  autoDelete            Boolean @default(false)
+  deleteThreshold       Int     @default(10)
+
   // Cloud Proxy Configuration
   proxyHost             String?
   proxyPort             Int?

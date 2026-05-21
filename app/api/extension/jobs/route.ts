@@ -124,8 +124,11 @@ export async function GET(req: Request) {
         maxLikes: settings.maxLikes || 100000,
         maxComments: settings.maxComments || 100000,
         maxKeywordsPerCycle: 3,
-        searchOnlyMode: settings.searchOnlyMode ?? true, // Default to true for safety
-        searchConfigJson: settings.searchConfigJson || "[]"
+        searchOnlyMode: settings.searchOnlyMode ?? true,
+        searchConfigJson: settings.searchConfigJson || "[]",
+        autoEnrich: settings.autoEnrich ?? false,
+        autoDelete: settings.autoDelete ?? false,
+        deleteThreshold: settings.deleteThreshold ?? 10,
       },
       keywords: keywords.map(k => ({ id: k.id, keyword: k.keyword, targetCycles: k.targetCycles || 1 })),
       comments: comments.map(c => ({ id: c.id, text: c.text, keywordId: c.keywordId, cycleIndex: c.cycleIndex || 1 }))
