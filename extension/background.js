@@ -84,7 +84,7 @@ async function fetchHtml(url) {
 
 // ── Voyager GraphQL paginator ─────────────────────────────────────────────────
 async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
-  const MAX_PAGES = 10; // up to 100 posts
+  const MAX_PAGES = 15; // up to 150 posts
   for (let start = 0; start < MAX_PAGES * 10; start += 10) {
     if (S.state !== 'RUNNING') break;
     const apiUrl = `https://www.linkedin.com/voyager/api/graphql?variables=(count:10,keywords:${encodeURIComponent(keyword)},origin:GLOBAL_SEARCH_HEADER,q:blended,start:${start})&queryId=${queryId}`;
@@ -133,15 +133,18 @@ async function fetchPostsForKeyword(keyword) {
   } else {
     // Step 3: Fallback — multiple URL variants + hashtag
     console.log('[BG] Voyager queryId not found → fallback variants');
-    const variants = [
+    const fallbackUrls = [
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
       `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
+      `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
       `https://www.linkedin.com/feed/hashtag/${slug}/`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-24h`,
+      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week&sortBy=date_posted`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month`,
+      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month&sortBy=date_posted`,
     ];
-    for (const url of variants) {
+    for (const url of fallbackUrls) {
       if (S.state !== 'RUNNING') break;
       const text = await fetchHtml(url);
       let added = 0;

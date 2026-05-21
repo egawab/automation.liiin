@@ -85,30 +85,29 @@
 
     if (action === 'START_ENGINE') {
       const auth = extractAuth();
-      console.log('[NexoraBridge] START_ENGINE — waking SW. Auth:', auth);
+      // Use enrich settings passed directly in the message (from localStorage via dashboard/page.tsx)
+      // This is the single reliable path — no chrome.storage timing issues
+      const enrichCfg = {
+        autoEnrich:      event.data.autoEnrich      ?? false,
+        autoDelete:      event.data.autoDelete      ?? false,
+        deleteThreshold: event.data.deleteThreshold ?? 10,
+      };
+      console.log('[NexoraBridge] START_ENGINE — autoEnrich=' + enrichCfg.autoEnrich + ' autoDelete=' + enrichCfg.autoDelete);
       wakeUpSW(() => {
-        // Read enrich settings and pass them directly in the message (avoids storage timing issues)
-        const readAndStart = (enrichCfg) => {
-          sendToBackground(
-            {
-              action: 'START_ENGINE',
-              dashboardUrl: auth.dashboardUrl,
-              userId: auth.userId,
-              autoEnrich: enrichCfg.autoEnrich ?? false,
-              autoDelete: enrichCfg.autoDelete ?? false,
-              deleteThreshold: enrichCfg.deleteThreshold ?? 10,
-            },
-            (resp) => {
-              console.log('[NexoraBridge] START_ENGINE reply:', resp);
-              notifyDashboard('ENGINE_STARTED_ACK', { keyword: 'starting' });
-            }
-          );
-        };
-        if (canSend() && chrome.storage && chrome.storage.sync) {
-          chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], readAndStart);
-        } else {
-          readAndStart({});
-        }
+        sendToBackground(
+          {
+            action: 'START_ENGINE',
+            dashboardUrl:    auth.dashboardUrl,
+            userId:          auth.userId,
+            autoEnrich:      enrichCfg.autoEnrich,
+            autoDelete:      enrichCfg.autoDelete,
+            deleteThreshold: enrichCfg.deleteThreshold,
+          },
+          (resp) => {
+            console.log('[NexoraBridge] START_ENGINE reply:', resp);
+            notifyDashboard('ENGINE_STARTED_ACK', { keyword: 'starting' });
+          }
+        );
       });
     }
 
@@ -140,12 +139,17 @@
     }
 
     if (action === 'SAVE_AUTO_ENRICH') {
+      console.log('[NexoraBridge] SAVE_AUTO_ENRICH:', event.data);
       if (canSend() && chrome.storage && chrome.storage.sync) {
          chrome.storage.sync.set({
            autoEnrich: event.data.autoEnrich,
            autoDelete: event.data.autoDelete,
            deleteThreshold: event.data.deleteThreshold
+         }, () => {
+           console.log('[NexoraBridge] autoEnrich saved to storage:', event.data.autoEnrich);
          });
+      } else {
+        console.warn('[NexoraBridge] SAVE_AUTO_ENRICH: chrome.storage not available');
       }
     }
 

@@ -240,7 +240,13 @@ export default function Dashboard() {
     
     // 🚀 Send direct push to the extension IMMEDIATELY (via injected dashboard-bridge.js)
     if (newState) {
-      window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'START_ENGINE' }, '*');
+      window.postMessage({
+        source: 'NEXORA_DASHBOARD',
+        action: 'START_ENGINE',
+        autoEnrich:      localStorage.getItem('nexora_autoenrich') === 'true',
+        autoDelete:      localStorage.getItem('nexora_autodel') === 'true',
+        deleteThreshold: parseInt(localStorage.getItem('nexora_threshold') || '10', 10),
+      }, '*');
     }
   };
 

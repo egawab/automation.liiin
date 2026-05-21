@@ -141,16 +141,17 @@ export function SavedPostsPanel() {
 
   const [enrichKeyword, setEnrichKeyword] = useState<string>('all');
 
-  // autoEnrich → persisted in chrome.storage.sync (background.js reads it independently)
-  const [autoEnrich, setAutoEnrich] = useState(false);
+  // autoEnrich → localStorage (reliable, synchronous) + chrome.storage.sync as secondary
+  const [autoEnrich, setAutoEnrich] = useState<boolean>(() => localStorage.getItem('nexora_autoenrich') === 'true');
 
   // autoDelete + deleteThreshold → persisted in localStorage directly (reliable, no bridge timing)
   const [autoDelete, setAutoDelete]         = useState<boolean>(() => localStorage.getItem('nexora_autodel') === 'true');
   const [deleteThreshold, setDeleteThreshold] = useState<number>(() => parseInt(localStorage.getItem('nexora_threshold') || '10', 10));
   const [showDeleteWarning, setShowDeleteWarning] = useState(false);
 
-  // Save autoEnrich to chrome.storage.sync via bridge (background.js needs it for auto-trigger)
+  // Save autoEnrich to localStorage + chrome.storage.sync via bridge
   const saveAutoEnrichFlag = useCallback((val: boolean) => {
+    localStorage.setItem('nexora_autoenrich', String(val));
     window.postMessage({
       source: 'NEXORA_DASHBOARD',
       action: 'SAVE_AUTO_ENRICH',
@@ -212,13 +213,8 @@ export function SavedPostsPanel() {
     return () => clearInterval(id);
   }, [fetchPosts]);
 
-  // Load auto-enrich config after bridge is ready (delayed so bridge's 500ms init fires first)
-  useEffect(() => {
-    const t = setTimeout(() => {
-      window.postMessage({ source: 'NEXORA_DASHBOARD', action: 'GET_AUTO_ENRICH' }, '*');
-    }, 650);
-    return () => clearTimeout(t);
-  }, []);
+  // autoEnrich is now in localStorage — no need to fetch from chrome.storage.sync on mount
+  // (The old GET_AUTO_ENRICH was overwriting localStorage state with stale storage values)
 
   // ── Polling: GET_ENRICH_STATUS every 1.5s while enrichment is running ──────────────
   // This is the primary progress mechanism. Push-based messages are unreliable in MV3.
@@ -235,11 +231,8 @@ export function SavedPostsPanel() {
     function onMsg(e: MessageEvent) {
       if (!e.data || e.data.source !== 'NEXORA_EXTENSION') return;
 
-      // Config loaded from chrome.storage.sync (only autoEnrich lives here)
-      if (e.data.action === 'AUTO_ENRICH_CFG') {
-        setAutoEnrich(!!e.data.autoEnrich);
-        // autoDelete + threshold are in localStorage — don't override them from storage
-      }
+      // autoEnrich is now in localStorage — ignore AUTO_ENRICH_CFG to avoid overwriting local state
+      // if (e.data.action === 'AUTO_ENRICH_CFG') { setAutoEnrich(!!e.data.autoEnrich); }
 
       // Polled progress response — primary mechanism for live updates
       if (e.data.action === 'ENRICH_STATUS') {
