@@ -333,14 +333,22 @@ async function runAutoEnrich(autoDelete, deleteThreshold) {
 
 // ── Main engine loop ──────────────────────────────────────────────────────────
 async function runEngine(settings, msgEnrich = {}) {
-  // Priority: msgEnrich (from START_ENGINE msg) > jobs API > chrome.storage.sync > default
+  // Priority: msgEnrich (from START_ENGINE msg) > chrome.storage.sync > jobs API > default
   const storedCfg = await new Promise(resolve =>
     chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], resolve)
   );
-  // msgEnrich.autoEnrich is null if not sent (old popup path) — use ?? to fallback properly
-  const autoEnrich      = msgEnrich.autoEnrich      ?? settings.autoEnrich    ?? storedCfg.autoEnrich    ?? false;
-  const autoDelete      = msgEnrich.autoDelete      ?? settings.autoDelete    ?? storedCfg.autoDelete    ?? false;
-  const deleteThreshold = Number(msgEnrich.deleteThreshold ?? settings.deleteThreshold ?? storedCfg.deleteThreshold) || 10;
+  
+  const resolveSetting = (msgVal, storedVal, apiVal, fallback) => {
+    if (msgVal !== null && msgVal !== undefined) return msgVal;
+    if (storedVal !== null && storedVal !== undefined) return storedVal;
+    if (apiVal !== null && apiVal !== undefined) return apiVal;
+    return fallback;
+  };
+
+  const autoEnrich      = resolveSetting(msgEnrich.autoEnrich, storedCfg.autoEnrich, settings.autoEnrich, false);
+  const autoDelete      = resolveSetting(msgEnrich.autoDelete, storedCfg.autoDelete, settings.autoDelete, false);
+  const deleteThreshold = Number(resolveSetting(msgEnrich.deleteThreshold, storedCfg.deleteThreshold, settings.deleteThreshold, 10)) || 10;
+
 
   console.log('[BG] RUNNING. keywords=' + JSON.stringify(S.keywords));
   console.log('[BG] autoEnrich=' + autoEnrich + ' autoDelete=' + autoDelete + ' threshold=' + deleteThreshold);
