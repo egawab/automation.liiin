@@ -329,15 +329,15 @@ async function runAutoEnrich(autoDelete, deleteThreshold) {
 }
 
 // ── Main engine loop ──────────────────────────────────────────────────────────
-async function runEngine(settings) {
-  // Read autoEnrich settings: jobs API has them after migration,
-  // fall back to chrome.storage.sync (saved by the Dashboard UI checkboxes)
+async function runEngine(settings, msgEnrich = {}) {
+  // Priority: msgEnrich (from START_ENGINE msg) > jobs API > chrome.storage.sync > default
   const storedCfg = await new Promise(resolve =>
     chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], resolve)
   );
-  const autoEnrich     = settings.autoEnrich    ?? storedCfg.autoEnrich    ?? false;
-  const autoDelete     = settings.autoDelete    ?? storedCfg.autoDelete    ?? false;
-  const deleteThreshold = Number(settings.deleteThreshold ?? storedCfg.deleteThreshold) || 10;
+  // msgEnrich.autoEnrich is null if not sent (old popup path) — use ?? to fallback properly
+  const autoEnrich      = msgEnrich.autoEnrich      ?? settings.autoEnrich    ?? storedCfg.autoEnrich    ?? false;
+  const autoDelete      = msgEnrich.autoDelete      ?? settings.autoDelete    ?? storedCfg.autoDelete    ?? false;
+  const deleteThreshold = Number(msgEnrich.deleteThreshold ?? settings.deleteThreshold ?? storedCfg.deleteThreshold) || 10;
 
   console.log('[BG] RUNNING. keywords=' + JSON.stringify(S.keywords));
   console.log('[BG] autoEnrich=' + autoEnrich + ' autoDelete=' + autoDelete + ' threshold=' + deleteThreshold);
@@ -406,12 +406,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     S.totalSaved = 0;
     S.dashboardUrl = msg.dashboardUrl || msg.cfg?.dashboardUrl || '';
     S.userId = msg.userId || msg.cfg?.userId || '';
+    // Capture enrich settings sent directly from Dashboard UI (most reliable source)
+    const msgEnrich = {
+      autoEnrich:      msg.autoEnrich      ?? null,
+      autoDelete:      msg.autoDelete      ?? null,
+      deleteThreshold: msg.deleteThreshold ?? null,
+    };
+    console.log('[BG] START_ENGINE received enrich cfg:', msgEnrich);
     sendResponse({ ok: true });
     (async () => {
       try {
         const { keywords, settings } = await fetchKeywords();
         S.keywords = keywords;
-        await runEngine(settings);
+        await runEngine(settings, msgEnrich);
       } catch (e) {
         console.error('[BG] Engine error:', e.message);
         S.state = 'IDLE';

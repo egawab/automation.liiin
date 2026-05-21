@@ -87,13 +87,28 @@
       const auth = extractAuth();
       console.log('[NexoraBridge] START_ENGINE — waking SW. Auth:', auth);
       wakeUpSW(() => {
-        sendToBackground(
-          { action: 'START_ENGINE', dashboardUrl: auth.dashboardUrl, userId: auth.userId },
-          (resp) => {
-            console.log('[NexoraBridge] START_ENGINE reply:', resp);
-            notifyDashboard('ENGINE_STARTED_ACK', { keyword: 'starting' });
-          }
-        );
+        // Read enrich settings and pass them directly in the message (avoids storage timing issues)
+        const readAndStart = (enrichCfg) => {
+          sendToBackground(
+            {
+              action: 'START_ENGINE',
+              dashboardUrl: auth.dashboardUrl,
+              userId: auth.userId,
+              autoEnrich: enrichCfg.autoEnrich ?? false,
+              autoDelete: enrichCfg.autoDelete ?? false,
+              deleteThreshold: enrichCfg.deleteThreshold ?? 10,
+            },
+            (resp) => {
+              console.log('[NexoraBridge] START_ENGINE reply:', resp);
+              notifyDashboard('ENGINE_STARTED_ACK', { keyword: 'starting' });
+            }
+          );
+        };
+        if (canSend() && chrome.storage && chrome.storage.sync) {
+          chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], readAndStart);
+        } else {
+          readAndStart({});
+        }
       });
     }
 
@@ -120,15 +135,6 @@
           currentKeyword: event.data.currentKeyword
         }, (resp) => {
           console.log('[NexoraBridge] RE_ENRICH queued:', resp);
-        });
-      });
-    }
-
-    if (action === 'GET_ENRICH_STATUS') {
-      // Use wakeUpSW to ensure service worker is alive before querying
-      wakeUpSW(() => {
-        sendToBackground({ action: 'GET_ENRICH_STATUS' }, (resp) => {
-          notifyDashboard('ENRICH_STATUS', resp || { running: false });
         });
       });
     }
