@@ -134,23 +134,33 @@ async function fetchPostsForKeyword(keyword) {
     // Step 3: Fallback — multiple URL variants + hashtag
     console.log('[BG] Voyager queryId not found → fallback variants');
     const fallbackUrls = [
+      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
       `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
       `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
       `https://www.linkedin.com/feed/hashtag/${slug}/`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-24h`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`,
-      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week&sortBy=date_posted`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month`,
-      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month&sortBy=date_posted`,
     ];
+    
     for (const url of fallbackUrls) {
       if (S.state !== 'RUNNING') break;
-      const text = await fetchHtml(url);
-      let added = 0;
-      extractPostsFromText(text).forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
-      if (added > 0) console.log('[BG] +' + added + ' from: ' + url.split('?')[1]);
-      await sleep(1500);
+      // Fetch up to 3 pages per variant to massively increase quantity
+      for (let page = 1; page <= 3; page++) {
+        if (S.state !== 'RUNNING') break;
+        const pageUrl = url.includes('hashtag') ? url : `${url}&page=${page}`;
+        const text = await fetchHtml(pageUrl);
+        let added = 0;
+        extractPostsFromText(text).forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
+        if (added > 0) {
+          console.log(`[BG] +${added} from: ${pageUrl.split('?')[1] || 'hashtag'} (page ${page})`);
+        } else {
+          // If a page returns 0 new posts, skip remaining pages for this variant to save time
+          break;
+        }
+        await sleep(1500);
+      }
     }
   }
 
