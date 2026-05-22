@@ -127,7 +127,7 @@ async function fetchViaScrollTab(keyword, urlMap) {
     console.log('[BG] Scroll tab opened: ' + tabId + ' kw=' + keyword);
 
     // Wait for initial page load
-    await sleep(4000);
+    await sleep(6000);
 
     const MAX_SCROLLS = 15;
     let consecutiveEmpty = 0;
@@ -135,22 +135,38 @@ async function fetchViaScrollTab(keyword, urlMap) {
     for (let i = 0; i < MAX_SCROLLS; i++) {
       if (S.state !== 'RUNNING') break;
 
-      // Execute script: collect URNs from DOM then scroll down
+      // Execute script: scroll to bottom, wait a bit, then collect URNs
       let urns = [];
       try {
         const results = await chrome.scripting.executeScript({
           target: { tabId },
-          func: () => {
-            const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
-            const html = document.documentElement.innerHTML;
+          func: async () => {
+            // Scroll to trigger lazy loading
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            // Wait 2 seconds for React to render new posts
+            await new Promise(r => setTimeout(r, 2000));
+            
             const found = new Set();
+            
+            // Method 1: Look for data-urn attributes
+            document.querySelectorAll('[data-urn], [data-chameleon-result-urn], [data-id]').forEach(el => {
+               const attr = el.getAttribute('data-urn') || el.getAttribute('data-chameleon-result-urn') || el.getAttribute('data-id');
+               if (attr && attr.includes('urn:li:')) found.add(attr);
+            });
+            
+            // Method 2: Look for post links
+            document.querySelectorAll('a[href*="/posts/"], a[href*="/update/urn:li:"]').forEach(a => {
+               found.add(a.href);
+            });
+
+            // Method 3: Regex over the entire body innerHTML just in case
+            const html = document.body.innerHTML || '';
+            const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
             let m;
-            URN_RE.lastIndex = 0;
             while ((m = URN_RE.exec(html)) !== null) {
               found.add('urn:li:' + m[1].toLowerCase() + ':' + m[2]);
             }
-            // Scroll to bottom to trigger more posts loading
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            
             return [...found];
           }
         });
