@@ -33,7 +33,6 @@
 
   // ── Strategy 2: Parse engagement counts from rendered DOM text ────────────────
   // LinkedIn always renders "X reactions", "Y comments", "Z reposts" as visible text.
-  // This works on both old and new React layouts regardless of class name changes.
   function tryDomText() {
     try {
       const text = document.body.innerText || '';
@@ -50,7 +49,6 @@
         /([0-9][0-9,]*)\s*share/i,
       ];
 
-      // Avoid double-counting: track which number we already used
       const usedNumbers = new Set();
       for (const re of patterns) {
         const m = text.match(re);
@@ -64,17 +62,14 @@
         }
       }
 
-      // Page loaded (long enough text) but no engagement numbers = real score of 0
-      if (!found && text.length > 500) return 0;
-      return found ? total : null;
+      return found ? total : null; // null = page loaded but can't read score yet
     } catch (_) { return null; }
   }
 
   // ── Main wait loop ────────────────────────────────────────────────────────────
-  // Polls both strategies every 500ms for up to 15 seconds.
+  // Polls both strategies every 500ms for up to 12 seconds.
   const urn = window.__nexoraEnrichUrn || null;
-  const deadline = Date.now() + 15000;
-  let pageLoaded = false;
+  const deadline = Date.now() + 12000;
 
   while (Date.now() < deadline) {
     // Strategy 1: interceptor
@@ -85,13 +80,10 @@
     const s2 = tryDomText();
     if (s2 !== null) { done(s2, 'dom'); return; }
 
-    // Track if page is loading (body text growing)
-    if ((document.body?.innerText?.length || 0) > 500) pageLoaded = true;
-
     await new Promise(r => setTimeout(r, 500));
   }
 
-  // Timeout — if page loaded but no engagement found = genuinely 0 reach
-  // If page never loaded = private/restricted (null = skip, don't delete)
-  done(pageLoaded ? 0 : null, 'timeout');
+  // Timeout — post is private, restricted, login-walled, or truly 0 engagement
+  // Return null so auto-delete does NOT remove it (we can't confirm 0 score)
+  done(null, 'timeout');
 })();
