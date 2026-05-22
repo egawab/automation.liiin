@@ -640,7 +640,7 @@ async function runAutoEnrich(autoDelete, deleteThreshold) {
   console.log('[BG-ENRICH] Auto-enrich: fetching unscored posts...');
   try {
     const kwParam = encodeURIComponent(S.keywords.join(','));
-    const resp = await fetch(S.dashboardUrl + '/api/extension/posts?unscored=true&keywords=' + kwParam, {
+    const resp = await fetch(S.dashboardUrl + '/api/extension/posts?unscored=true&includeUncertain=true&keywords=' + kwParam, {
       headers: { 'x-extension-token': S.userId }
     });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);

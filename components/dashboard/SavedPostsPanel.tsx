@@ -75,7 +75,15 @@ const UrlRow = memo(function UrlRow({
       </span>
 
       {/* Engagement score badge */}
-      {score !== null && score !== undefined && (
+      {score === -1 ? (
+        // Uncertain sentinel — show a distinct "?" badge, never the raw -1
+        <span
+          className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400"
+          title="Score uncertain — could not be read reliably"
+        >
+          ?
+        </span>
+      ) : score !== null && score !== undefined && score >= 0 ? (
         <span
           className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
             score >= 10 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-700/60 text-zinc-400'
@@ -84,7 +92,7 @@ const UrlRow = memo(function UrlRow({
         >
           {score >= 1000 ? `${(score / 1000).toFixed(1)}k` : score}
         </span>
-      )}
+      ) : null}
 
       {/* URL */}
       <span
@@ -131,7 +139,7 @@ export function SavedPostsPanel({ settings }: { settings?: any }) {
   const [errorMsg, setErrorMsg]     = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [engagementFilter, setEngagementFilter] = useState<'all' | 'scored' | 'high'>('all');
+  const [engagementFilter, setEngagementFilter] = useState<'all' | 'scored' | 'high' | 'uncertain'>('all');
   const [copiedKw, setCopiedKw]     = useState<string | null>(null);
 
   // ── Enrich state ─────────────────────────────────────────────────────────────
@@ -339,12 +347,13 @@ export function SavedPostsPanel({ settings }: { settings?: any }) {
   const startEnrich = useCallback(async () => {
     if (enrich.running) return;
     
-    // Fetch unscored posts from the API, optionally filtered by keyword
-    const url = enrichKeyword === 'all' 
-      ? '/api/saved-posts?unscored=true' 
-      : `/api/saved-posts?unscored=true&keyword=${encodeURIComponent(enrichKeyword)}`;
-      
-    const res = await fetch(url, { credentials: 'include' });
+    // FIX: also include uncertain (-1 sentinel) posts in the enrichment queue.
+    // Previously only null posts were fetched, leaving -1 posts permanently stuck.
+    const baseUrl = enrichKeyword === 'all'
+      ? '/api/saved-posts?unscored=true&includeUncertain=true'
+      : `/api/saved-posts?unscored=true&includeUncertain=true&keyword=${encodeURIComponent(enrichKeyword)}`;
+
+    const res = await fetch(baseUrl, { credentials: 'include' });
     if (!res.ok) return;
     const unscored: SavedPost[] = await res.json();
     if (!unscored.length) {
@@ -371,9 +380,13 @@ export function SavedPostsPanel({ settings }: { settings?: any }) {
 
   // ── Filter & group ──────────────────────────────────────────────────────────
   const engFiltered = posts.filter(p => {
-    if (engagementFilter === 'all')    return true;
-    if (engagementFilter === 'scored') return p.engagementScore != null;
-    if (engagementFilter === 'high')   return (p.engagementScore ?? 0) >= 10;
+    if (engagementFilter === 'all')       return true;
+    // FIX: 'scored' must EXCLUDE the -1 sentinel. -1 means "uncertain", not a real score.
+    // Previously: p.engagementScore != null would include -1, making scored = all posts.
+    if (engagementFilter === 'scored')    return p.engagementScore != null && p.engagementScore >= 0;
+    if (engagementFilter === 'high')      return (p.engagementScore ?? -1) >= 10;
+    // FIX: New 'uncertain' tab — only posts where score is exactly -1
+    if (engagementFilter === 'uncertain') return p.engagementScore === -1;
     return true;
   });
 
@@ -398,10 +411,15 @@ export function SavedPostsPanel({ settings }: { settings?: any }) {
     return latestB - latestA;
   });
 
+  // FIX: count null AND -1 sentinel as "needs enrichment".
+  // Previously only null was counted, so -1 posts didn't appear in the Enrich button count
+  // and the button was disabled (enrichTargetCount === 0) even though many posts needed work.
   const unscoredCountByKw = (kw: string) => {
-    if (kw === 'all') return posts.filter(p => p.engagementScore == null).length;
-    return grouped[kw]?.filter(p => p.engagementScore == null).length || 0;
+    const needsEnrich = (p: SavedPost) => p.engagementScore == null || p.engagementScore === -1;
+    if (kw === 'all') return posts.filter(needsEnrich).length;
+    return grouped[kw]?.filter(needsEnrich).length || 0;
   };
+  const uncertainCount = posts.filter(p => p.engagementScore === -1).length;
   const enrichTargetCount = unscoredCountByKw(enrichKeyword);
 
   // ── Stats ───────────────────────────────────────────────────────────────────
@@ -571,19 +589,25 @@ export function SavedPostsPanel({ settings }: { settings?: any }) {
       {/* Engagement filter toggle */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-tertiary font-medium">Engagement:</span>
-        {(['all', 'scored', 'high'] as const).map(f => (
+        {/* FIX: 4 tabs — all / scored (score>=0) / high (score>=10) / uncertain (score=-1) */}
+        {(['all', 'scored', 'high', 'uncertain'] as const).map(f => (
           <button
             key={f}
             onClick={() => setEngagementFilter(f)}
             className={`text-xs px-3 py-1 rounded-full border transition-colors ${
               engagementFilter === f
-                ? 'bg-apple-blue text-white border-apple-blue'
-                : 'border-subtle text-secondary hover:border-apple-blue/50'
+                ? f === 'uncertain'
+                  ? 'bg-amber-500 text-white border-amber-500'
+                  : 'bg-apple-blue text-white border-apple-blue'
+                : f === 'uncertain' && uncertainCount > 0
+                  ? 'border-amber-500/50 text-amber-400 hover:border-amber-500'
+                  : 'border-subtle text-secondary hover:border-apple-blue/50'
             }`}
           >
-            {f === 'all'    && 'All posts'}
-            {f === 'scored' && 'Scored only'}
-            {f === 'high'   && '10+ interactions'}
+            {f === 'all'       && 'All posts'}
+            {f === 'scored'    && 'Scored only'}
+            {f === 'high'      && '10+ interactions'}
+            {f === 'uncertain' && `Uncertain${uncertainCount > 0 ? ` (${uncertainCount})` : ''}`}
           </button>
         ))}
         {engagementFilter !== 'all' && (

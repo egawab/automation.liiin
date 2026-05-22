@@ -23,13 +23,23 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url);
-    const unscored = searchParams.get('unscored') === 'true';
     const keywordsParam = searchParams.get('keywords'); // comma-separated
 
     const whereClause: any = { userId };
     
+    // FIX: include -1 sentinel (uncertain) posts alongside null (never-attempted) posts
+    // so background.js auto-enrich re-attempts them instead of leaving them permanently stuck.
+    const unscored = searchParams.get('unscored') === 'true';
+    const includeUncertain = searchParams.get('includeUncertain') === 'true';
     if (unscored) {
-      whereClause.engagementScore = null;
+      if (includeUncertain) {
+        whereClause.OR = [
+          { engagementScore: null },
+          { engagementScore: -1 },
+        ];
+      } else {
+        whereClause.engagementScore = null;
+      }
     }
 
     if (keywordsParam) {

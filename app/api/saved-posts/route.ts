@@ -26,10 +26,21 @@ export async function GET(request: NextRequest) {
       whereClause.visited = visited === 'true';
     }
 
-    // unscored=true → return only posts where engagementScore is null (enrichment queue)
+    // unscored=true → posts where engagementScore IS NULL (never attempted)
+    // includeUncertain=true → ALSO include score=-1 (uncertain sentinel, needs re-attempt)
+    // FIX: -1 sentinel posts were permanently stuck because they didn't match engagementScore=null
     const unscored = searchParams.get('unscored');
+    const includeUncertain = searchParams.get('includeUncertain') === 'true';
     if (unscored === 'true') {
-      whereClause.engagementScore = null;
+      if (includeUncertain) {
+        // Include both null (never attempted) AND -1 (uncertain — needs re-enrichment)
+        whereClause.OR = [
+          { engagementScore: null },
+          { engagementScore: -1 },
+        ];
+      } else {
+        whereClause.engagementScore = null;
+      }
     }
 
     // Fetch saved posts
