@@ -64,14 +64,17 @@
         }
       }
 
-      return found && total > 0 ? total : null;
+      // Page loaded (long enough text) but no engagement numbers = real score of 0
+      if (!found && text.length > 500) return 0;
+      return found ? total : null;
     } catch (_) { return null; }
   }
 
   // ── Main wait loop ────────────────────────────────────────────────────────────
-  // Polls both strategies every 500ms for up to 10 seconds.
+  // Polls both strategies every 500ms for up to 15 seconds.
   const urn = window.__nexoraEnrichUrn || null;
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + 15000;
+  let pageLoaded = false;
 
   while (Date.now() < deadline) {
     // Strategy 1: interceptor
@@ -82,9 +85,13 @@
     const s2 = tryDomText();
     if (s2 !== null) { done(s2, 'dom'); return; }
 
+    // Track if page is loading (body text growing)
+    if ((document.body?.innerText?.length || 0) > 500) pageLoaded = true;
+
     await new Promise(r => setTimeout(r, 500));
   }
 
-  // Timeout — post is likely private, restricted, or login-walled
-  done(null, 'timeout');
+  // Timeout — if page loaded but no engagement found = genuinely 0 reach
+  // If page never loaded = private/restricted (null = skip, don't delete)
+  done(pageLoaded ? 0 : null, 'timeout');
 })();

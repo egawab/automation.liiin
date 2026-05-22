@@ -154,37 +154,41 @@ async function fetchPostsForKeyword(keyword) {
   }
 
   if (!voyagerSuccess) {
-    console.log('[BG] Voyager GraphQL failed or no queryId found. Skipping Voyager Blended (404). Using fallback variants.');
-    const oldSize = urlMap.size;
+    console.log('[BG] Voyager GraphQL failed. Using deep fallback variants...');
     
-    // Always run fallback variants since Voyager failed
-    const fallbackUrls = [
-      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
-      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
-      `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
-      `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
-      `https://www.linkedin.com/feed/hashtag/${slug}/`,
-      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-24h`,
-      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`,
-      `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month`,
+    // Priority: "Top" (relevance/engagement) results FIRST, not "Latest" (new = no reach)
+    // Using &start= for real pagination (LinkedIn ignores &page= in HTML mode)
+    const fallbackVariants = [
+      // Top results (sorted by LinkedIn relevance = highest engagement)
+      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`, pages: 8 },
+      // Hashtag top results
+      { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`, pages: 5 },
+      // Past week top results (old enough to have some reach)
+      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`, pages: 5 },
+      // Past month top results (more reach accumulated)
+      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month`, pages: 5 },
+      // Hashtag past week
+      { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`, pages: 3 },
+      // Hashtag feed
+      { base: `https://www.linkedin.com/feed/hashtag/${slug}/`, pages: 1 },
     ];
     
-    for (const url of fallbackUrls) {
+    for (const variant of fallbackVariants) {
       if (S.state !== 'RUNNING') break;
-      // Fetch up to 3 pages per variant to massively increase quantity
-      for (let page = 1; page <= 3; page++) {
+      for (let start = 0; start < variant.pages * 10; start += 10) {
         if (S.state !== 'RUNNING') break;
-        const pageUrl = url.includes('hashtag') ? url : `${url}&page=${page}`;
+        const pageUrl = variant.base.includes('hashtag/') ? variant.base : `${variant.base}&start=${start}`;
         const text = await fetchHtml(pageUrl);
         let added = 0;
         extractPostsFromText(text).forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
         if (added > 0) {
-          console.log(`[BG] +${added} from: ${pageUrl.split('?')[1] || 'hashtag'} (page ${page})`);
+          console.log(`[BG] +${added} from fallback start=${start} (total=${urlMap.size}) ${variant.base.split('?')[1]?.slice(0,40) || 'hashtag'}`);
         } else {
-          // If a page returns 0 new posts, skip remaining pages for this variant to save time
-          break;
+          console.log(`[BG] No new posts at start=${start}, moving to next variant.`);
+          break; // no new posts at this offset, move to next variant
         }
-        await sleep(1500);
+        await sleep(1200);
+        if (variant.base.includes('hashtag/')) break; // hashtag feed has no pagination
       }
     }
   }
