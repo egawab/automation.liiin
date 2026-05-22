@@ -42,6 +42,9 @@
     if (canSend()) {
       chrome.runtime.sendMessage({ action: 'ENRICH_RESULT', urn, score }).catch(() => {});
     }
+    // PRIMARY: write to window property so background.js can poll via executeScript.
+    // This is timing-race-free and does not depend on the service worker being awake.
+    window.__nexoraEnrichResult = { score, method, done: true, ts: Date.now() };
   }
 
   // ── Arabic/Persian digit normalizer ─────────────────────────────────────────

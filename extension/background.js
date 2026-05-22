@@ -461,54 +461,88 @@ async function fetchKeywords() {
 }
 
 // ── Auto-Enrich: open each post in background tab, inject enrich.js ──────────
+// ARCHITECTURE FIX: Use executeScript polling (direct return value) instead of
+// chrome.runtime.sendMessage / onMessage listener pattern.
+//
+// ROOT CAUSE of previous 16/18 null results:
+//   Hard timeout (30s) fired BEFORE enrich.js could complete because:
+//   - Tab load wait: up to 18s
+//   - Post-complete settle: 4s
+//   - enrich.js polling: up to 20s
+//   Total needed: 42s > 30s hard timeout → tab closed → message never received.
+//
+// NEW FLOW:
+//   1. Create tab, wait for load + settle
+//   2. Set window.__nexoraEnrichUrn, reset window.__nexoraEnrichResult = null
+//   3. Inject enrich.js (which writes result to window.__nexoraEnrichResult when done)
+//   4. Poll window.__nexoraEnrichResult via executeScript every 1500ms (max 25 attempts = 37.5s)
+//   5. Return score as direct return value — no message passing, no listener, no race.
 async function enrichSinglePost(url, urn) {
-  return new Promise(async (resolve) => {
-    let tabId = null;
-    let settled = false;
-    function finish(score) {
-      if (settled) return;
-      settled = true;
-      if (tabId) chrome.tabs.remove(tabId).catch(() => {});
-      resolve(score);
-    }
-    // FIX: Increased hard timeout 18s → 30s for slow-loading posts
-    const hardTimeout = setTimeout(() => finish(null), 30000);
+  let tabId = null;
+  try {
+    const tab = await chrome.tabs.create({ url, active: false });
+    tabId = tab.id;
 
-    function onMsg(msg, sender) {
-      if (msg.action !== 'ENRICH_RESULT') return;
-      if (tabId !== null && sender.tab?.id !== tabId) return;
-      chrome.runtime.onMessage.removeListener(onMsg);
-      clearTimeout(hardTimeout);
-      finish(msg.score ?? null);
-    }
-    chrome.runtime.onMessage.addListener(onMsg);
-
-    try {
-      const tab = await chrome.tabs.create({ url, active: false });
-      tabId = tab.id;
-      await new Promise(r => {
-        function fn(id, info) {
-          if (id !== tabId || info.status !== 'complete') return;
-          chrome.tabs.onUpdated.removeListener(fn);
-          // FIX: Increased post-complete delay 2000ms → 4000ms for React render
-          setTimeout(r, 4000);
-        }
-        chrome.tabs.onUpdated.addListener(fn);
-        setTimeout(r, 18000); // fallback
-      });
-      if (!settled) {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          func: (u) => { window.__nexoraEnrichUrn = u; },
-          args: [urn]
-        });
-        await chrome.scripting.executeScript({ target: { tabId }, files: ['enrich.js'] });
+    // Wait for page load (status=complete) + settle time for React to render
+    await new Promise(r => {
+      function fn(id, info) {
+        if (id !== tabId || info.status !== 'complete') return;
+        chrome.tabs.onUpdated.removeListener(fn);
+        setTimeout(r, 5000); // 5s settle (was 4s, increased for slower SDUI renders)
       }
-    } catch (e) {
-      clearTimeout(hardTimeout);
-      finish(null);
+      chrome.tabs.onUpdated.addListener(fn);
+      setTimeout(r, 18000); // hard load fallback: if complete never fires, continue anyway
+    });
+
+    if (!tabId) return null;
+
+    // Set URN and reset result flag BEFORE injecting enrich.js
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (u) => {
+        window.__nexoraEnrichUrn = u;
+        window.__nexoraEnrichResult = null; // reset from any previous run
+        window.__nexoraEnrichDone = false;  // allow re-injection
+      },
+      args: [urn]
+    });
+
+    // Inject enrich.js — it will scan the DOM and write to window.__nexoraEnrichResult
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['enrich.js'] });
+
+    // Poll window.__nexoraEnrichResult via executeScript return value.
+    // This is race-condition-free: no message listener, no service-worker-sleep issues.
+    const POLL_MS = 1500;
+    const POLL_MAX = 25; // 25 * 1500ms = 37.5 seconds of polling
+    for (let i = 0; i < POLL_MAX; i++) {
+      await sleep(POLL_MS);
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => window.__nexoraEnrichResult || null
+        });
+        const result = results?.[0]?.result;
+        if (result && result.done === true) {
+          const s = result.score;
+          console.log('[BG-ENRICH] Poll[' + (i+1) + '] result: score=' + s + ' via=' + result.method + ' urn=' + urn);
+          return (typeof s === 'number') ? s : null;
+        }
+        if (i % 5 === 0) console.log('[BG-ENRICH] Poll[' + (i+1) + '] waiting... urn=' + urn);
+      } catch (e) {
+        // Tab closed or navigated away — stop polling
+        console.warn('[BG-ENRICH] Poll error (tab closed?): ' + e.message + ' urn=' + urn);
+        return null;
+      }
     }
-  });
+
+    console.warn('[BG-ENRICH] Poll timeout after ' + (POLL_MAX * POLL_MS / 1000) + 's urn=' + urn);
+    return null;
+  } catch (e) {
+    console.warn('[BG-ENRICH] enrichSinglePost error:', e.message);
+    return null;
+  } finally {
+    if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+  }
 }
 
 async function pushEnrichScore(urn, score, force) {
