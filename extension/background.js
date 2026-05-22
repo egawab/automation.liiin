@@ -115,81 +115,117 @@ async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
   return success;
 }
 
+// ── Voyager REST paginator (Primary — real pagination, up to 150 posts) ──────────
+// Uses /voyager/api/search/blended which supports real server-side pagination
+async function fetchViaVoyagerREST(keyword, csrf, urlMap) {
+  let added_total = 0;
+  // Try multiple filter formats because LinkedIn changes these occasionally
+  const filterVariants = [
+    'List(resultType-%3ECONTENT)',
+    'List(resultType->CONTENT)',
+    'List(resultType%3ECONTENT)',
+  ];
+  
+  for (const filters of filterVariants) {
+    let variantWorked = false;
+    for (let start = 0; start < 150; start += 10) {
+      if (S.state !== 'RUNNING') return added_total;
+      const apiUrl = `https://www.linkedin.com/voyager/api/search/blended?count=10&filters=${filters}&keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&q=all&start=${start}`;
+      try {
+        const res = await fetch(apiUrl, {
+          headers: {
+            'accept': 'application/vnd.linkedin.normalized+json+2.1',
+            'csrf-token': csrf || '',
+            'x-restli-protocol-version': '2.0.0',
+            'x-li-lang': 'en_US',
+            'x-li-track': '{"clientVersion":"1.13","osName":"web","timezoneOffset":3,"languageLocale":"en_US","displayDensity":"CONDENSED","displayTheme":"LIGHT"}',
+          }
+        });
+        if (res.status === 404 || res.status === 400) {
+          console.warn('[BG] Voyager REST filter variant failed (' + res.status + '): ' + filters);
+          break; // try next filter variant
+        }
+        if (!res.ok) {
+          console.warn('[BG] Voyager REST HTTP ' + res.status + ' start=' + start);
+          break;
+        }
+        const text = await res.text();
+        const posts = extractPostsFromText(text);
+        let added = 0;
+        posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; added_total++; } });
+        console.log('[BG] Voyager REST start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
+        if (added > 0) variantWorked = true;
+        if (added === 0 && start > 0) break; // exhausted this filter variant
+      } catch (e) {
+        console.warn('[BG] Voyager REST error:', e.message);
+        break;
+      }
+      await sleep(2000);
+    }
+    if (variantWorked) {
+      console.log('[BG] Voyager REST succeeded with filter: ' + filters);
+      return added_total; // stop trying filter variants
+    }
+  }
+  return added_total;
+}
 
-
-// ── Main fetch strategy per keyword ──────────────────────────────────────────
+// ── Main fetch strategy per keyword ────────────────────────────────────────────────
 async function fetchPostsForKeyword(keyword) {
   const urlMap = new Map();
   const enc = encodeURIComponent;
   const slug = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const csrf = await getCsrfToken();
 
-  // Step 1: Base HTML (always works + extracts queryId)
+  // Step 1: Base HTML (always runs — extracts initial posts + queryId)
   const baseUrl = `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
   const htmlText = await fetchHtml(baseUrl);
   extractPostsFromText(htmlText).forEach(p => { if (!urlMap.has(p.canonicalUrn)) urlMap.set(p.canonicalUrn, p); });
   console.log('[BG] Base HTML: ' + urlMap.size + ' posts kw=' + keyword);
+  await sleep(1500);
 
-  // Step 2: Voyager API via queryId (dynamically search for valid queryIds)
-  const qidMatches = [...htmlText.matchAll(/["']?queryId["']?\s*:\s*["']([a-f0-9]{32})["']/gi)];
-  // Also try the old known name just in case
-  const oldQidMatch = htmlText.match(/voyagerSearchDashClusters\.([a-f0-9]{32})/i);
-  if (oldQidMatch) qidMatches.push([null, oldQidMatch[1]]);
-  
-  const uniqueQids = [...new Set(qidMatches.map(m => m[1]))];
-  const csrf = await getCsrfToken();
-  let voyagerSuccess = false;
+  // Step 2: PRIMARY — Voyager REST API (real pagination, up to 150 posts)
+  const restAdded = await fetchViaVoyagerREST(keyword, csrf, urlMap);
+  console.log('[BG] Voyager REST added: ' + restAdded + ' (total=' + urlMap.size + ')');
 
-  if (uniqueQids.length > 0) {
-    console.log('[BG] Found ' + uniqueQids.length + ' potential queryIds. Testing Voyager GraphQL API...');
-    for (const qid of uniqueQids) {
-      if (S.state !== 'RUNNING') break;
-      const oldSize = urlMap.size;
-      const ok = await fetchViaVoyager(keyword, qid, csrf, urlMap);
-      if (ok && urlMap.size > oldSize) {
-        console.log('[BG] queryId ' + qid + ' SUCCESS!');
-        voyagerSuccess = true;
-        break; // Found the right queryId, stop testing others
+  // Step 3: SECONDARY — Voyager GraphQL API (if queryId found in HTML)
+  if (urlMap.size < 30) { // only bother if REST didn't collect enough
+    const qidMatches = [...htmlText.matchAll(/["']?queryId["']?\s*:\s*["']([a-f0-9]{32})["']/gi)];
+    const oldQidMatch = htmlText.match(/voyagerSearchDashClusters\.([a-f0-9]{32})/i);
+    if (oldQidMatch) qidMatches.push([null, oldQidMatch[1]]);
+    const uniqueQids = [...new Set(qidMatches.map(m => m[1]))];
+    
+    if (uniqueQids.length > 0) {
+      console.log('[BG] Trying ' + uniqueQids.length + ' queryIds via Voyager GraphQL...');
+      for (const qid of uniqueQids) {
+        if (S.state !== 'RUNNING') break;
+        const oldSize = urlMap.size;
+        const ok = await fetchViaVoyager(keyword, qid, csrf, urlMap);
+        if (ok && urlMap.size > oldSize) {
+          console.log('[BG] GraphQL queryId ' + qid + ' SUCCESS!');
+          break;
+        }
       }
     }
   }
 
-  if (!voyagerSuccess) {
-    console.log('[BG] Voyager GraphQL failed. Using deep fallback variants...');
-    
-    // Priority: "Top" (relevance/engagement) results FIRST, not "Latest" (new = no reach)
-    // Using &start= for real pagination (LinkedIn ignores &page= in HTML mode)
+  // Step 4: FALLBACK — HTML variants (only if Voyager methods collected < 30 posts total)
+  if (urlMap.size < 30) {
+    console.log('[BG] Voyager APIs got <30 posts. Running HTML fallback variants...');
     const fallbackVariants = [
-      // Top results (sorted by LinkedIn relevance = highest engagement)
-      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`, pages: 8 },
-      // Hashtag top results
-      { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`, pages: 5 },
-      // Past week top results (old enough to have some reach)
-      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`, pages: 5 },
-      // Past month top results (more reach accumulated)
-      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month`, pages: 5 },
-      // Hashtag past week
-      { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week`, pages: 3 },
-      // Hashtag feed
-      { base: `https://www.linkedin.com/feed/hashtag/${slug}/`, pages: 1 },
+      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week` },
+      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month` },
+      { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER` },
+      { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week` },
+      { base: `https://www.linkedin.com/feed/hashtag/${slug}/` },
     ];
-    
-    for (const variant of fallbackVariants) {
+    for (const v of fallbackVariants) {
       if (S.state !== 'RUNNING') break;
-      for (let start = 0; start < variant.pages * 10; start += 10) {
-        if (S.state !== 'RUNNING') break;
-        const pageUrl = variant.base.includes('hashtag/') ? variant.base : `${variant.base}&start=${start}`;
-        const text = await fetchHtml(pageUrl);
-        let added = 0;
-        extractPostsFromText(text).forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
-        if (added > 0) {
-          console.log(`[BG] +${added} from fallback start=${start} (total=${urlMap.size}) ${variant.base.split('?')[1]?.slice(0,40) || 'hashtag'}`);
-        } else {
-          console.log(`[BG] No new posts at start=${start}, moving to next variant.`);
-          break; // no new posts at this offset, move to next variant
-        }
-        await sleep(1200);
-        if (variant.base.includes('hashtag/')) break; // hashtag feed has no pagination
-      }
+      const text = await fetchHtml(v.base);
+      let added = 0;
+      extractPostsFromText(text).forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
+      if (added > 0) console.log('[BG] HTML fallback +' + added + ' (total=' + urlMap.size + ')');
+      await sleep(2000);
     }
   }
 
