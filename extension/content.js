@@ -26,7 +26,7 @@
   function urnToUrl(urn) {
     const m = urn.match(/urn:li:(ugcPost|activity|share):([0-9]+)/);
     if (!m) return '';
-    if (m[1] === 'ugcPost') return 'https://www.linkedin.com/posts/' + m[2];
+    // FIX: /posts/{number} is not a valid LinkedIn URL. Use /feed/update/ for ALL URN types.
     return 'https://www.linkedin.com/feed/update/' + urn;
   }
 

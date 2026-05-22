@@ -37,7 +37,8 @@ function extractUrn(s) {
 function urnToUrl(urn) {
   const m = urn.match(/urn:li:(ugcPost|activity|share):([0-9]+)/);
   if (!m) return '';
-  if (m[1] === 'ugcPost') return 'https://www.linkedin.com/posts/' + m[2];
+  // FIX: ugcPost /posts/{number} is not a valid LinkedIn URL — use /feed/update/ for all types.
+  // linkedin.com/posts/7459935... → 404. Correct: /feed/update/urn:li:ugcPost:7459935...
   return 'https://www.linkedin.com/feed/update/' + urn;
 }
 
@@ -123,7 +124,8 @@ async function fetchViaVoyagerRest(keyword, csrf, urlMap, sortBy) {
   let success = false;
   for (let start = 0; start < MAX_PAGES * 10; start += 10) {
     if (S.state !== 'RUNNING') break;
-    const apiUrl = `https://www.linkedin.com/voyager/api/search/blended?count=10&keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&q=blended&filters=List(resultType->CONTENT,sortBy->${sort})&start=${start}`;
+    // FIX: Use the correct Voyager search endpoint format (v2 style with proper filter encoding)
+    const apiUrl = `https://www.linkedin.com/voyager/api/search/blended?count=10&keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&q=blended&filters=List(resultType-%3ECONTENT)&start=${start}`;
     try {
       const res = await fetch(apiUrl, {
         headers: {
@@ -162,39 +164,71 @@ async function fetchViaScrollTab(keyword, urlMap) {
     tabId = tab.id;
     console.log('[BG] Scroll tab opened: ' + tabId + ' kw=' + keyword);
 
-    // Wait for initial page render (LinkedIn's React needs time)
-    await sleep(7000);
+    // Wait for initial page render — LinkedIn React needs significant time in background tab
+    await sleep(8000);
 
-    const MAX_SCROLLS = 30;          // was 15 — now 30 for much wider coverage
-    const SCROLL_STEP = 800;         // pixels per step (was 1000+jump = no-op)
-    const EMPTY_EXIT_THRESHOLD = 5;  // was 3 — give more chance before giving up
+    // FIX: Pre-flight check — verify the page actually loaded content before scrolling.
+    // When atBottom=true AND scrollY=0 AND scrollHeight < 2000, the page is empty/auth-walled.
+    // In that case, wait an extra 5s and recheck before giving up on the tab.
+    let preflightOk = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const pf = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => ({
+            scrollHeight: document.documentElement.scrollHeight,
+            textLen: (document.body?.innerText || '').length,
+            url: window.location.href,
+            title: document.title,
+            urnCount: (document.body?.innerHTML || '').match(/urn:li:/g)?.length || 0,
+          })
+        });
+        const pfi = pf?.[0]?.result || {};
+        console.log('[BG] Preflight check #' + (attempt+1) + ': scrollH=' + pfi.scrollHeight +
+          ' textLen=' + pfi.textLen + ' urns=' + pfi.urnCount + ' url=' + pfi.url);
+        if (pfi.scrollHeight > 1500 || pfi.urnCount > 0 || pfi.textLen > 1000) {
+          preflightOk = true;
+          break;
+        }
+        console.log('[BG] Page not ready yet — waiting 5s more...');
+        await sleep(5000);
+      } catch (e) {
+        console.warn('[BG] Preflight error:', e.message);
+        break;
+      }
+    }
+
+    if (!preflightOk) {
+      console.warn('[BG] Scroll tab page never loaded usable content — skipping scroll loop.');
+      return;
+    }
+
+    const MAX_SCROLLS = 30;
+    const SCROLL_STEP = 800;
+    const EMPTY_EXIT_THRESHOLD = 5;
     let consecutiveEmpty = 0;
-    let lastScrollY = 0;
+    let lastScrollY = -1;
 
     for (let i = 0; i < MAX_SCROLLS; i++) {
       if (S.state !== 'RUNNING') break;
 
-      // Collect URNs AND get current scrollY, scrollHeight, bodyHeight
       let urnData = [];
       let pageInfo = { scrollY: 0, scrollHeight: 0, atBottom: false };
       try {
         const results = await chrome.scripting.executeScript({
           target: { tabId },
-          // FIX: pass scrollStep as arg so injected func is pure (no closure over bg vars)
           func: (scrollStep) => {
-            // Convert Arabic digits to English
             function normalizeDigits(s) {
               return (s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/,/g, '');
             }
 
             const foundPosts = new Map();
 
-            // Method 1: data-urn / data-chameleon containers — extract URN + visible score
+            // Method 1: data-urn containers with score extraction
             document.querySelectorAll('div[data-urn], div[data-chameleon-result-urn], div[data-id]').forEach(container => {
               const attr = container.getAttribute('data-urn') || container.getAttribute('data-chameleon-result-urn') || container.getAttribute('data-id');
               if (attr && attr.includes('urn:li:')) {
                 let score = null;
-                // Try aria-label on buttons inside this container
                 container.querySelectorAll('button[aria-label], span[aria-label]').forEach(el => {
                   const lbl = normalizeDigits(el.getAttribute('aria-label') || '');
                   const m = lbl.match(/(\d[\d,]*)\s*(reaction|like|comment|repost|share|إعجاب|تعليق|تفاعل)/i);
@@ -204,15 +238,16 @@ async function fetchViaScrollTab(keyword, urlMap) {
               }
             });
 
-            // Method 2: Post links
-            document.querySelectorAll('a[href*="/posts/"], a[href*="/update/urn:li:"]').forEach(a => {
-              const numMatch = a.href.match(/[0-9]{10,25}/);
-              if (!numMatch) return;
-              const dummyUrn = 'urn:li:activity:' + numMatch[0];
-              if (!foundPosts.has(dummyUrn)) foundPosts.set(dummyUrn, { urn: dummyUrn, score: null });
+            // Method 2: Post links (anchor hrefs)
+            document.querySelectorAll('a[href*="/feed/update/"], a[href*="/posts/"]').forEach(a => {
+              const urnMatch = a.href.match(/urn:li:(activity|ugcPost|share):([0-9]{10,25})/);
+              if (urnMatch) {
+                const urn = 'urn:li:' + urnMatch[1] + ':' + urnMatch[2];
+                if (!foundPosts.has(urn)) foundPosts.set(urn, { urn, score: null });
+              }
             });
 
-            // Method 3: Raw HTML regex scan
+            // Method 3: Raw innerHTML regex scan for any URN
             const html = document.body.innerHTML || '';
             const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
             let m;
@@ -221,20 +256,19 @@ async function fetchViaScrollTab(keyword, urlMap) {
               if (!foundPosts.has(attr)) foundPosts.set(attr, { urn: attr, score: null });
             }
 
-            // FIX: Incremental scroll ONLY — do NOT jump to scrollHeight
-            // This ensures LinkedIn's IntersectionObserver fires on each new viewport edge
+            // Incremental scroll — no scrollTo(scrollHeight) jump
             window.scrollBy({ top: scrollStep, behavior: 'smooth' });
-
-            // Also trigger WheelEvent for SDUI virtual scroller
             const lc = document.querySelector('[data-testid="lazy-column"]') || document.querySelector('main') || document.body;
             if (lc) lc.dispatchEvent(new WheelEvent('wheel', { deltaY: scrollStep, bubbles: true, cancelable: true }));
 
-            return {
-              posts: Array.from(foundPosts.values()),
-              scrollY: window.scrollY,
-              scrollHeight: document.documentElement.scrollHeight,
-              atBottom: (window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight - 100
-            };
+            const sh = document.documentElement.scrollHeight;
+            const sy = window.scrollY;
+            const ih = window.innerHeight;
+            // FIX: only consider atBottom if page has real content (scrollHeight > 1500)
+            // This prevents triggering atBottom on empty/unloaded pages
+            const atBottom = sh > 1500 && (sy + ih) >= sh - 200;
+
+            return { posts: Array.from(foundPosts.values()), scrollY: sy, scrollHeight: sh, atBottom };
           },
           args: [SCROLL_STEP]
         });
@@ -264,22 +298,18 @@ async function fetchViaScrollTab(keyword, urlMap) {
 
       console.log('[BG] Scroll ' + (i + 1) + '/' + MAX_SCROLLS +
         ': DOM=' + urnData.length + ' urns, +' + added + ' new (total=' + urlMap.size + ')' +
-        ' scrollY=' + pageInfo.scrollY + ' atBottom=' + pageInfo.atBottom);
+        ' scrollY=' + pageInfo.scrollY + ' scrollH=' + pageInfo.scrollHeight + ' atBottom=' + pageInfo.atBottom);
 
-      // FIX: exit on scroll-position stall OR too many empty DOM iterations
-      // Old code exited on "no new URNs" which fires prematurely on duplicate-heavy pages.
-      // Now we exit only if the page physically cannot scroll further.
       if (pageInfo.atBottom) {
         consecutiveEmpty++;
         if (consecutiveEmpty >= EMPTY_EXIT_THRESHOLD) {
-          console.log('[BG] Reached true page bottom for ' + EMPTY_EXIT_THRESHOLD + ' consecutive scrolls — done.');
+          console.log('[BG] True page bottom reached for ' + EMPTY_EXIT_THRESHOLD + ' consecutive scrolls — done.');
           break;
         }
-      } else if (added === 0 && pageInfo.scrollY === lastScrollY) {
-        // Scroll position didn't move at all — likely a scroll lock or render stall
+      } else if (pageInfo.scrollY === lastScrollY && lastScrollY >= 0) {
         consecutiveEmpty++;
         if (consecutiveEmpty >= EMPTY_EXIT_THRESHOLD) {
-          console.log('[BG] Scroll stalled (scrollY=' + lastScrollY + ') — stopping.');
+          console.log('[BG] Scroll stalled at scrollY=' + lastScrollY + ' — stopping.');
           break;
         }
       } else {
@@ -287,7 +317,6 @@ async function fetchViaScrollTab(keyword, urlMap) {
       }
 
       lastScrollY = pageInfo.scrollY;
-      // Wait for LinkedIn lazy loader to fire and render new posts
       await sleep(3500);
     }
   } catch (e) {
