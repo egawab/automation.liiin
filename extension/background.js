@@ -85,6 +85,7 @@ async function fetchHtml(url) {
 // ── Voyager GraphQL paginator ─────────────────────────────────────────────────
 async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
   const MAX_PAGES = 15; // up to 150 posts
+  let success = false;
   for (let start = 0; start < MAX_PAGES * 10; start += 10) {
     if (S.state !== 'RUNNING') break;
     const apiUrl = `https://www.linkedin.com/voyager/api/graphql?variables=(count:10,keywords:${encodeURIComponent(keyword)},origin:GLOBAL_SEARCH_HEADER,q:blended,start:${start})&queryId=${queryId}`;
@@ -104,43 +105,17 @@ async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
       posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
       console.log('[BG] Voyager GraphQL start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
       if (added === 0) break;
+      success = true;
     } catch (e) {
       console.warn('[BG] Voyager GraphQL error:', e.message);
       break;
     }
     await sleep(1500);
   }
+  return success;
 }
 
-// ── Voyager Blended paginator (Fallback) ──────────────────────────────────────
-async function fetchViaVoyagerBlended(keyword, csrf, urlMap) {
-  const MAX_PAGES = 15; // up to 150 posts
-  for (let start = 0; start < MAX_PAGES * 10; start += 10) {
-    if (S.state !== 'RUNNING') break;
-    const apiUrl = `https://www.linkedin.com/voyager/api/search/blended?count=10&filters=List(resultType-%3ECONTENT)&keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&q=all&start=${start}`;
-    try {
-      const res = await fetch(apiUrl, {
-        headers: {
-          'accept': 'application/vnd.linkedin.normalized+json+2.1',
-          'csrf-token': csrf || '',
-          'x-restli-protocol-version': '2.0.0',
-          'x-li-lang': 'en_US',
-        }
-      });
-      if (!res.ok) { console.warn('[BG] Voyager Blended HTTP ' + res.status + ' start=' + start); break; }
-      const text = await res.text();
-      const posts = extractPostsFromText(text);
-      let added = 0;
-      posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
-      console.log('[BG] Voyager Blended start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
-      if (added === 0) break;
-    } catch (e) {
-      console.warn('[BG] Voyager Blended error:', e.message);
-      break;
-    }
-    await sleep(1500);
-  }
-}
+
 
 // ── Main fetch strategy per keyword ──────────────────────────────────────────
 async function fetchPostsForKeyword(keyword) {
@@ -154,20 +129,35 @@ async function fetchPostsForKeyword(keyword) {
   extractPostsFromText(htmlText).forEach(p => { if (!urlMap.has(p.canonicalUrn)) urlMap.set(p.canonicalUrn, p); });
   console.log('[BG] Base HTML: ' + urlMap.size + ' posts kw=' + keyword);
 
-  // Step 2: Voyager API via queryId (if present in HTML) → 100 posts
-  const qidMatch = htmlText.match(/["']?(voyagerSearchDashClusters\.[a-f0-9]{32})["']?/);
+  // Step 2: Voyager API via queryId (dynamically search for valid queryIds)
+  const qidMatches = [...htmlText.matchAll(/["']?queryId["']?\s*:\s*["']([a-f0-9]{32})["']/gi)];
+  // Also try the old known name just in case
+  const oldQidMatch = htmlText.match(/voyagerSearchDashClusters\.([a-f0-9]{32})/i);
+  if (oldQidMatch) qidMatches.push([null, oldQidMatch[1]]);
+  
+  const uniqueQids = [...new Set(qidMatches.map(m => m[1]))];
   const csrf = await getCsrfToken();
-  if (qidMatch) {
-    console.log('[BG] queryId found → Voyager GraphQL API pagination');
-    await fetchViaVoyager(keyword, qidMatch[1], csrf, urlMap);
-  } else {
-    console.log('[BG] queryId not found → Trying Voyager Blended API pagination');
+  let voyagerSuccess = false;
+
+  if (uniqueQids.length > 0) {
+    console.log('[BG] Found ' + uniqueQids.length + ' potential queryIds. Testing Voyager GraphQL API...');
+    for (const qid of uniqueQids) {
+      if (S.state !== 'RUNNING') break;
+      const oldSize = urlMap.size;
+      const ok = await fetchViaVoyager(keyword, qid, csrf, urlMap);
+      if (ok && urlMap.size > oldSize) {
+        console.log('[BG] queryId ' + qid + ' SUCCESS!');
+        voyagerSuccess = true;
+        break; // Found the right queryId, stop testing others
+      }
+    }
+  }
+
+  if (!voyagerSuccess) {
+    console.log('[BG] Voyager GraphQL failed or no queryId found. Skipping Voyager Blended (404). Using fallback variants.');
     const oldSize = urlMap.size;
-    await fetchViaVoyagerBlended(keyword, csrf, urlMap);
     
-    // If Blended API yielded fewer than 30 new posts, run fallback variants to boost quantity
-    if (urlMap.size - oldSize < 30) {
-      console.log('[BG] Voyager Blended yielded <30 posts → running fallback variants to boost');
+    // Always run fallback variants since Voyager failed
     const fallbackUrls = [
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`,
       `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`,
