@@ -226,7 +226,14 @@ async function pushToAPI(posts, kw) {
 
 // ── Keyword Fetch ─────────────────────────────────────────────────────────────
 async function fetchKeywords() {
-  const resp = await fetch(S.dashboardUrl + '/api/extension/jobs', { headers: { 'x-extension-token': S.userId } });
+  const url = S.dashboardUrl + '/api/extension/jobs';
+  let resp;
+  try {
+    resp = await fetch(url, { headers: { 'x-extension-token': S.userId } });
+  } catch (e) {
+    throw new Error('Failed to connect to Dashboard API (' + url + '). Make sure the Dashboard is running and you are connected.');
+  }
+  
   if (!resp.ok) throw new Error('Jobs API ' + resp.status);
   const jobs = await resp.json();
   if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
@@ -450,8 +457,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     S.runId = Date.now();
     S.kwIndex = 0;
     S.totalSaved = 0;
-    S.dashboardUrl = msg.dashboardUrl || msg.cfg?.dashboardUrl || '';
-    S.userId = msg.userId || msg.cfg?.userId || '';
+    S.dashboardUrl = (msg.dashboardUrl || msg.cfg?.dashboardUrl || '').trim();
+    S.userId = (msg.userId || msg.cfg?.userId || '').trim();
+    
+    // Validate connection before starting
+    if (!S.dashboardUrl || !S.dashboardUrl.startsWith('http')) {
+      sendResponse({ ok: false, reason: 'Invalid or missing Dashboard URL. Please reconnect.' });
+      S.state = 'IDLE';
+      return true;
+    }
+    if (!S.userId) {
+      sendResponse({ ok: false, reason: 'Missing User ID. Please reconnect.' });
+      S.state = 'IDLE';
+      return true;
+    }
+
     // Capture enrich settings sent directly from Dashboard UI (most reliable source)
     const msgEnrich = {
       autoEnrich:      msg.autoEnrich      ?? null,
