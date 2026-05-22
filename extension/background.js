@@ -1,5 +1,6 @@
-// background.js — Nexora Headless Scraper + Auto-Enrich + Auto-Delete
-console.log('[BG] Nexora Headless Scraper v6 loaded');
+// background.js — Nexora Headless Scraper + Auto-Enrich + Auto-Delete  v7.0
+// FIXES: scroll mechanics, extraction volume, enrich retry, auto-delete safety, uncertain sentinel
+console.log('[BG] Nexora Headless Scraper v7 loaded');
 
 const S = {
   state: 'IDLE',
@@ -84,7 +85,7 @@ async function fetchHtml(url) {
 
 // ── Voyager GraphQL paginator ─────────────────────────────────────────────────
 async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
-  const MAX_PAGES = 15; // up to 150 posts
+  const MAX_PAGES = 20; // up to 200 posts
   let success = false;
   for (let start = 0; start < MAX_PAGES * 10; start += 10) {
     if (S.state !== 'RUNNING') break;
@@ -110,81 +111,108 @@ async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
       console.warn('[BG] Voyager GraphQL error:', e.message);
       break;
     }
-    await sleep(1500);
+    await sleep(1200);
   }
   return success;
 }
 
-// ── Tab-based scroll scraper (Primary — opens real LinkedIn tab, scrolls 15x) ─────────
-// LinkedIn loads posts via its own React/GraphQL as the user scrolls.
-// We open a background tab, scroll it, and read the DOM after each load.
+// ── Voyager REST search (no queryId needed) ───────────────────────────────────
+async function fetchViaVoyagerRest(keyword, csrf, urlMap, sortBy) {
+  const sort = sortBy || 'relevance';
+  const MAX_PAGES = 15;
+  let success = false;
+  for (let start = 0; start < MAX_PAGES * 10; start += 10) {
+    if (S.state !== 'RUNNING') break;
+    const apiUrl = `https://www.linkedin.com/voyager/api/search/blended?count=10&keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&q=blended&filters=List(resultType->CONTENT,sortBy->${sort})&start=${start}`;
+    try {
+      const res = await fetch(apiUrl, {
+        headers: {
+          'accept': 'application/json',
+          'csrf-token': csrf || '',
+          'x-restli-protocol-version': '2.0.0',
+          'x-li-lang': 'en_US',
+        }
+      });
+      if (!res.ok) { console.warn('[BG] VoyagerREST HTTP ' + res.status + ' start=' + start); break; }
+      const text = await res.text();
+      const posts = extractPostsFromText(text);
+      let added = 0;
+      posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
+      console.log('[BG] VoyagerREST sort=' + sort + ' start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
+      if (added === 0) break;
+      success = true;
+    } catch (e) {
+      console.warn('[BG] VoyagerREST error:', e.message);
+      break;
+    }
+    await sleep(1200);
+  }
+  return success;
+}
+
+// ── Tab-based scroll scraper — FIXED: incremental scroll, no scrollTo-bottom jump ────
+// ROOT CAUSE FIX: The old code called window.scrollTo(scrollHeight) every iteration,
+// making all iterations after the first no-ops (already at bottom). Now uses pure
+// incremental scrollBy so LinkedIn's infinite-scroll observer fires on every iteration.
 async function fetchViaScrollTab(keyword, urlMap) {
-  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted`;
   let tabId = null;
   try {
     const tab = await chrome.tabs.create({ url: searchUrl, active: false });
     tabId = tab.id;
     console.log('[BG] Scroll tab opened: ' + tabId + ' kw=' + keyword);
 
-    // Wait for initial page load
-    await sleep(6000);
+    // Wait for initial page render (LinkedIn's React needs time)
+    await sleep(7000);
 
-    const MAX_SCROLLS = 15;
+    const MAX_SCROLLS = 30;          // was 15 — now 30 for much wider coverage
+    const SCROLL_STEP = 800;         // pixels per step (was 1000+jump = no-op)
+    const EMPTY_EXIT_THRESHOLD = 5;  // was 3 — give more chance before giving up
     let consecutiveEmpty = 0;
+    let lastScrollY = 0;
 
     for (let i = 0; i < MAX_SCROLLS; i++) {
       if (S.state !== 'RUNNING') break;
 
-      // Execute script: scroll to bottom, wait a bit, then collect URNs and Scores
+      // Collect URNs AND get current scrollY, scrollHeight, bodyHeight
       let urnData = [];
+      let pageInfo = { scrollY: 0, scrollHeight: 0, atBottom: false };
       try {
         const results = await chrome.scripting.executeScript({
           target: { tabId },
-          func: async () => {
-            // Scroll incrementally to simulate human scrolling and trigger React lazy loaders
-            window.scrollBy({ top: 1000, behavior: 'smooth' });
-            await new Promise(r => setTimeout(r, 600));
-            window.scrollBy({ top: 1000, behavior: 'smooth' });
-            await new Promise(r => setTimeout(r, 600));
-            window.scrollBy({ top: 1000, behavior: 'smooth' });
-            await new Promise(r => setTimeout(r, 600));
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-            
-            // Wait 2 seconds for React to render new posts
-            await new Promise(r => setTimeout(r, 2000));
-            
-            const foundPosts = new Map(); // urn -> { urn, score }
-            
+          // FIX: pass scrollStep as arg so injected func is pure (no closure over bg vars)
+          func: (scrollStep) => {
             // Convert Arabic digits to English
-            function normalizeDigits(s) { return (s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/,/g, ''); }
+            function normalizeDigits(s) {
+              return (s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/,/g, '');
+            }
 
-            // Method 1: Look for container elements to extract BOTH URN and Score
+            const foundPosts = new Map();
+
+            // Method 1: data-urn / data-chameleon containers — extract URN + visible score
             document.querySelectorAll('div[data-urn], div[data-chameleon-result-urn], div[data-id]').forEach(container => {
-               const attr = container.getAttribute('data-urn') || container.getAttribute('data-chameleon-result-urn') || container.getAttribute('data-id');
-               if (attr && attr.includes('urn:li:')) {
-                 let score = null;
-                 const countNode = container.querySelector(`
-                   .social-details-social-counts__reactions-count, 
-                   [data-test-id="social-actions__reaction-count"], 
-                   button[aria-label*="reaction"], 
-                   button[aria-label*="إعجاب"]
-                 `);
-                 if (countNode) {
-                   const txt = normalizeDigits(countNode.getAttribute('aria-label') || countNode.innerText);
-                   const m = txt.match(/([0-9]+)/);
-                   if (m) score = parseInt(m[1], 10);
-                 }
-                 foundPosts.set(attr, { urn: attr, score });
-               }
-            });
-            
-            // Method 2: Look for post links (no score)
-            document.querySelectorAll('a[href*="/posts/"], a[href*="/update/urn:li:"]').forEach(a => {
-               const dummyUrn = 'urn:li:activity:' + (a.href.match(/[0-9]{10,25}/) || [''])[0];
-               if (dummyUrn.length > 16 && !foundPosts.has(dummyUrn)) foundPosts.set(dummyUrn, { urn: dummyUrn, score: null });
+              const attr = container.getAttribute('data-urn') || container.getAttribute('data-chameleon-result-urn') || container.getAttribute('data-id');
+              if (attr && attr.includes('urn:li:')) {
+                let score = null;
+                // Try aria-label on buttons inside this container
+                container.querySelectorAll('button[aria-label], span[aria-label]').forEach(el => {
+                  const lbl = normalizeDigits(el.getAttribute('aria-label') || '');
+                  const m = lbl.match(/(\d[\d,]*)\s*(reaction|like|comment|repost|share|إعجاب|تعليق|تفاعل)/i);
+                  if (m && score === null) score = parseInt(m[1].replace(/,/g, ''), 10);
+                });
+                foundPosts.set(attr, { urn: attr, score });
+              }
             });
 
-            // Method 3: Regex over the entire body innerHTML just in case (no score)
+            // Method 2: Post links
+            document.querySelectorAll('a[href*="/posts/"], a[href*="/update/urn:li:"]').forEach(a => {
+              const numMatch = a.href.match(/[0-9]{10,25}/);
+              if (!numMatch) return;
+              const dummyUrn = 'urn:li:activity:' + numMatch[0];
+              if (!foundPosts.has(dummyUrn)) foundPosts.set(dummyUrn, { urn: dummyUrn, score: null });
+            });
+
+            // Method 3: Raw HTML regex scan
             const html = document.body.innerHTML || '';
             const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
             let m;
@@ -192,11 +220,28 @@ async function fetchViaScrollTab(keyword, urlMap) {
               const attr = 'urn:li:' + m[1].toLowerCase() + ':' + m[2];
               if (!foundPosts.has(attr)) foundPosts.set(attr, { urn: attr, score: null });
             }
-            
-            return Array.from(foundPosts.values());
-          }
+
+            // FIX: Incremental scroll ONLY — do NOT jump to scrollHeight
+            // This ensures LinkedIn's IntersectionObserver fires on each new viewport edge
+            window.scrollBy({ top: scrollStep, behavior: 'smooth' });
+
+            // Also trigger WheelEvent for SDUI virtual scroller
+            const lc = document.querySelector('[data-testid="lazy-column"]') || document.querySelector('main') || document.body;
+            if (lc) lc.dispatchEvent(new WheelEvent('wheel', { deltaY: scrollStep, bubbles: true, cancelable: true }));
+
+            return {
+              posts: Array.from(foundPosts.values()),
+              scrollY: window.scrollY,
+              scrollHeight: document.documentElement.scrollHeight,
+              atBottom: (window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight - 100
+            };
+          },
+          args: [SCROLL_STEP]
         });
-        urnData = results?.[0]?.result || [];
+
+        const result = results?.[0]?.result || { posts: [], scrollY: 0, scrollHeight: 0, atBottom: false };
+        urnData = result.posts || [];
+        pageInfo = { scrollY: result.scrollY, scrollHeight: result.scrollHeight, atBottom: result.atBottom };
       } catch (e) {
         console.warn('[BG] Scroll script error at scroll ' + i + ':', e.message);
         break;
@@ -204,34 +249,46 @@ async function fetchViaScrollTab(keyword, urlMap) {
 
       let added = 0;
       for (const data of urnData) {
-        // extractUrn again just to normalize any raw URLs caught by method 2
         const rawUrn = extractUrn(data.urn) || data.urn;
         if (!urlMap.has(rawUrn)) {
           const url = urnToUrl(rawUrn);
-          if (url) { 
-            urlMap.set(rawUrn, { canonicalUrn: rawUrn, url, source: 'scroll', score: data.score }); 
-            added++; 
+          if (url) {
+            urlMap.set(rawUrn, { canonicalUrn: rawUrn, url, source: 'scroll', score: data.score });
+            added++;
           }
         } else if (data.score !== null) {
-          // If we already had it but now found a score, update it
           const existing = urlMap.get(rawUrn);
           if (existing.score === null || existing.score === undefined) existing.score = data.score;
         }
       }
-      console.log('[BG] Scroll ' + (i + 1) + '/' + MAX_SCROLLS + ': DOM=' + urnData.length + ' urns, +' + added + ' new (total=' + urlMap.size + ')');
 
-      if (added === 0) {
+      console.log('[BG] Scroll ' + (i + 1) + '/' + MAX_SCROLLS +
+        ': DOM=' + urnData.length + ' urns, +' + added + ' new (total=' + urlMap.size + ')' +
+        ' scrollY=' + pageInfo.scrollY + ' atBottom=' + pageInfo.atBottom);
+
+      // FIX: exit on scroll-position stall OR too many empty DOM iterations
+      // Old code exited on "no new URNs" which fires prematurely on duplicate-heavy pages.
+      // Now we exit only if the page physically cannot scroll further.
+      if (pageInfo.atBottom) {
         consecutiveEmpty++;
-        if (consecutiveEmpty >= 3) {
-          console.log('[BG] 3 consecutive empty scrolls — page exhausted.');
+        if (consecutiveEmpty >= EMPTY_EXIT_THRESHOLD) {
+          console.log('[BG] Reached true page bottom for ' + EMPTY_EXIT_THRESHOLD + ' consecutive scrolls — done.');
+          break;
+        }
+      } else if (added === 0 && pageInfo.scrollY === lastScrollY) {
+        // Scroll position didn't move at all — likely a scroll lock or render stall
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= EMPTY_EXIT_THRESHOLD) {
+          console.log('[BG] Scroll stalled (scrollY=' + lastScrollY + ') — stopping.');
           break;
         }
       } else {
         consecutiveEmpty = 0;
       }
 
-      // Wait for LinkedIn to load new posts after scroll
-      await sleep(2500);
+      lastScrollY = pageInfo.scrollY;
+      // Wait for LinkedIn lazy loader to fire and render new posts
+      await sleep(3500);
     }
   } catch (e) {
     console.warn('[BG] fetchViaScrollTab error:', e.message);
@@ -241,27 +298,35 @@ async function fetchViaScrollTab(keyword, urlMap) {
   }
 }
 
-// ── Main fetch strategy per keyword ────────────────────────────────────────────────
+// ── Main fetch strategy per keyword — EXPANDED with more variants ──────────────
 async function fetchPostsForKeyword(keyword) {
   const urlMap = new Map();
   const enc = encodeURIComponent;
   const slug = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
   const csrf = await getCsrfToken();
 
-  // Step 1: Base HTML (fast, always works, gets initial posts + queryId)
+  // ── Step 1: Base HTML (fast baseline, always first) ──────────────────────────
   const baseUrl = `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
   const htmlText = await fetchHtml(baseUrl);
   extractPostsFromText(htmlText).forEach(p => { if (!urlMap.has(p.canonicalUrn)) urlMap.set(p.canonicalUrn, p); });
   console.log('[BG] Base HTML: ' + urlMap.size + ' posts kw=' + keyword);
 
-  // Step 2: PRIMARY — Scroll tab (opens real LinkedIn tab, scrolls 15x, reads DOM)
-  // This is the most powerful method: uses LinkedIn’s own React to load posts
-  await fetchViaScrollTab(keyword, urlMap);
-  console.log('[BG] After scroll tab: total=' + urlMap.size);
+  // ── Step 2: Voyager REST (no queryId required — always runs) ─────────────────
+  // FIX: This runs BEFORE the scroll tab and is no longer gated behind < 30.
+  // Two sort orders: relevance + date_posted for maximum coverage.
+  if (S.state === 'RUNNING') {
+    console.log('[BG] Voyager REST relevance...');
+    await fetchViaVoyagerRest(keyword, csrf, urlMap, 'relevance');
+  }
+  if (S.state === 'RUNNING') {
+    console.log('[BG] Voyager REST date_posted...');
+    await fetchViaVoyagerRest(keyword, csrf, urlMap, 'date_posted');
+  }
+  console.log('[BG] After Voyager REST: total=' + urlMap.size);
 
-  // Step 3: SECONDARY — Voyager GraphQL (if queryId found AND scroll tab got < 30 posts)
-  if (urlMap.size < 30) {
-    const qidMatches = [...htmlText.matchAll(/["']?queryId["']?\s*:\s*["']([a-f0-9]{32})["']/gi)];
+  // ── Step 3: Voyager GraphQL (if queryId found in HTML) ───────────────────────
+  if (S.state === 'RUNNING') {
+    const qidMatches = [...htmlText.matchAll(/[\"']?queryId[\"']?\s*:\s*[\"']([a-f0-9]{32})[\"']/gi)];
     const oldQidMatch = htmlText.match(/voyagerSearchDashClusters\.([a-f0-9]{32})/i);
     if (oldQidMatch) qidMatches.push([null, oldQidMatch[1]]);
     const uniqueQids = [...new Set(qidMatches.map(m => m[1]))];
@@ -271,19 +336,32 @@ async function fetchPostsForKeyword(keyword) {
         if (S.state !== 'RUNNING') break;
         const oldSize = urlMap.size;
         const ok = await fetchViaVoyager(keyword, qid, csrf, urlMap);
-        if (ok && urlMap.size > oldSize) { console.log('[BG] GraphQL queryId SUCCESS!'); break; }
+        if (ok && urlMap.size > oldSize) { console.log('[BG] GraphQL queryId SUCCESS! +' + (urlMap.size - oldSize)); break; }
       }
     }
   }
 
-  // Step 4: FALLBACK — HTML variants (only if Voyager methods collected < 30 posts total)
-  if (urlMap.size < 30) {
-    console.log('[BG] Voyager APIs got <30 posts. Running HTML fallback variants...');
+  // ── Step 4: PRIMARY — Scroll Tab (opens real LinkedIn tab, scrolls 30x) ──────
+  // FIX: scroll tab now uses pure incremental scrollBy — no scrollTo-bottom jump.
+  if (S.state === 'RUNNING') {
+    await fetchViaScrollTab(keyword, urlMap);
+    console.log('[BG] After scroll tab: total=' + urlMap.size);
+  }
+
+  // ── Step 5: HTML variants (always run — not gated, for maximum coverage) ─────
+  if (S.state === 'RUNNING') {
     const fallbackVariants = [
-      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week` },
-      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-month` },
+      // Sorted by date
+      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted` },
+      // Past week
+      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&f_TPR=r604800` },
+      // Past month
+      { base: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&f_TPR=r2592000` },
+      // Hashtag
       { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER` },
-      { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&datePosted=past-week` },
+      // Hashtag past week
+      { base: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER&f_TPR=r604800` },
+      // Hashtag feed
       { base: `https://www.linkedin.com/feed/hashtag/${slug}/` },
     ];
     for (const v of fallbackVariants) {
@@ -291,8 +369,8 @@ async function fetchPostsForKeyword(keyword) {
       const text = await fetchHtml(v.base);
       let added = 0;
       extractPostsFromText(text).forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
-      if (added > 0) console.log('[BG] HTML fallback +' + added + ' (total=' + urlMap.size + ')');
-      await sleep(2000);
+      if (added > 0) console.log('[BG] HTML variant +' + added + ' (total=' + urlMap.size + ')');
+      await sleep(1500);
     }
   }
 
@@ -301,11 +379,10 @@ async function fetchPostsForKeyword(keyword) {
   return posts;
 }
 
-  // ── DB Push ───────────────────────────────────────────────────────────────────
+// ── DB Push ───────────────────────────────────────────────────────────────────
 async function pushToAPI(posts, kw) {
   if (!posts || posts.length === 0) return 0;
-  
-  // Transform pre-scored posts so the DB receives engagementScore directly
+
   const payloadPosts = posts.map(p => {
     const formatted = { canonicalUrn: p.canonicalUrn, url: p.url, source: p.source };
     if (p.score !== null && p.score !== undefined) formatted.engagementScore = p.score;
@@ -337,7 +414,7 @@ async function fetchKeywords() {
   } catch (e) {
     throw new Error('Failed to connect to Dashboard API (' + url + '). Make sure the Dashboard is running and you are connected.');
   }
-  
+
   if (!resp.ok) throw new Error('Jobs API ' + resp.status);
   const jobs = await resp.json();
   if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
@@ -354,7 +431,7 @@ async function fetchKeywords() {
   return { keywords: [...new Set(kws)], settings: jobs.settings || {} };
 }
 
-// ── Auto-Enrich: open each post in background tab, inject enrich.js ───────────
+// ── Auto-Enrich: open each post in background tab, inject enrich.js ──────────
 async function enrichSinglePost(url, urn) {
   return new Promise(async (resolve) => {
     let tabId = null;
@@ -365,7 +442,8 @@ async function enrichSinglePost(url, urn) {
       if (tabId) chrome.tabs.remove(tabId).catch(() => {});
       resolve(score);
     }
-    const hardTimeout = setTimeout(() => finish(null), 18000);
+    // FIX: Increased hard timeout 18s → 30s for slow-loading posts
+    const hardTimeout = setTimeout(() => finish(null), 30000);
 
     function onMsg(msg, sender) {
       if (msg.action !== 'ENRICH_RESULT') return;
@@ -383,10 +461,11 @@ async function enrichSinglePost(url, urn) {
         function fn(id, info) {
           if (id !== tabId || info.status !== 'complete') return;
           chrome.tabs.onUpdated.removeListener(fn);
-          setTimeout(r, 2000);
+          // FIX: Increased post-complete delay 2000ms → 4000ms for React render
+          setTimeout(r, 4000);
         }
         chrome.tabs.onUpdated.addListener(fn);
-        setTimeout(r, 15000); // fallback
+        setTimeout(r, 18000); // fallback
       });
       if (!settled) {
         await chrome.scripting.executeScript({
@@ -403,12 +482,12 @@ async function enrichSinglePost(url, urn) {
   });
 }
 
-async function pushEnrichScore(urn, score) {
+async function pushEnrichScore(urn, score, force) {
   try {
     const res = await fetch(S.dashboardUrl + '/api/extension/enrich', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
-      body: JSON.stringify({ urn, score })
+      body: JSON.stringify({ urn, score, force: force || false })
     });
     if (!res.ok) console.warn('[BG-ENRICH] push HTTP', res.status);
   } catch (e) { console.warn('[BG-ENRICH] score push error:', e.message); }
@@ -424,47 +503,105 @@ async function deleteEnrichPost(urn) {
   } catch (e) { console.warn('[BG-ENRICH] delete error:', e.message); }
 }
 
-// ── Auto-Enrich Session ───────────────────────────────────────────────────────
+// ── Auto-Enrich Session — retry logic, re-check-before-delete, uncertain sentinel ──
 async function startEnrichSession(posts, opts = {}) {
   if (E.running) { console.warn('[BG-ENRICH] Already running'); return; }
   E.running = true;
   const { autoDelete = false, deleteThreshold = 10 } = opts;
   const total = posts.length;
-  let enriched = 0, deleted = 0, nullCount = 0, failed = 0;
+  let enriched = 0, deleted = 0, nullCount = 0, failed = 0, uncertain = 0;
 
-  console.log('[BG-ENRICH] Starting enrichment for ' + total + ' posts');
+  console.log('[BG-ENRICH] Starting enrichment for ' + total + ' posts. autoDelete=' + autoDelete + ' threshold=' + deleteThreshold);
   broadcastStatus('Enriching 0/' + total + '...');
   setBadge('...', '#f59e0b');
 
   for (const post of posts) {
     if (!post.url || !post.urn) { failed++; continue; }
     try {
-      const score = await enrichSinglePost(post.url, post.urn);
-      if (score !== null) {
-        await pushEnrichScore(post.urn, score);
-        enriched++;
-        console.log('[BG-ENRICH] ✓ score=' + score + ' ' + post.urn);
-        if (autoDelete && score < deleteThreshold) {
+
+      // ── Pass 1: Initial enrich ──────────────────────────────────────────────
+      let score = await enrichSinglePost(post.url, post.urn);
+      console.log('[BG-ENRICH] Pass1 score=' + score + ' urn=' + post.urn);
+
+      // ── Pass 2: Retry if null (page may not have loaded in time) ────────────
+      if (score === null) {
+        console.log('[BG-ENRICH] Pass1 null — retrying in 6s... urn=' + post.urn);
+        await sleep(6000);
+        score = await enrichSinglePost(post.url, post.urn);
+        console.log('[BG-ENRICH] Pass2 score=' + score + ' urn=' + post.urn);
+      }
+
+      // ── Score=0 safety: treat as uncertain, never delete ───────────────────
+      // score=0 almost always means a DOM detection failure, not genuine zero engagement.
+      if (score === 0) {
+        console.log('[BG-ENRICH] ⚠ score=0 → uncertain sentinel (-1) — NOT deleting. urn=' + post.urn);
+        await pushEnrichScore(post.urn, -1, true);
+        uncertain++;
+        const done = enriched + nullCount + failed + uncertain;
+        broadcastStatus('Enriching ' + done + '/' + total + '...');
+        chrome.runtime.sendMessage({ action: 'ENRICH_PROGRESS', done, total, enriched, deleted, failed, nullCount, uncertain }).catch(() => {});
+        if (done < total) await sleep(2500);
+        continue;
+      }
+
+      // ── Both passes null → uncertain sentinel ───────────────────────────────
+      if (score === null) {
+        console.log('[BG-ENRICH] ⚠ Both passes null → uncertain sentinel (-1). urn=' + post.urn);
+        await pushEnrichScore(post.urn, -1, true);
+        uncertain++;
+        nullCount++;
+        const done = enriched + nullCount + failed + uncertain;
+        broadcastStatus('Enriching ' + done + '/' + total + '...');
+        chrome.runtime.sendMessage({ action: 'ENRICH_PROGRESS', done, total, enriched, deleted, failed, nullCount, uncertain }).catch(() => {});
+        if (done < total) await sleep(2500);
+        continue;
+      }
+
+      // ── Valid score obtained — push to API ──────────────────────────────────
+      await pushEnrichScore(post.urn, score, false);
+      enriched++;
+      console.log('[BG-ENRICH] ✓ score=' + score + ' ' + post.urn);
+
+      // ── Auto-delete: only if score >= 1 AND below threshold ────────────────
+      // NEVER delete score=0 (handled above as uncertain).
+      // RE-CHECK BEFORE DELETE: run a second independent enrich pass to confirm
+      // the score before permanently removing the post from the database.
+      if (autoDelete && score >= 1 && score < deleteThreshold) {
+        console.log('[BG-ENRICH] Score ' + score + ' < threshold ' + deleteThreshold + ' — running re-check before delete...');
+        await sleep(4000); // give the tab pool time to settle
+        const confirmScore = await enrichSinglePost(post.url, post.urn);
+        console.log('[BG-ENRICH] Re-check score=' + confirmScore + ' urn=' + post.urn);
+
+        if (confirmScore === null || confirmScore === 0) {
+          // Re-check failed or returned 0 — mark uncertain, do NOT delete
+          console.log('[BG-ENRICH] ⚠ Re-check null/0 — cannot confirm deletion. Marking uncertain. urn=' + post.urn);
+          await pushEnrichScore(post.urn, -1, true);
+          uncertain++;
+        } else if (confirmScore >= deleteThreshold) {
+          // Re-check returned a HIGHER score — original was wrong. Keep the post.
+          console.log('[BG-ENRICH] ✅ Re-check score=' + confirmScore + ' >= threshold — keeping post (original score was wrong). urn=' + post.urn);
+          await pushEnrichScore(post.urn, confirmScore, true);
+        } else {
+          // Both passes confirm score < threshold — safe to delete
+          console.log('[BG-ENRICH] 🗑 Re-check confirmed score=' + confirmScore + ' < ' + deleteThreshold + ' — deleting. urn=' + post.urn);
           await deleteEnrichPost(post.urn);
           deleted++;
-          console.log('[BG-ENRICH] 🗑 Deleted (score=' + score + '<' + deleteThreshold + ')');
         }
-      } else {
-        nullCount++;
       }
+
     } catch (e) {
       failed++;
       console.warn('[BG-ENRICH] Error:', e.message);
     }
-    const done = enriched + nullCount + failed;
+    const done = enriched + nullCount + failed + uncertain;
     broadcastStatus('Enriching ' + done + '/' + total + '...');
-    chrome.runtime.sendMessage({ action: 'ENRICH_PROGRESS', done, total, enriched, deleted, failed, nullCount }).catch(() => {});
+    chrome.runtime.sendMessage({ action: 'ENRICH_PROGRESS', done, total, enriched, deleted, failed, nullCount, uncertain }).catch(() => {});
     if (done < total) await sleep(2500);
   }
 
   E.running = false;
-  console.log('[BG-ENRICH] Done. enriched=' + enriched + ' deleted=' + deleted + ' null=' + nullCount);
-  broadcastStatus('Enrichment done! ' + enriched + ' scored, ' + deleted + ' deleted.');
+  console.log('[BG-ENRICH] Done. enriched=' + enriched + ' deleted=' + deleted + ' uncertain=' + uncertain + ' null=' + nullCount + ' failed=' + failed);
+  broadcastStatus('Enrichment done! ' + enriched + ' scored, ' + deleted + ' deleted, ' + uncertain + ' uncertain.');
   setBadge(String(enriched), '#3b82f6');
 }
 
@@ -491,7 +628,6 @@ async function runAutoEnrich(autoDelete, deleteThreshold) {
 
 // ── Main engine loop ──────────────────────────────────────────────────────────
 async function runEngine(settings, msgEnrich = {}) {
-  // Always use the database truth from API
   const autoEnrich      = settings.autoEnrich ?? false;
   const autoDelete      = settings.autoDelete ?? false;
   const deleteThreshold = Number(settings.deleteThreshold) || 10;
@@ -523,7 +659,6 @@ async function runEngine(settings, msgEnrich = {}) {
   broadcastStatus('Scraping done! ' + S.totalSaved + ' posts saved.');
   setBadge(String(S.totalSaved), '#3b82f6');
 
-  // Re-read autoEnrich RIGHT NOW (user may have ticked it during scraping)
   const freshCfg = await new Promise(resolve =>
     chrome.storage.sync.get(['autoEnrich', 'autoDelete', 'deleteThreshold'], resolve)
   );
@@ -563,8 +698,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     S.totalSaved = 0;
     S.dashboardUrl = (msg.dashboardUrl || msg.cfg?.dashboardUrl || '').trim();
     S.userId = (msg.userId || msg.cfg?.userId || '').trim();
-    
-    // Validate connection before starting
+
     if (!S.dashboardUrl || !S.dashboardUrl.startsWith('http')) {
       sendResponse({ ok: false, reason: 'Invalid or missing Dashboard URL. Please reconnect.' });
       S.state = 'IDLE';
@@ -576,7 +710,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
 
-    // Capture enrich settings sent directly from Dashboard UI (most reliable source)
     const msgEnrich = {
       autoEnrich:      msg.autoEnrich      ?? null,
       autoDelete:      msg.autoDelete      ?? null,
@@ -608,12 +741,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.action === 'RE_ENRICH') {
     sendResponse({ ok: true });
     (async () => {
-      // Accept both {urn, url} (from Dashboard) and {canonicalUrn, postUrl} (legacy)
       const posts = (msg.posts || [])
         .map(p => ({ urn: p.urn || p.canonicalUrn, url: p.url || p.postUrl }))
         .filter(p => p.urn && p.url);
       console.log('[BG] RE_ENRICH received ' + (msg.posts||[]).length + ' posts, valid=' + posts.length);
       await startEnrichSession(posts, { autoDelete: msg.autoDelete, deleteThreshold: msg.deleteThreshold });
+    })();
+  }
+
+  // FIX: Added FLUSH_POSTS handler — content.js can now send results that are processed
+  else if (msg.action === 'FLUSH_POSTS') {
+    sendResponse({ ok: true });
+    if (!msg.posts || !Array.isArray(msg.posts)) return;
+    console.log('[BG] FLUSH_POSTS from content.js: ' + msg.posts.length + ' posts for kw="' + msg.keyword + '"');
+    // Note: these posts are not in the urlMap at this point (they come from a content script).
+    // Push them directly to the API.
+    (async () => {
+      if (msg.posts.length > 0 && S.dashboardUrl && S.userId) {
+        await pushToAPI(msg.posts, msg.keyword || '');
+      }
     })();
   }
 
