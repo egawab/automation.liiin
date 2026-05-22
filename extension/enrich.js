@@ -31,38 +31,81 @@
     return null;
   }
 
-  // ── Strategy 2: Parse engagement counts from rendered DOM text ────────────────
-  // LinkedIn always renders "X reactions", "Y comments", "Z reposts" as visible text.
+  // ── Strategy 2: Parse engagement counts from DOM nodes ───────────────────────
+  // Looks specifically at LinkedIn's social count elements and supports Arabic/English.
   function tryDomText() {
     try {
       const text = document.body.innerText || '';
-      if (text.length < 100) return null; // Page not loaded yet
+      if (text.length < 500) return null; // Page not loaded yet
 
       let total = 0;
       let found = false;
-
-      const patterns = [
-        /([0-9][0-9,]*)\s*reaction/i,
-        /([0-9][0-9,]*)\s*like/i,
-        /([0-9][0-9,]*)\s*comment/i,
-        /([0-9][0-9,]*)\s*repost/i,
-        /([0-9][0-9,]*)\s*share/i,
-      ];
-
       const usedNumbers = new Set();
-      for (const re of patterns) {
-        const m = text.match(re);
-        if (m) {
-          const n = parseInt(m[1].replace(/,/g, ''), 10);
-          if (!usedNumbers.has(m[1])) {
-            usedNumbers.add(m[1]);
-            total += n;
-            found = true;
+
+      // Convert Arabic digits to English for parsing
+      function normalizeDigits(s) {
+        return (s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/,/g, '');
+      }
+
+      // 1. Look for specific LinkedIn social count elements
+      const countNodes = document.querySelectorAll(`
+        .social-details-social-counts__reactions-count, 
+        .social-details-social-counts__comments, 
+        .social-details-social-counts__count-value, 
+        [data-test-id="social-actions__reaction-count"], 
+        [data-test-id="social-actions__comments-count"],
+        .update-components-social-counts__reactions-count,
+        .update-components-social-counts__comments-count,
+        button[aria-label*="reaction"], 
+        button[aria-label*="comment"],
+        button[aria-label*="إعجاب"],
+        button[aria-label*="تعليق"]
+      `);
+
+      if (countNodes.length > 0) {
+        countNodes.forEach(node => {
+          const txt = normalizeDigits(node.getAttribute('aria-label') || node.innerText || '');
+          const m = txt.match(/([0-9]+)/);
+          if (m) {
+            const n = parseInt(m[1], 10);
+            if (!usedNumbers.has(n)) {
+              usedNumbers.add(n);
+              total += n;
+              found = true;
+            }
+          }
+        });
+      }
+
+      // 2. Fallback: if no specific nodes, look globally using bilingual regex
+      if (!found) {
+        const normText = normalizeDigits(text);
+        const patterns = [
+          /([0-9]+)\s*(?:reaction|إعجاب|تفاعل)/i,
+          /([0-9]+)\s*(?:like|لايك)/i,
+          /([0-9]+)\s*(?:comment|تعليق)/i,
+          /([0-9]+)\s*(?:repost|إعادة نشر)/i,
+          /([0-9]+)\s*(?:share|مشاركة)/i,
+        ];
+        for (const re of patterns) {
+          const m = normText.match(re);
+          if (m) {
+            const n = parseInt(m[1], 10);
+            if (!usedNumbers.has(n)) {
+              usedNumbers.add(n);
+              total += n;
+              found = true;
+            }
           }
         }
       }
 
-      return found ? total : null; // null = page loaded but can't read score yet
+      // If page is fully loaded and no numbers found at all -> genuinely 0 reach
+      if (!found && text.length > 1000 && !text.includes('Sign in') && !text.includes('Join LinkedIn')) {
+        return 0;
+      }
+
+      return found ? total : null;
     } catch (_) { return null; }
   }
 
