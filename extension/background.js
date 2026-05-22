@@ -135,55 +135,90 @@ async function fetchViaScrollTab(keyword, urlMap) {
     for (let i = 0; i < MAX_SCROLLS; i++) {
       if (S.state !== 'RUNNING') break;
 
-      // Execute script: scroll to bottom, wait a bit, then collect URNs
-      let urns = [];
+      // Execute script: scroll to bottom, wait a bit, then collect URNs and Scores
+      let urnData = [];
       try {
         const results = await chrome.scripting.executeScript({
           target: { tabId },
           func: async () => {
-            // Scroll to trigger lazy loading
+            // Scroll incrementally to simulate human scrolling and trigger React lazy loaders
+            window.scrollBy({ top: 1000, behavior: 'smooth' });
+            await new Promise(r => setTimeout(r, 600));
+            window.scrollBy({ top: 1000, behavior: 'smooth' });
+            await new Promise(r => setTimeout(r, 600));
+            window.scrollBy({ top: 1000, behavior: 'smooth' });
+            await new Promise(r => setTimeout(r, 600));
             window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            
             // Wait 2 seconds for React to render new posts
             await new Promise(r => setTimeout(r, 2000));
             
-            const found = new Set();
+            const foundPosts = new Map(); // urn -> { urn, score }
             
-            // Method 1: Look for data-urn attributes
-            document.querySelectorAll('[data-urn], [data-chameleon-result-urn], [data-id]').forEach(el => {
-               const attr = el.getAttribute('data-urn') || el.getAttribute('data-chameleon-result-urn') || el.getAttribute('data-id');
-               if (attr && attr.includes('urn:li:')) found.add(attr);
+            // Convert Arabic digits to English
+            function normalizeDigits(s) { return (s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/,/g, ''); }
+
+            // Method 1: Look for container elements to extract BOTH URN and Score
+            document.querySelectorAll('div[data-urn], div[data-chameleon-result-urn], div[data-id]').forEach(container => {
+               const attr = container.getAttribute('data-urn') || container.getAttribute('data-chameleon-result-urn') || container.getAttribute('data-id');
+               if (attr && attr.includes('urn:li:')) {
+                 let score = null;
+                 const countNode = container.querySelector(`
+                   .social-details-social-counts__reactions-count, 
+                   [data-test-id="social-actions__reaction-count"], 
+                   button[aria-label*="reaction"], 
+                   button[aria-label*="إعجاب"]
+                 `);
+                 if (countNode) {
+                   const txt = normalizeDigits(countNode.getAttribute('aria-label') || countNode.innerText);
+                   const m = txt.match(/([0-9]+)/);
+                   if (m) score = parseInt(m[1], 10);
+                 }
+                 foundPosts.set(attr, { urn: attr, score });
+               }
             });
             
-            // Method 2: Look for post links
+            // Method 2: Look for post links (no score)
             document.querySelectorAll('a[href*="/posts/"], a[href*="/update/urn:li:"]').forEach(a => {
-               found.add(a.href);
+               const dummyUrn = 'urn:li:activity:' + (a.href.match(/[0-9]{10,25}/) || [''])[0];
+               if (dummyUrn.length > 16 && !foundPosts.has(dummyUrn)) foundPosts.set(dummyUrn, { urn: dummyUrn, score: null });
             });
 
-            // Method 3: Regex over the entire body innerHTML just in case
+            // Method 3: Regex over the entire body innerHTML just in case (no score)
             const html = document.body.innerHTML || '';
             const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
             let m;
             while ((m = URN_RE.exec(html)) !== null) {
-              found.add('urn:li:' + m[1].toLowerCase() + ':' + m[2]);
+              const attr = 'urn:li:' + m[1].toLowerCase() + ':' + m[2];
+              if (!foundPosts.has(attr)) foundPosts.set(attr, { urn: attr, score: null });
             }
             
-            return [...found];
+            return Array.from(foundPosts.values());
           }
         });
-        urns = results?.[0]?.result || [];
+        urnData = results?.[0]?.result || [];
       } catch (e) {
         console.warn('[BG] Scroll script error at scroll ' + i + ':', e.message);
         break;
       }
 
       let added = 0;
-      for (const urn of urns) {
-        if (!urlMap.has(urn)) {
-          const url = urnToUrl(urn);
-          if (url) { urlMap.set(urn, { canonicalUrn: urn, url, source: 'scroll' }); added++; }
+      for (const data of urnData) {
+        // extractUrn again just to normalize any raw URLs caught by method 2
+        const rawUrn = extractUrn(data.urn) || data.urn;
+        if (!urlMap.has(rawUrn)) {
+          const url = urnToUrl(rawUrn);
+          if (url) { 
+            urlMap.set(rawUrn, { canonicalUrn: rawUrn, url, source: 'scroll', score: data.score }); 
+            added++; 
+          }
+        } else if (data.score !== null) {
+          // If we already had it but now found a score, update it
+          const existing = urlMap.get(rawUrn);
+          if (existing.score === null || existing.score === undefined) existing.score = data.score;
         }
       }
-      console.log('[BG] Scroll ' + (i + 1) + '/' + MAX_SCROLLS + ': DOM=' + urns.length + ' urns, +' + added + ' new (total=' + urlMap.size + ')');
+      console.log('[BG] Scroll ' + (i + 1) + '/' + MAX_SCROLLS + ': DOM=' + urnData.length + ' urns, +' + added + ' new (total=' + urlMap.size + ')');
 
       if (added === 0) {
         consecutiveEmpty++;
@@ -266,12 +301,20 @@ async function fetchPostsForKeyword(keyword) {
   return posts;
 }
 
-// ── DB Push ───────────────────────────────────────────────────────────────────
+  // ── DB Push ───────────────────────────────────────────────────────────────────
 async function pushToAPI(posts, kw) {
   if (!posts || posts.length === 0) return 0;
+  
+  // Transform pre-scored posts so the DB receives engagementScore directly
+  const payloadPosts = posts.map(p => {
+    const formatted = { canonicalUrn: p.canonicalUrn, url: p.url, source: p.source };
+    if (p.score !== null && p.score !== undefined) formatted.engagementScore = p.score;
+    return formatted;
+  });
+
   const endpoint = S.dashboardUrl + '/api/extension/results';
   const headers = { 'Content-Type': 'application/json', 'x-extension-token': S.userId };
-  const body = JSON.stringify({ posts, keyword: kw, source: 'search_only' });
+  const body = JSON.stringify({ posts: payloadPosts, keyword: kw, source: 'search_only' });
   try {
     let resp;
     try { resp = await fetch(endpoint, { method: 'POST', headers, body }); }
