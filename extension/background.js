@@ -115,59 +115,79 @@ async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
   return success;
 }
 
-// ── Voyager REST paginator (Primary — real pagination, up to 150 posts) ──────────
-// Uses /voyager/api/search/blended which supports real server-side pagination
-async function fetchViaVoyagerREST(keyword, csrf, urlMap) {
-  let added_total = 0;
-  // Try multiple filter formats because LinkedIn changes these occasionally
-  const filterVariants = [
-    'List(resultType-%3ECONTENT)',
-    'List(resultType->CONTENT)',
-    'List(resultType%3ECONTENT)',
-  ];
-  
-  for (const filters of filterVariants) {
-    let variantWorked = false;
-    for (let start = 0; start < 150; start += 10) {
-      if (S.state !== 'RUNNING') return added_total;
-      const apiUrl = `https://www.linkedin.com/voyager/api/search/blended?count=10&filters=${filters}&keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&q=all&start=${start}`;
+// ── Tab-based scroll scraper (Primary — opens real LinkedIn tab, scrolls 15x) ─────────
+// LinkedIn loads posts via its own React/GraphQL as the user scrolls.
+// We open a background tab, scroll it, and read the DOM after each load.
+async function fetchViaScrollTab(keyword, urlMap) {
+  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
+  let tabId = null;
+  try {
+    const tab = await chrome.tabs.create({ url: searchUrl, active: false });
+    tabId = tab.id;
+    console.log('[BG] Scroll tab opened: ' + tabId + ' kw=' + keyword);
+
+    // Wait for initial page load
+    await sleep(4000);
+
+    const MAX_SCROLLS = 15;
+    let consecutiveEmpty = 0;
+
+    for (let i = 0; i < MAX_SCROLLS; i++) {
+      if (S.state !== 'RUNNING') break;
+
+      // Execute script: collect URNs from DOM then scroll down
+      let urns = [];
       try {
-        const res = await fetch(apiUrl, {
-          headers: {
-            'accept': 'application/vnd.linkedin.normalized+json+2.1',
-            'csrf-token': csrf || '',
-            'x-restli-protocol-version': '2.0.0',
-            'x-li-lang': 'en_US',
-            'x-li-track': '{"clientVersion":"1.13","osName":"web","timezoneOffset":3,"languageLocale":"en_US","displayDensity":"CONDENSED","displayTheme":"LIGHT"}',
+        const results = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const URN_RE = /(?:urn:li:|urn%3Ali%3A)(activity|ugcPost|share)(?::|%3A)([0-9]{10,25})/gi;
+            const html = document.documentElement.innerHTML;
+            const found = new Set();
+            let m;
+            URN_RE.lastIndex = 0;
+            while ((m = URN_RE.exec(html)) !== null) {
+              found.add('urn:li:' + m[1].toLowerCase() + ':' + m[2]);
+            }
+            // Scroll to bottom to trigger more posts loading
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            return [...found];
           }
         });
-        if (res.status === 404 || res.status === 400) {
-          console.warn('[BG] Voyager REST filter variant failed (' + res.status + '): ' + filters);
-          break; // try next filter variant
-        }
-        if (!res.ok) {
-          console.warn('[BG] Voyager REST HTTP ' + res.status + ' start=' + start);
-          break;
-        }
-        const text = await res.text();
-        const posts = extractPostsFromText(text);
-        let added = 0;
-        posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; added_total++; } });
-        console.log('[BG] Voyager REST start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
-        if (added > 0) variantWorked = true;
-        if (added === 0 && start > 0) break; // exhausted this filter variant
+        urns = results?.[0]?.result || [];
       } catch (e) {
-        console.warn('[BG] Voyager REST error:', e.message);
+        console.warn('[BG] Scroll script error at scroll ' + i + ':', e.message);
         break;
       }
-      await sleep(2000);
+
+      let added = 0;
+      for (const urn of urns) {
+        if (!urlMap.has(urn)) {
+          const url = urnToUrl(urn);
+          if (url) { urlMap.set(urn, { canonicalUrn: urn, url, source: 'scroll' }); added++; }
+        }
+      }
+      console.log('[BG] Scroll ' + (i + 1) + '/' + MAX_SCROLLS + ': DOM=' + urns.length + ' urns, +' + added + ' new (total=' + urlMap.size + ')');
+
+      if (added === 0) {
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= 3) {
+          console.log('[BG] 3 consecutive empty scrolls — page exhausted.');
+          break;
+        }
+      } else {
+        consecutiveEmpty = 0;
+      }
+
+      // Wait for LinkedIn to load new posts after scroll
+      await sleep(2500);
     }
-    if (variantWorked) {
-      console.log('[BG] Voyager REST succeeded with filter: ' + filters);
-      return added_total; // stop trying filter variants
-    }
+  } catch (e) {
+    console.warn('[BG] fetchViaScrollTab error:', e.message);
+  } finally {
+    if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+    console.log('[BG] Scroll tab closed. Total=' + urlMap.size);
   }
-  return added_total;
 }
 
 // ── Main fetch strategy per keyword ────────────────────────────────────────────────
@@ -177,34 +197,30 @@ async function fetchPostsForKeyword(keyword) {
   const slug = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
   const csrf = await getCsrfToken();
 
-  // Step 1: Base HTML (always runs — extracts initial posts + queryId)
+  // Step 1: Base HTML (fast, always works, gets initial posts + queryId)
   const baseUrl = `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`;
   const htmlText = await fetchHtml(baseUrl);
   extractPostsFromText(htmlText).forEach(p => { if (!urlMap.has(p.canonicalUrn)) urlMap.set(p.canonicalUrn, p); });
   console.log('[BG] Base HTML: ' + urlMap.size + ' posts kw=' + keyword);
-  await sleep(1500);
 
-  // Step 2: PRIMARY — Voyager REST API (real pagination, up to 150 posts)
-  const restAdded = await fetchViaVoyagerREST(keyword, csrf, urlMap);
-  console.log('[BG] Voyager REST added: ' + restAdded + ' (total=' + urlMap.size + ')');
+  // Step 2: PRIMARY — Scroll tab (opens real LinkedIn tab, scrolls 15x, reads DOM)
+  // This is the most powerful method: uses LinkedIn’s own React to load posts
+  await fetchViaScrollTab(keyword, urlMap);
+  console.log('[BG] After scroll tab: total=' + urlMap.size);
 
-  // Step 3: SECONDARY — Voyager GraphQL API (if queryId found in HTML)
-  if (urlMap.size < 30) { // only bother if REST didn't collect enough
+  // Step 3: SECONDARY — Voyager GraphQL (if queryId found AND scroll tab got < 30 posts)
+  if (urlMap.size < 30) {
     const qidMatches = [...htmlText.matchAll(/["']?queryId["']?\s*:\s*["']([a-f0-9]{32})["']/gi)];
     const oldQidMatch = htmlText.match(/voyagerSearchDashClusters\.([a-f0-9]{32})/i);
     if (oldQidMatch) qidMatches.push([null, oldQidMatch[1]]);
     const uniqueQids = [...new Set(qidMatches.map(m => m[1]))];
-    
     if (uniqueQids.length > 0) {
-      console.log('[BG] Trying ' + uniqueQids.length + ' queryIds via Voyager GraphQL...');
+      console.log('[BG] Trying Voyager GraphQL with ' + uniqueQids.length + ' queryIds...');
       for (const qid of uniqueQids) {
         if (S.state !== 'RUNNING') break;
         const oldSize = urlMap.size;
         const ok = await fetchViaVoyager(keyword, qid, csrf, urlMap);
-        if (ok && urlMap.size > oldSize) {
-          console.log('[BG] GraphQL queryId ' + qid + ' SUCCESS!');
-          break;
-        }
+        if (ok && urlMap.size > oldSize) { console.log('[BG] GraphQL queryId SUCCESS!'); break; }
       }
     }
   }
