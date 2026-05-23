@@ -118,24 +118,25 @@
     const candidates = Array.from(document.querySelectorAll('button[aria-label], span[aria-label], a[aria-label]'));
     dbg('  candidates:', candidates.length);
     const PATTERNS = [
-      { re: /(\d[\d,.]*)[\s\u00a0]*(reaction|إعجاب|تفاعل|réaction|reacción|Reaktion|reação)/i, type: 'reaction' },
-      { re: /(\d[\d,.]*)[\s\u00a0]*(like|أعجبني)/i,                                             type: 'like'     },
-      { re: /(\d[\d,.]*)[\s\u00a0]*(comment|تعليق|commentaire|comentario|Kommentar|comentário)/i, type: 'comment'  },
-      { re: /(\d[\d,.]*)[\s\u00a0]*(repost|إعادة نشر|repartage|reposteo|Repost)/i,              type: 'repost'   },
-      { re: /(\d[\d,.]*)[\s\u00a0]*(people reacted|شخص|أشخاص)/i,                               type: 'reaction' },
-      { re: /View[\s\u00a0]+(\d[\d,.]*)[\s\u00a0]*(reaction|comment|repost)/i,                  type: 'view'     },
+      { kw: /reaction|إعجاب|تفاعل|réaction|reacción|Reaktion|reação/i, type: 'reaction' },
+      { kw: /like|أعجبني/i,                                             type: 'like'     },
+      { kw: /comment|تعليق|commentaire|comentario|Kommentar|comentário/i, type: 'comment'  },
+      { kw: /repost|إعادة نشر|repartage|reposteo|Repost/i,              type: 'repost'   },
+      { kw: /people reacted|شخص|أشخاص/i,                               type: 'reaction' },
     ];
     const found = {};
     for (const el of candidates) {
       const raw = el.getAttribute('aria-label') || '';
       const norm = normalizeDigits(raw);
-      for (const { re, type } of PATTERNS) {
-        const m = norm.match(re);
-        if (m) {
-          const n = parseNum(m[1]);
-          if (n !== null) {
-            dbg('  T1 match type=' + type + ' n=' + n + ' raw="' + raw.slice(0, 60) + '"');
-            if (!(type in found) || n > found[type]) found[type] = n;
+      for (const { kw, type } of PATTERNS) {
+        if (kw.test(norm)) {
+          const m = norm.match(/(\d[\d,.]*)/);
+          if (m) {
+            const n = parseNum(m[1]);
+            if (n !== null) {
+              dbg('  T1 match type=' + type + ' n=' + n + ' raw="' + raw.slice(0, 60) + '"');
+              if (!(type in found) || n > found[type]) found[type] = n;
+            }
           }
         }
       }
@@ -240,16 +241,19 @@
     dbg('── Tier 5: narrowed text regex [FALLBACK]');
     const text = normalizeDigits(document.body?.innerText || '').slice(0, 3000);
     const PATTERNS = [
-      { re: /(\d[\d,.]*)[\s\u00a0]*(?:reaction|إعجاب|تفاعل|réaction|reacción|Reaktion)/i, type: 'reaction' },
-      { re: /(\d[\d,.]*)[\s\u00a0]*(?:like|أعجبني)/i,                                      type: 'like'     },
-      { re: /(\d[\d,.]*)[\s\u00a0]*(?:comment|تعليق|commentaire|comentario|Kommentar)/i,   type: 'comment'  },
-      { re: /(\d[\d,.]*)[\s\u00a0]*(?:repost|إعادة نشر)/i,                                type: 'repost'   },
-      { re: /(\d[\d,.]*)[\s\u00a0]*(?:people reacted)/i,                                   type: 'reaction' },
+      { re: /(?:(\d[\d,.]*)[\s\u00a0]*(?:reaction|إعجاب|تفاعل|réaction|reacción|Reaktion))|(?:(?:reaction|إعجاب|تفاعل|réaction|reacción|Reaktion)[\s\u00a0]*(\d[\d,.]*))/i, type: 'reaction' },
+      { re: /(?:(\d[\d,.]*)[\s\u00a0]*(?:like|أعجبني))|(?:(?:like|أعجبني)[\s\u00a0]*(\d[\d,.]*))/i,                                      type: 'like'     },
+      { re: /(?:(\d[\d,.]*)[\s\u00a0]*(?:comment|تعليق|commentaire|comentario|Kommentar))|(?:(?:comment|تعليق|commentaire|comentario|Kommentar)[\s\u00a0]*(\d[\d,.]*))/i,   type: 'comment'  },
+      { re: /(?:(\d[\d,.]*)[\s\u00a0]*(?:repost|إعادة نشر))|(?:(?:repost|إعادة نشر)[\s\u00a0]*(\d[\d,.]*))/i,                                type: 'repost'   },
+      { re: /(?:(\d[\d,.]*)[\s\u00a0]*(?:people reacted))|(?:(?:people reacted)[\s\u00a0]*(\d[\d,.]*))/i,                                   type: 'reaction' },
     ];
     const found = {};
     for (const { re, type } of PATTERNS) {
       const m = text.match(re);
-      if (m) { const n = parseNum(m[1]); if (n !== null && (!(type in found) || n > found[type])) found[type] = n; }
+      if (m) { 
+        const n = parseNum(m[1] || m[2]); 
+        if (n !== null && (!(type in found) || n > found[type])) found[type] = n; 
+      }
     }
     const types = Object.keys(found);
     if (types.length === 0) { dbg('  T5: no matches'); return null; }
