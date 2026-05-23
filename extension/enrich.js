@@ -1,193 +1,178 @@
-// enrich.js — Nexora Post Enrichment v7.0
-// 5-tier score detection | calibration logging | uncertain sentinel | retry/recheck
-// Injected into individual LinkedIn post pages during enrich mode.
+// enrich.js — Nexora Post Enrichment v8.0
+// ARCHITECTURE: MutationObserver waits for the LinkedIn social bar before running tiers.
+// Tier5 (text-regex) is flagged as isFallback=true — background.js will treat it as uncertain.
+// Deep diagnostics log all aria-label values and DOM state when tiers fail.
 (async function () {
   if (window.__nexoraEnrichDone) return;
   window.__nexoraEnrichDone = true;
 
-  const CALIBRATION = true; // Always log full diagnostics
-
-  // ── Logging ──────────────────────────────────────────────────────────────────
+  const CALIBRATION = true;
   const t0 = Date.now();
-  function ts() { return '[+' + (Date.now() - t0) + 'ms]'; }
-  function dbg(...args) {
-    if (CALIBRATION) console.log('[ENRICH-DBG]', ts(), ...args);
-  }
-  function warn(...args) {
-    console.warn('[ENRICH-WARN]', ts(), ...args);
-  }
+  function ts()   { return '[+' + (Date.now() - t0) + 'ms]'; }
+  function dbg()  { if (CALIBRATION) console.log('[ENRICH-DBG]', ts(), ...arguments); }
+  function warn() { console.warn('[ENRICH-WARN]', ts(), ...arguments); }
 
-  // ── Runtime check ─────────────────────────────────────────────────────────────
-  function canSend() {
-    try {
-      return typeof chrome !== 'undefined' && chrome.runtime?.id &&
-        typeof chrome.runtime.sendMessage === 'function';
-    } catch (_) { return false; }
-  }
-
-  // ── Send final result ─────────────────────────────────────────────────────────
+  // ── Send final result ─────────────────────────────────────────────────────
+  // isFallback=true means background.js must NOT delete based on this score.
   function done(score, method, meta) {
     const urn = window.__nexoraEnrichUrn || null;
-    console.log('[ENRICH] FINAL urn=' + urn + ' score=' + score + ' via=' + method, meta || '');
+    const isFallback = !!(meta && meta.isFallback);
+    console.log('[ENRICH] FINAL urn=' + urn + ' score=' + score + ' via=' + method + (isFallback ? ' [FALLBACK]' : ''));
     if (CALIBRATION) {
-      console.log('[ENRICH-CALIBRATION] ── Result Summary ─────────────────────────────');
-      console.log('[ENRICH-CALIBRATION]  URN      :', urn);
-      console.log('[ENRICH-CALIBRATION]  Score    :', score);
-      console.log('[ENRICH-CALIBRATION]  Method   :', method);
-      console.log('[ENRICH-CALIBRATION]  URL      :', window.location.href);
-      console.log('[ENRICH-CALIBRATION]  Elapsed  :', (Date.now() - t0) + 'ms');
-      if (meta) console.log('[ENRICH-CALIBRATION]  Meta     :', JSON.stringify(meta));
-      console.log('[ENRICH-CALIBRATION] ──────────────────────────────────────────────');
+      console.log('[ENRICH-CALIBRATION] URN=' + urn + ' Score=' + score + ' Method=' + method + ' URL=' + window.location.href + ' Elapsed=' + (Date.now()-t0) + 'ms');
     }
-    if (canSend()) {
-      chrome.runtime.sendMessage({ action: 'ENRICH_RESULT', urn, score }).catch(() => {});
-    }
-    // PRIMARY: write to window property so background.js can poll via executeScript.
-    // This is timing-race-free and does not depend on the service worker being awake.
-    window.__nexoraEnrichResult = { score, method, done: true, ts: Date.now() };
+    try { chrome.runtime.sendMessage({ action: 'ENRICH_RESULT', urn, score }).catch(() => {}); } catch (_) {}
+    window.__nexoraEnrichResult = { score, method, isFallback, done: true, ts: Date.now() };
   }
 
-  // ── Arabic/Persian digit normalizer ─────────────────────────────────────────
+  // ── Digit normalizer ──────────────────────────────────────────────────────
   function normalizeDigits(s) {
     return (s || '')
       .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
       .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
       .replace(/,/g, '');
   }
-
   function parseNum(s) {
     if (!s) return null;
     const n = parseInt(normalizeDigits(String(s)).replace(/[^0-9]/g, ''), 10);
     return Number.isFinite(n) && n >= 0 ? n : null;
   }
 
-  // ── Redirect / Login-wall detector ───────────────────────────────────────────
-  // Returns true if the page is a redirect/auth wall — score must be null (not 0).
-  // Covers English, Arabic, French, Spanish, German, Portuguese.
+  // ── Auth-wall detector ────────────────────────────────────────────────────
   const REDIRECT_MARKERS = [
     'Sign in', 'Join LinkedIn', 'Log in', 'Sign up',
     'تسجيل الدخول', 'انضم إلى لينكدإن', 'سجّل الدخول',
-    'Se connecter', 'Rejoindre LinkedIn',
-    'Iniciar sesión', 'Unirse a LinkedIn',
-    'Anmelden', 'Bei LinkedIn anmelden',
-    'Entrar', 'Entrar no LinkedIn',
-    'Continue to LinkedIn', 'Continue with LinkedIn',
+    'Se connecter', 'Rejoindre LinkedIn', 'Iniciar sesión',
+    'Anmelden', 'Entrar', 'Continue to LinkedIn',
     'Agree & Join', 'موافقة والانضمام',
     'authwall', 'auth-wall', 'checkpoint',
   ];
-
   function isRedirectPage() {
     const text = document.body?.innerText || '';
     const url  = window.location.href;
-    const hit  = REDIRECT_MARKERS.find(m => text.includes(m) || url.includes(m.toLowerCase().replace(/\s/g, '')));
-    if (hit) {
-      dbg('🔒 Redirect/auth-wall detected via marker:', hit);
-      return true;
+    return REDIRECT_MARKERS.some(m => text.includes(m) || url.includes(m.toLowerCase().replace(/\s/g, '')));
+  }
+
+  // ── MutationObserver: wait for LinkedIn social bar ────────────────────────
+  // Waits for at least one button/span/a with an aria-label containing a
+  // social keyword (reaction, comment, etc.) to appear in the DOM.
+  // This replaces the fixed 20s polling loop — fires immediately when LinkedIn
+  // hydrates the social action bar, even in background tabs.
+  const SOCIAL_RE = /reaction|like|comment|repost|share|إعجاب|تعليق|تفاعل/i;
+  function hasSocialBar() {
+    const els = document.querySelectorAll('button[aria-label], span[aria-label], a[aria-label]');
+    for (const el of els) {
+      if (SOCIAL_RE.test(el.getAttribute('aria-label') || '')) return true;
     }
     return false;
   }
+  function waitForSocialBar(timeoutMs) {
+    return new Promise(resolve => {
+      if (hasSocialBar()) { resolve('already-present'); return; }
+      if (!document.body)  { resolve('no-body'); return; }
+      const timer = setTimeout(() => { obs.disconnect(); resolve('timeout'); }, timeoutMs);
+      const obs = new MutationObserver(() => {
+        if (hasSocialBar()) { clearTimeout(timer); obs.disconnect(); resolve('mutation-found'); }
+      });
+      // attributes filter on aria-label catches SDUI lazy-setting
+      obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-label'] });
+    });
+  }
 
-  // ── Page-loaded heuristic ────────────────────────────────────────────────────
-  function isPageLoaded() {
+  // ── Deep diagnostics — logs when tiers fail so we can debug ───────────────
+  function logDeepDiagnostics(label) {
+    if (!CALIBRATION) return;
+    dbg('── DEEP DIAGNOSTICS [' + label + '] ───────────────────────────────');
+    dbg('  URL          :', window.location.href);
+    dbg('  Title        :', document.title);
+    dbg('  readyState   :', document.readyState);
+    const allAria = Array.from(document.querySelectorAll('[aria-label]'));
+    dbg('  aria-label # :', allAria.length);
+    allAria.slice(0, 25).forEach((el, i) =>
+      dbg('  aria[' + i + '] <' + el.tagName + '> "' + (el.getAttribute('aria-label') || '').slice(0, 80) + '"'));
+    dbg('  [data-urn]   :', document.querySelectorAll('[data-urn]').length);
+    dbg('  button#      :', document.querySelectorAll('button').length);
+    dbg('  DOM nodes    :', document.querySelectorAll('*').length);
+    // Check known social bar selectors
+    [
+      '.social-details-social-counts',
+      '.feed-shared-social-action-bar',
+      '[data-test-id="social-actions"]',
+      '.update-components-social-counts',
+      '.social-details-social-activity',
+    ].forEach(sel => dbg('  ' + (document.querySelector(sel) ? 'FOUND  ' : 'MISSING') + ' ' + sel));
+    // Shadow DOM check
+    const shadows = Array.from(document.querySelectorAll('*')).filter(el => el.shadowRoot).length;
+    dbg('  shadowRoots  :', shadows);
     const text = document.body?.innerText || '';
-    const len = text.length;
-    const hasContent = len > 500;
-    const hasFeed = !!document.querySelector(
-      '[data-urn], .feed-shared-update-v2, article, .occludable-update, .ember-view'
-    );
-    dbg('isPageLoaded: textLen=' + len + ' hasContent=' + hasContent + ' hasFeed=' + hasFeed);
-    return hasContent || hasFeed;
+    dbg('  innerText len:', text.length);
+    dbg('  text[0:500]  :', JSON.stringify(text.slice(0, 500)));
+    dbg('──────────────────────────────────────────────────────────────────');
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  // TIER 1 — aria-label attribute scan (most reliable, class-name-independent)
-  // LinkedIn always sets aria-label on social count buttons regardless of SDUI version.
+  // TIER 1 — aria-label scan (most reliable)
   // ════════════════════════════════════════════════════════════════════════════
   function tryTier1AriaLabel() {
-    dbg('── Tier 1: aria-label scan ─────────────────────────────');
+    dbg('── Tier 1: aria-label scan');
     const candidates = Array.from(document.querySelectorAll('button[aria-label], span[aria-label], a[aria-label]'));
-    dbg('Tier 1: found ' + candidates.length + ' aria-label elements');
-
+    dbg('  candidates:', candidates.length);
     const PATTERNS = [
-      { re: /(\d[\d,.]*)\s*(reaction|إعجاب|تفاعل|reaction|réaction|reacción|Reaktion|reação)/i, type: 'reaction' },
-      { re: /(\d[\d,.]*)\s*(like|like|أعجبني)/i, type: 'like' },
-      { re: /(\d[\d,.]*)\s*(comment|تعليق|commentaire|comentario|Kommentar|comentário)/i, type: 'comment' },
-      { re: /(\d[\d,.]*)\s*(repost|إعادة نشر|repartage|reposteo|Repost|repostagem)/i, type: 'repost' },
-      // Inverted: "View N reactions"  / "N people reacted"
-      { re: /(\d[\d,.]*)\s*(people reacted|شخص|أشخاص)\s*(reacted)?/i, type: 'reaction' },
-      { re: /View\s+(\d[\d,.]*)\s*(reaction|comment|repost)/i, type: 'view' },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(reaction|إعجاب|تفاعل|réaction|reacción|Reaktion|reação)/i, type: 'reaction' },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(like|أعجبني)/i,                                             type: 'like'     },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(comment|تعليق|commentaire|comentario|Kommentar|comentário)/i, type: 'comment'  },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(repost|إعادة نشر|repartage|reposteo|Repost)/i,              type: 'repost'   },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(people reacted|شخص|أشخاص)/i,                               type: 'reaction' },
+      { re: /View[\s\u00a0]+(\d[\d,.]*)[\s\u00a0]*(reaction|comment|repost)/i,                  type: 'view'     },
     ];
-
-    const found = {}; // type → number (avoid double-counting same type)
-
+    const found = {};
     for (const el of candidates) {
       const raw = el.getAttribute('aria-label') || '';
-      const normalized = normalizeDigits(raw);
+      const norm = normalizeDigits(raw);
       for (const { re, type } of PATTERNS) {
-        const m = normalized.match(re);
+        const m = norm.match(re);
         if (m) {
           const n = parseNum(m[1]);
           if (n !== null) {
-            dbg('Tier 1 match: type=' + type + ' n=' + n + ' raw="' + raw + '"');
-            if (!(type in found) || n > found[type]) found[type] = n; // keep highest for each type
+            dbg('  T1 match type=' + type + ' n=' + n + ' raw="' + raw.slice(0, 60) + '"');
+            if (!(type in found) || n > found[type]) found[type] = n;
           }
         }
       }
     }
-
     const types = Object.keys(found);
-    if (types.length === 0) {
-      dbg('Tier 1: no matches');
-      return null;
-    }
-    const total = types.reduce((sum, t) => sum + found[t], 0);
-    dbg('Tier 1 SUCCESS: types=' + JSON.stringify(found) + ' total=' + total);
+    if (types.length === 0) { dbg('  T1: no matches'); return null; }
+    const total = types.reduce((s, t) => s + found[t], 0);
+    dbg('  T1 SUCCESS total=' + total + ' breakdown=' + JSON.stringify(found));
     return { score: total, meta: { tier: 1, breakdown: found } };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
   // TIER 2 — data-* attribute scan
-  // Some LinkedIn SDUI builds embed counts as data attributes on containers.
   // ════════════════════════════════════════════════════════════════════════════
   function tryTier2DataAttributes() {
-    dbg('── Tier 2: data-attribute scan ────────────────────────');
-    const ATTRS = [
-      'data-reaction-count', 'data-num-reactions', 'data-likes-count',
-      'data-comments-count', 'data-reposts-count', 'data-total-reactions',
-      'data-social-count',
-    ];
-    let total = 0;
+    dbg('── Tier 2: data-attribute scan');
+    const ATTRS = ['data-reaction-count','data-num-reactions','data-likes-count',
+                   'data-comments-count','data-reposts-count','data-total-reactions','data-social-count'];
     const found = {};
-
     for (const attr of ATTRS) {
-      const els = document.querySelectorAll('[' + attr + ']');
-      els.forEach(el => {
-        const raw = el.getAttribute(attr) || '';
-        const n = parseNum(raw);
-        if (n !== null) {
-          dbg('Tier 2 match: attr=' + attr + ' n=' + n);
-          if (!(attr in found) || n > found[attr]) found[attr] = n;
-        }
+      document.querySelectorAll('[' + attr + ']').forEach(el => {
+        const n = parseNum(el.getAttribute(attr) || '');
+        if (n !== null && (!(attr in found) || n > found[attr])) found[attr] = n;
       });
     }
-
     const keys = Object.keys(found);
-    if (keys.length === 0) {
-      dbg('Tier 2: no matches');
-      return null;
-    }
-    total = keys.reduce((sum, k) => sum + found[k], 0);
-    dbg('Tier 2 SUCCESS: attrs=' + JSON.stringify(found) + ' total=' + total);
+    if (keys.length === 0) { dbg('  T2: no matches'); return null; }
+    const total = keys.reduce((s, k) => s + found[k], 0);
+    dbg('  T2 SUCCESS total=' + total);
     return { score: total, meta: { tier: 2, breakdown: found } };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  // TIER 3 — known CSS class selectors (may fail if LinkedIn changes classes,
-  //          but kept as a middle tier for stability)
-  // FIX: Each matched DOM element is counted independently (no value-dedup bug).
+  // TIER 3 — CSS class selectors
   // ════════════════════════════════════════════════════════════════════════════
   function tryTier3CssSelectors() {
-    dbg('── Tier 3: CSS selector scan ──────────────────────────');
+    dbg('── Tier 3: CSS selector scan');
     const SELECTORS = [
       '.social-details-social-counts__reactions-count',
       '.social-details-social-counts__comments',
@@ -199,241 +184,153 @@
       '[data-test-id="social-actions__comments-count"]',
       '.social-details-social-activity',
       '.reactions-reactions-count',
-      '.comments-comments-count',
     ];
-
     const allNodes = [];
     for (const sel of SELECTORS) {
-      try {
-        const nodes = Array.from(document.querySelectorAll(sel));
-        if (nodes.length > 0) dbg('Tier 3 selector "' + sel + '" matched ' + nodes.length + ' nodes');
-        allNodes.push(...nodes);
-      } catch (_) {}
+      try { allNodes.push(...Array.from(document.querySelectorAll(sel))); } catch (_) {}
     }
-
-    if (allNodes.length === 0) {
-      dbg('Tier 3: no CSS matches');
-      return null;
-    }
-
-    // FIX: Dedup by DOM element reference, NOT by numeric value
-    const seenElements = new Set();
+    if (allNodes.length === 0) { dbg('  T3: no CSS matches'); return null; }
+    const seen = new Set();
     let total = 0;
     const details = [];
-
     allNodes.forEach(node => {
-      if (seenElements.has(node)) return;
-      seenElements.add(node);
+      if (seen.has(node)) return; seen.add(node);
       const raw = normalizeDigits(node.getAttribute('aria-label') || node.innerText || '');
       const m = raw.match(/(\d[\d,.]*)/);
       if (m) {
         const n = parseNum(m[1]);
-        if (n !== null) {
-          total += n;
-          details.push({ text: raw.trim().slice(0, 40), n });
-          dbg('Tier 3 node: n=' + n + ' text="' + raw.trim().slice(0, 60) + '"');
-        }
+        if (n !== null) { total += n; details.push({ n, text: raw.trim().slice(0, 40) }); }
       }
     });
-
-    if (details.length === 0) {
-      dbg('Tier 3: nodes found but no numbers extracted');
-      return null;
-    }
-    dbg('Tier 3 SUCCESS: details=' + JSON.stringify(details) + ' total=' + total);
+    if (details.length === 0) { dbg('  T3: nodes found but no numbers'); return null; }
+    dbg('  T3 SUCCESS total=' + total);
     return { score: total, meta: { tier: 3, details } };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
   // TIER 4 — structural proximity scan
-  // Finds the social-action bar by DOM structure (sibling/parent of post content)
-  // and reads purely numeric child text nodes. Class-name-independent.
   // ════════════════════════════════════════════════════════════════════════════
   function tryTier4StructuralScan() {
-    dbg('── Tier 4: structural proximity scan ─────────────────');
-
-    // LinkedIn's post page: the action bar is a div/ul containing buttons
-    // that have only a number as their visible text + an icon.
-    // Strategy: find elements whose entire innerText is just a number,
-    // inside elements that also contain aria-label with social keywords.
-    const SOCIAL_KEYWORDS = /reaction|like|comment|repost|share|إعجاب|تعليق|تفاعل/i;
+    dbg('── Tier 4: structural scan');
+    const SOCIAL_KW = /reaction|like|comment|repost|share|إعجاب|تعليق|تفاعل/i;
     const results = [];
-
-    const allButtons = Array.from(document.querySelectorAll('button, span.t-normal, span.t-12'));
-    dbg('Tier 4: scanning ' + allButtons.length + ' buttons/spans');
-
-    for (const el of allButtons) {
+    for (const el of document.querySelectorAll('button, span.t-normal, span.t-12')) {
       const label = el.getAttribute('aria-label') || '';
-      const inner = (el.innerText || '').trim();
-      // Check if element text is purely numeric
-      const norm = normalizeDigits(inner);
-      const numOnly = /^\d[\d,.]*$/.test(norm);
-      const n = parseNum(norm);
-      if (numOnly && n !== null && SOCIAL_KEYWORDS.test(label)) {
-        dbg('Tier 4 match: n=' + n + ' label="' + label.slice(0, 60) + '"');
-        results.push({ n, label });
+      const norm  = normalizeDigits((el.innerText || '').trim());
+      if (/^\d[\d,.]*$/.test(norm) && SOCIAL_KW.test(label)) {
+        const n = parseNum(norm);
+        if (n !== null) results.push({ n, label });
       }
     }
-
-    if (results.length === 0) {
-      dbg('Tier 4: no matches');
-      return null;
-    }
-
-    // Sum unique labels (don't double-count same label type)
+    if (results.length === 0) { dbg('  T4: no matches'); return null; }
     const seenLabels = new Set();
     let total = 0;
     for (const r of results) {
       const key = r.label.toLowerCase().replace(/\d+/g, '').trim().slice(0, 20);
-      if (!seenLabels.has(key)) {
-        seenLabels.add(key);
-        total += r.n;
-      }
+      if (!seenLabels.has(key)) { seenLabels.add(key); total += r.n; }
     }
-    dbg('Tier 4 SUCCESS: results=' + JSON.stringify(results) + ' total=' + total);
+    dbg('  T4 SUCCESS total=' + total);
     return { score: total, meta: { tier: 4, results } };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  // TIER 5 — narrowed innerText regex (last resort)
-  // Only scans the FIRST 3000 chars of body.innerText (post header area)
-  // to avoid picking up engagement numbers from recommended posts below.
-  // FIX: was scanning entire body text, picking up wrong post's numbers.
+  // TIER 5 — narrowed innerText regex (LAST RESORT — flagged as isFallback)
   // ════════════════════════════════════════════════════════════════════════════
   function tryTier5NarrowedText() {
-    dbg('── Tier 5: narrowed innerText regex ──────────────────');
-    const fullText = normalizeDigits(document.body?.innerText || '');
-    // Only look at first 3000 characters — post + its immediate social bar
-    const text = fullText.slice(0, 3000);
-    dbg('Tier 5: scanning first ' + text.length + ' chars of innerText');
-
+    dbg('── Tier 5: narrowed text regex [FALLBACK]');
+    const text = normalizeDigits(document.body?.innerText || '').slice(0, 3000);
     const PATTERNS = [
-      { re: /(\d[\d,.]*)\s*(?:reaction|إعجاب|تفاعل|réaction|reacción|Reaktion|reação)/i, type: 'reaction' },
-      { re: /(\d[\d,.]*)\s*(?:like|أعجبني)/i, type: 'like' },
-      { re: /(\d[\d,.]*)\s*(?:comment|تعليق|commentaire|comentario|Kommentar|comentário)/i, type: 'comment' },
-      { re: /(\d[\d,.]*)\s*(?:repost|إعادة نشر)/i, type: 'repost' },
-      { re: /(\d[\d,.]*)\s*(?:people reacted)/i, type: 'reaction' },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(?:reaction|إعجاب|تفاعل|réaction|reacción|Reaktion)/i, type: 'reaction' },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(?:like|أعجبني)/i,                                      type: 'like'     },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(?:comment|تعليق|commentaire|comentario|Kommentar)/i,   type: 'comment'  },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(?:repost|إعادة نشر)/i,                                type: 'repost'   },
+      { re: /(\d[\d,.]*)[\s\u00a0]*(?:people reacted)/i,                                   type: 'reaction' },
     ];
-
     const found = {};
     for (const { re, type } of PATTERNS) {
       const m = text.match(re);
-      if (m) {
-        const n = parseNum(m[1]);
-        if (n !== null) {
-          dbg('Tier 5 match: type=' + type + ' n=' + n + ' match="' + m[0] + '"');
-          if (!(type in found) || n > found[type]) found[type] = n;
-        }
-      }
+      if (m) { const n = parseNum(m[1]); if (n !== null && (!(type in found) || n > found[type])) found[type] = n; }
     }
-
     const types = Object.keys(found);
-    if (types.length === 0) {
-      dbg('Tier 5: no matches in first 3000 chars');
-      return null;
-    }
-    const total = types.reduce((sum, t) => sum + found[t], 0);
-    dbg('Tier 5 SUCCESS: types=' + JSON.stringify(found) + ' total=' + total);
-    return { score: total, meta: { tier: 5, breakdown: found } };
+    if (types.length === 0) { dbg('  T5: no matches'); return null; }
+    const total = types.reduce((s, t) => s + found[t], 0);
+    dbg('  T5 [FALLBACK] total=' + total + ' breakdown=' + JSON.stringify(found));
+    return { score: total, meta: { tier: 5, breakdown: found, isFallback: true } };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  // STRATEGY 1 — API interceptor (highest confidence)
-  // Catches the engagement count from LinkedIn's own API response during page load.
+  // API interceptor (highest confidence, pre-hydration)
   // ════════════════════════════════════════════════════════════════════════════
   function tryInterceptor(urn) {
     try {
       if (window.__nexoraApiUrns instanceof Map && urn && window.__nexoraApiUrns.has(urn)) {
         const score = window.__nexoraApiUrns.get(urn);
-        if (score !== null && score !== undefined) {
-          dbg('Interceptor HIT: urn=' + urn + ' score=' + score);
-          return score;
-        }
+        if (score !== null && score !== undefined) { dbg('Interceptor HIT score=' + score); return score; }
       }
     } catch (_) {}
     return null;
   }
 
-  // ── Page diagnostics snapshot ─────────────────────────────────────────────
-  function logPageDiagnostics() {
-    if (!CALIBRATION) return;
-    const text = document.body?.innerText || '';
-    dbg('── Page Diagnostics ──────────────────────────────────');
-    dbg('URL          :', window.location.href);
-    dbg('Title        :', document.title);
-    dbg('innerText len:', text.length);
-    dbg('DOM nodes    :', document.querySelectorAll('*').length);
-    dbg('data-urn els :', document.querySelectorAll('[data-urn]').length);
-    dbg('button els   :', document.querySelectorAll('button').length);
-    dbg('aria-label   :', document.querySelectorAll('[aria-label]').length);
-    dbg('readyState   :', document.readyState);
-    // Log first 300 chars of innerText for context
-    dbg('Text preview :', JSON.stringify(text.slice(0, 300)));
-    dbg('─────────────────────────────────────────────────────');
-  }
-
-  // ── Main detection loop ───────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+  // MAIN — MutationObserver-driven detection
+  // ════════════════════════════════════════════════════════════════════════════
   const urn = window.__nexoraEnrichUrn || null;
-  dbg('Enrich started. URN=' + urn);
+  dbg('Enrich v8 started. URN=' + urn + ' URL=' + window.location.href);
 
-  // Total polling window: 20 seconds (was 12)
-  const deadline = Date.now() + 20000;
-  let attempt = 0;
+  // 1. Fast-path: interceptor (fires before DOM is ready)
+  const interceptorScore = tryInterceptor(urn);
+  if (interceptorScore !== null) { done(interceptorScore, 'interceptor', {}); return; }
 
-  while (Date.now() < deadline) {
-    attempt++;
-    dbg('─── Poll attempt #' + attempt + ' (' + (Date.now() - t0) + 'ms elapsed) ───────────────────');
+  // 2. Immediate auth-wall check
+  if (isRedirectPage()) { warn('Auth wall (immediate)'); done(null, 'redirect-wall', {}); return; }
 
-    // Check interceptor first (fastest, most accurate)
-    const interceptorScore = tryInterceptor(urn);
-    if (interceptorScore !== null) {
-      done(interceptorScore, 'interceptor', { attempt });
-      return;
+  // 3. Wait for LinkedIn social bar via MutationObserver (up to 30s)
+  //    MutationObserver fires the instant the social bar is inserted —
+  //    far more reliable than polling in background tabs where timer precision drops.
+  dbg('Waiting for social bar (MutationObserver, 30s max)...');
+  const barStatus = await waitForSocialBar(30000);
+  dbg('Social bar wait result: ' + barStatus);
+
+  // 4. Re-check auth wall after wait (page may have redirected during hydration)
+  if (isRedirectPage()) { warn('Auth wall (post-wait)'); done(null, 'redirect-wall', {}); return; }
+
+  // 5. Run deep diagnostics (always, so we can see what the page looks like)
+  logDeepDiagnostics(barStatus);
+
+  // 6. Run tiers up to 3 times (with 1.5s pause between attempts)
+  //    If bar timed out, only 1 attempt (page probably didn't hydrate).
+  const maxAttempts = (barStatus === 'timeout' || barStatus === 'no-body') ? 1 : 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    dbg('── Tier pass #' + (attempt + 1) + '/' + maxAttempts);
+
+    // Re-check interceptor on each attempt (API data might arrive late)
+    const ic = tryInterceptor(urn);
+    if (ic !== null) { done(ic, 'interceptor', { attempt }); return; }
+
+    const t1 = tryTier1AriaLabel();
+    if (t1) { done(t1.score, 'tier1-aria-label', { ...t1.meta, attempt }); return; }
+
+    const t2 = tryTier2DataAttributes();
+    if (t2) { done(t2.score, 'tier2-data-attrs', { ...t2.meta, attempt }); return; }
+
+    const t3 = tryTier3CssSelectors();
+    if (t3) { done(t3.score, 'tier3-css', { ...t3.meta, attempt }); return; }
+
+    const t4 = tryTier4StructuralScan();
+    if (t4) { done(t4.score, 'tier4-structural', { ...t4.meta, attempt }); return; }
+
+    // Tier 5 — flagged as fallback: background.js will NOT delete based on this
+    const t5 = tryTier5NarrowedText();
+    if (t5) { done(t5.score, 'tier5-text-regex', { ...t5.meta, attempt, isFallback: true }); return; }
+
+    dbg('All tiers null on attempt #' + (attempt + 1));
+    if (attempt < maxAttempts - 1) {
+      dbg('Waiting 1500ms before next attempt...');
+      await new Promise(r => setTimeout(r, 1500));
     }
-
-    // Check if page is even loaded yet
-    if (!isPageLoaded()) {
-      dbg('Page not loaded yet — waiting...');
-      await new Promise(r => setTimeout(r, 800));
-      continue;
-    }
-
-    // Check for redirect/auth-wall (return null — not 0)
-    if (isRedirectPage()) {
-      warn('Auth wall detected — returning null (not 0) to prevent false delete');
-      if (CALIBRATION) logPageDiagnostics();
-      done(null, 'redirect-wall', { attempt });
-      return;
-    }
-
-    // Run full page diagnostics on first loaded attempt
-    if (attempt <= 2) logPageDiagnostics();
-
-    // Run tiers in priority order — use first one that succeeds
-    const tier1 = tryTier1AriaLabel();
-    if (tier1 !== null) { done(tier1.score, 'tier1-aria-label', { ...tier1.meta, attempt }); return; }
-
-    const tier2 = tryTier2DataAttributes();
-    if (tier2 !== null) { done(tier2.score, 'tier2-data-attrs', { ...tier2.meta, attempt }); return; }
-
-    const tier3 = tryTier3CssSelectors();
-    if (tier3 !== null) { done(tier3.score, 'tier3-css', { ...tier3.meta, attempt }); return; }
-
-    const tier4 = tryTier4StructuralScan();
-    if (tier4 !== null) { done(tier4.score, 'tier4-structural', { ...tier4.meta, attempt }); return; }
-
-    const tier5 = tryTier5NarrowedText();
-    if (tier5 !== null) { done(tier5.score, 'tier5-text-regex', { ...tier5.meta, attempt }); return; }
-
-    dbg('All tiers returned null — waiting 700ms before next poll...');
-    await new Promise(r => setTimeout(r, 700));
   }
 
-  // ── Timed out — page could not be read ────────────────────────────────────
-  // CRITICAL: return null (not 0) so background.js marks this as uncertain (-1)
-  // and does NOT delete it. Score of 0 is reserved for posts that DEFINITELY
-  // have zero engagement AND were detected cleanly.
-  warn('20s timeout — returning null. Post will be marked uncertain (-1), NOT deleted.');
-  if (CALIBRATION) logPageDiagnostics();
-  done(null, 'timeout-20s', { attempt });
+  // 7. Complete failure — return null so background.js marks as uncertain (never deletes)
+  warn('All tiers failed after ' + maxAttempts + ' attempts — returning null (uncertain).');
+  done(null, 'all-tiers-failed', { barStatus, maxAttempts });
 })();

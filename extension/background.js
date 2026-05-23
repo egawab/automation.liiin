@@ -490,86 +490,48 @@ async function pushToAPI(posts, kw) {
   }
 }
 
-// â”€â”€ Keyword Fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-async function fetchKeywords() {
-  const url = S.dashboardUrl + '/api/extension/jobs';
-  let resp;
-  try {
-    resp = await fetch(url, { headers: { 'x-extension-token': S.userId } });
-  } catch (e) {
-    throw new Error('Failed to connect to Dashboard API (' + url + '). Make sure the Dashboard is running and you are connected.');
-  }
-
-  if (!resp.ok) throw new Error('Jobs API ' + resp.status);
-  const jobs = await resp.json();
-  if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
-  let kws = [];
-  if (jobs.settings?.searchConfigJson) {
-    try {
-      const cfg = JSON.parse(jobs.settings.searchConfigJson);
-      if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
-    } catch (_) {}
-  }
-  if (kws.length === 0 && Array.isArray(jobs.keywords))
-    kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
-  if (kws.length === 0) throw new Error('No keywords configured.');
-  return { keywords: [...new Set(kws)], settings: jobs.settings || {} };
-}
-
-// â”€â”€ Auto-Enrich: open each post in background tab, inject enrich.js â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// ARCHITECTURE FIX: Use executeScript polling (direct return value) instead of
-// chrome.runtime.sendMessage / onMessage listener pattern.
-//
-// ROOT CAUSE of previous 16/18 null results:
-//   Hard timeout (30s) fired BEFORE enrich.js could complete because:
-//   - Tab load wait: up to 18s
-//   - Post-complete settle: 4s
-//   - enrich.js polling: up to 20s
-//   Total needed: 42s > 30s hard timeout â†’ tab closed â†’ message never received.
-//
-// NEW FLOW:
-//   1. Create tab, wait for load + settle
-//   2. Set window.__nexoraEnrichUrn, reset window.__nexoraEnrichResult = null
-//   3. Inject enrich.js (which writes result to window.__nexoraEnrichResult when done)
-//   4. Poll window.__nexoraEnrichResult via executeScript every 1500ms (max 25 attempts = 37.5s)
-//   5. Return score as direct return value â€” no message passing, no listener, no race.
+// ── Auto-Enrich: open each post in background tab, inject enrich.js ──────────
+// Returns { score: number|null, method: string, isFallback: boolean }
+// isFallback=true means score came from tier5 text-regex and must NEVER trigger deletion.
 async function enrichSinglePost(url, urn) {
+  const NULL_RESULT = { score: null, method: 'null', isFallback: false };
   let tabId = null;
   try {
     const tab = await chrome.tabs.create({ url, active: false });
     tabId = tab.id;
 
-    // Wait for page load (status=complete) + settle time for React to render
+    // Wait for page load complete + 5s settle for React SDUI hydration
     await new Promise(r => {
       function fn(id, info) {
         if (id !== tabId || info.status !== 'complete') return;
         chrome.tabs.onUpdated.removeListener(fn);
-        setTimeout(r, 5000); // 5s settle (was 4s, increased for slower SDUI renders)
+        setTimeout(r, 5000);
       }
       chrome.tabs.onUpdated.addListener(fn);
-      setTimeout(r, 18000); // hard load fallback: if complete never fires, continue anyway
+      setTimeout(r, 18000); // hard fallback
     });
 
-    if (!tabId) return null;
+    if (!tabId) return NULL_RESULT;
 
     // Set URN and reset result flag BEFORE injecting enrich.js
     await chrome.scripting.executeScript({
       target: { tabId },
       func: (u) => {
         window.__nexoraEnrichUrn = u;
-        window.__nexoraEnrichResult = null; // reset from any previous run
-        window.__nexoraEnrichDone = false;  // allow re-injection
+        window.__nexoraEnrichResult = null;
+        window.__nexoraEnrichDone = false;
       },
       args: [urn]
     });
 
-    // Inject enrich.js â€” it will scan the DOM and write to window.__nexoraEnrichResult
+    // Inject enrich.js — it will use MutationObserver to wait for the social bar,
+    // then write {score, method, isFallback, done} to window.__nexoraEnrichResult.
     await chrome.scripting.executeScript({ target: { tabId }, files: ['enrich.js'] });
 
-    // Poll window.__nexoraEnrichResult via executeScript return value.
-    // This is race-condition-free: no message listener, no service-worker-sleep issues.
-    const POLL_MS = 1500;
-    const POLL_MAX = 25; // 25 * 1500ms = 37.5 seconds of polling
+    // Poll for result. enrich.js v8 can take up to 30s for MutationObserver wait
+    // + 3 tier attempts, so we poll up to 50 times (75 seconds total).
+    const POLL_MS  = 1500;
+    const POLL_MAX = 50; // 50 * 1500ms = 75s
     for (let i = 0; i < POLL_MAX; i++) {
       await sleep(POLL_MS);
       try {
@@ -579,23 +541,24 @@ async function enrichSinglePost(url, urn) {
         });
         const result = results?.[0]?.result;
         if (result && result.done === true) {
-          const s = result.score;
-          console.log('[BG-ENRICH] Poll[' + (i+1) + '] result: score=' + s + ' via=' + result.method + ' urn=' + urn);
-          return (typeof s === 'number') ? s : null;
+          const s   = result.score;
+          const m   = result.method   || 'unknown';
+          const fb  = result.isFallback || false;
+          console.log('[BG-ENRICH] Poll[' + (i+1) + '] score=' + s + ' via=' + m + (fb ? ' [FALLBACK]' : '') + ' urn=' + urn);
+          return { score: (typeof s === 'number') ? s : null, method: m, isFallback: fb };
         }
         if (i % 5 === 0) console.log('[BG-ENRICH] Poll[' + (i+1) + '] waiting... urn=' + urn);
       } catch (e) {
-        // Tab closed or navigated away â€” stop polling
-        console.warn('[BG-ENRICH] Poll error (tab closed?): ' + e.message + ' urn=' + urn);
-        return null;
+        console.warn('[BG-ENRICH] Poll error (tab closed?): ' + e.message);
+        return NULL_RESULT;
       }
     }
 
-    console.warn('[BG-ENRICH] Poll timeout after ' + (POLL_MAX * POLL_MS / 1000) + 's urn=' + urn);
-    return null;
+    console.warn('[BG-ENRICH] Poll timeout urn=' + urn);
+    return NULL_RESULT;
   } catch (e) {
     console.warn('[BG-ENRICH] enrichSinglePost error:', e.message);
-    return null;
+    return NULL_RESULT;
   } finally {
     if (tabId) chrome.tabs.remove(tabId).catch(() => {});
   }
@@ -622,7 +585,7 @@ async function deleteEnrichPost(urn) {
   } catch (e) { console.warn('[BG-ENRICH] delete error:', e.message); }
 }
 
-// â”€â”€ Auto-Enrich Session â€” retry logic, re-check-before-delete, uncertain sentinel â”€â”€
+// ── Auto-Enrich Session — retry logic, re-check-before-delete, uncertain sentinel ──
 async function startEnrichSession(posts, opts = {}) {
   if (E.running) { console.warn('[BG-ENRICH] Already running'); return; }
   E.running = true;
@@ -637,23 +600,23 @@ async function startEnrichSession(posts, opts = {}) {
   for (const post of posts) {
     if (!post.url || !post.urn) { failed++; continue; }
     try {
+      // ── Pass 1: Initial enrich ─────────────────────────────────────────────
+      let res1 = await enrichSinglePost(post.url, post.urn);
+      console.log('[BG-ENRICH] Pass1 score=' + res1.score + ' via=' + res1.method + (res1.isFallback ? ' [FALLBACK]' : '') + ' urn=' + post.urn);
 
-      // â”€â”€ Pass 1: Initial enrich â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      let score = await enrichSinglePost(post.url, post.urn);
-      console.log('[BG-ENRICH] Pass1 score=' + score + ' urn=' + post.urn);
-
-      // â”€â”€ Pass 2: Retry if null (page may not have loaded in time) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      if (score === null) {
-        console.log('[BG-ENRICH] Pass1 null â€” retrying in 6s... urn=' + post.urn);
+      // ── Pass 2: Retry if null ─────────────────────────────────────────────
+      if (res1.score === null) {
+        console.log('[BG-ENRICH] Pass1 null — retrying in 6s... urn=' + post.urn);
         await sleep(6000);
-        score = await enrichSinglePost(post.url, post.urn);
-        console.log('[BG-ENRICH] Pass2 score=' + score + ' urn=' + post.urn);
+        res1 = await enrichSinglePost(post.url, post.urn);
+        console.log('[BG-ENRICH] Pass2 score=' + res1.score + ' via=' + res1.method + (res1.isFallback ? ' [FALLBACK]' : '') + ' urn=' + post.urn);
       }
 
-      // â”€â”€ Score=0 safety: treat as uncertain, never delete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // score=0 almost always means a DOM detection failure, not genuine zero engagement.
-      if (score === 0) {
-        console.log('[BG-ENRICH] âڑ  score=0 â†’ uncertain sentinel (-1) â€” NOT deleting. urn=' + post.urn);
+      const { score, method, isFallback } = res1;
+
+      // ── Tier5 fallback guard: NEVER delete based on text-regex ─────────────
+      if (isFallback) {
+        console.log('[BG-ENRICH] ⚑  Score=' + score + ' via=' + method + ' [FALLBACK] — marking uncertain, NOT deleting. urn=' + post.urn);
         await pushEnrichScore(post.urn, -1, true);
         uncertain++;
         const done = enriched + nullCount + failed + uncertain;
@@ -663,12 +626,18 @@ async function startEnrichSession(posts, opts = {}) {
         continue;
       }
 
-      // â”€â”€ Both passes null â†’ uncertain sentinel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      if (score === null) {
-        console.log('[BG-ENRICH] âڑ  Both passes null â†’ uncertain sentinel (-1). urn=' + post.urn);
+      // ── score=0 safety: uncertain, never delete ────────────────────────────
+      if (score === 0) {
+        console.log('[BG-ENRICH] ⚑  score=0 → uncertain (-1) — NOT deleting. urn=' + post.urn);
         await pushEnrichScore(post.urn, -1, true);
         uncertain++;
-        nullCount++;
+        const done0 = enriched + nullCount + failed + uncertain;
+        broadcastStatus('Enriching ' + done0 + '/' + total + '...');
+        chrome.runtime.sendMessage({ action: 'ENRICH_PROGRESS', done: done0, total, enriched, deleted, failed, nullCount, uncertain }).catch(() => {});
+        if (done0 < total) await sleep(2500);
+        continue;
+      }
+
         const done = enriched + nullCount + failed + uncertain;
         broadcastStatus('Enriching ' + done + '/' + total + '...');
         chrome.runtime.sendMessage({ action: 'ENRICH_PROGRESS', done, total, enriched, deleted, failed, nullCount, uncertain }).catch(() => {});
