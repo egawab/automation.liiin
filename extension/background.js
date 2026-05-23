@@ -490,6 +490,32 @@ async function pushToAPI(posts, kw) {
   }
 }
 
+// ── Keyword Fetch ─────────────────────────────────────────────────────────────
+async function fetchKeywords() {
+  const url = S.dashboardUrl + '/api/extension/jobs';
+  let resp;
+  try {
+    resp = await fetch(url, { headers: { 'x-extension-token': S.userId } });
+  } catch (e) {
+    throw new Error('Failed to connect to Dashboard API (' + url + '). Make sure the Dashboard is running and you are connected.');
+  }
+
+  if (!resp.ok) throw new Error('Jobs API ' + resp.status);
+  const jobs = await resp.json();
+  if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
+  let kws = [];
+  if (jobs.settings?.searchConfigJson) {
+    try {
+      const cfg = JSON.parse(jobs.settings.searchConfigJson);
+      if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
+    } catch (_) {}
+  }
+  if (kws.length === 0 && Array.isArray(jobs.keywords))
+    kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
+  if (kws.length === 0) throw new Error('No keywords configured.');
+  return { keywords: [...new Set(kws)], settings: jobs.settings || {} };
+}
+
 // ── Auto-Enrich: open each post in background tab, inject enrich.js ──────────
 // Returns { score: number|null, method: string, isFallback: boolean }
 // isFallback=true means score came from tier5 text-regex and must NEVER trigger deletion.
