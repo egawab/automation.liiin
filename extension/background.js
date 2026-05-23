@@ -1,4 +1,4 @@
-// background.js â€” Nexora Headless Scraper + Auto-Enrich + Auto-Delete  v7.0
+﻿// background.js â€” Nexora Headless Scraper + Auto-Enrich + Auto-Delete  v7.0
 // FIXES: scroll mechanics, extraction volume, enrich retry, auto-delete safety, uncertain sentinel
 console.log('[BG] Nexora Headless Scraper v7 loaded');
 
@@ -348,89 +348,94 @@ async function fetchHtmlVariant(url, urlMap, label) {
   } catch (_) { return 0; }
 }
 
-// â”€â”€ Main fetch strategy per keyword â€” MAXIMUM VOLUME â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-async function fetchPostsForKeyword(keyword) {
-  const urlMap = new Map();
-  const enc = encodeURIComponent;
-  const slug = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const csrf = await getCsrfToken();
+// ── Main fetch strategy per keyword — ENGAGEMENT-PROBABILITY OPTIMIZED ────────
+// PHILOSOPHY: LinkedIn's 'relevance' sort is engagement-weighted. Posts ranked
+// by relevance within a time window (week/month/3mo) are posts that had time
+// to accumulate reactions AND were promoted by the algorithm — exactly the
+// highest-engagement candidates we want.
+//
+// We deliberately avoid:
+//   - sortBy=date_posted across the board (pulls fresh posts with 0 reactions)
+//   - f_TPR=r86400 (24h) — too fresh to have meaningful engagement
+//   - Assuming recency = quality
+  const base = 'https://www.linkedin.com/search/results/content/';
 
-  console.log('[BG] â•گâ•گâ•گ Starting MAX-VOLUME extraction for keyword: "' + keyword + '" â•گâ•گâ•گ');
+  console.log('[BG] === Engagement-optimized extraction for keyword: "' + keyword + '" ===');
 
-  // â”€â”€ PHASE 1: Parallel Voyager REST (relevance + date simultaneously) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- PHASE 1: Voyager REST -- relevance only (engagement-weighted by LinkedIn algo)
+  // date_posted sort removed -- it pulls fresh posts with 0 reactions.
   if (S.state === 'RUNNING') {
-    console.log('[BG] Phase 1: Voyager REST (both sort orders in parallel)...');
-    await Promise.all([
-      fetchViaVoyagerRest(keyword, csrf, urlMap, 'relevance'),
-      fetchViaVoyagerRest(keyword, csrf, urlMap, 'date_posted'),
-    ]);
+    console.log('[BG] Phase 1: Voyager REST relevance...');
+    await fetchViaVoyagerRest(keyword, csrf, urlMap, 'relevance');
     console.log('[BG] Phase 1 done: ' + urlMap.size + ' posts');
   }
 
-  // â”€â”€ PHASE 2: Voyager GraphQL (from HTML queryId) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- PHASE 2: Voyager GraphQL (from HTML queryId) --
   if (S.state === 'RUNNING') {
-    const baseHtml = await fetchHtml(`https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`);
+    const baseHtml = await fetchHtml(base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER');
     extractPostsFromText(baseHtml).forEach(p => { if (!urlMap.has(p.canonicalUrn)) urlMap.set(p.canonicalUrn, p); });
     const qids = [...new Set([
-      ...[...baseHtml.matchAll(/[\"']?queryId[\"']?\s*:\s*[\"']([a-f0-9]{32})[\"']/gi)].map(m => m[1]),
+      ...[...baseHtml.matchAll(/["']?queryId["']?\s*:\s*["']([a-f0-9]{32})["']/gi)].map(m => m[1]),
       ...(baseHtml.match(/voyagerSearchDashClusters\.([a-f0-9]{32})/i) ? [baseHtml.match(/voyagerSearchDashClusters\.([a-f0-9]{32})/i)[1]] : []),
     ])];
-    if (qids.length > 0) {
-      for (const qid of qids) {
-        if (S.state !== 'RUNNING') break;
-        await fetchViaVoyager(keyword, qid, csrf, urlMap);
-      }
+    for (const qid of qids) {
+      if (S.state !== 'RUNNING') break;
+      await fetchViaVoyager(keyword, qid, csrf, urlMap);
     }
     console.log('[BG] Phase 2 done: ' + urlMap.size + ' posts');
   }
 
-  // â”€â”€ PHASE 3: Dual parallel scroll tabs (date + relevance simultaneously) â”€â”€â”€â”€â”€â”€
+  // -- PHASE 3: Two relevance scroll tabs with time-window filtering --
+  // Both use RELEVANCE sort. Week filter = 1-7 days old (time for engagement).
+  // Month filter = 1-30 days old (deeper engagement history).
+  // date_posted scroll tab REMOVED -- it only finds 0-10 minute old posts.
   if (S.state === 'RUNNING') {
-    console.log('[BG] Phase 3: Dual scroll tabs (date + relevance in parallel)...');
+    console.log('[BG] Phase 3: Dual relevance scroll tabs (week + month windows)...');
+    const weekUrl  = base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER&f_TPR=r604800';
+    const monthUrl = base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER&f_TPR=r2592000';
     await Promise.all([
-      fetchViaScrollTab(keyword, urlMap, 'date_posted'),
-      fetchViaScrollTab(keyword, urlMap, 'relevance'),
+      fetchViaScrollTab(keyword, urlMap, 'relevance', weekUrl),
+      fetchViaScrollTab(keyword, urlMap, 'relevance', monthUrl),
     ]);
     console.log('[BG] Phase 3 done: ' + urlMap.size + ' posts');
   }
 
-  // â”€â”€ PHASE 4: Aggressive HTML variant sweep â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- PHASE 4: Relevance-first HTML variant sweep --
+  // All variants use relevance sort (or default = relevance).
+  // 24h range removed. Week/month/3mo/6mo give posts with real engagement.
   if (S.state === 'RUNNING') {
-    console.log('[BG] Phase 4: HTML variant sweep...');
-    const DATE_RANGES = [
-      'r86400',    // past 24h
-      'r604800',   // past week
-      'r2592000',  // past month
-      'r7776000',  // past 3 months
-    ];
+    console.log('[BG] Phase 4: Engagement-optimized HTML variant sweep...');
     const variants = [
-      // Date-sorted + date filters
-      ...DATE_RANGES.map(r => ({ url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&sortBy=date_posted&f_TPR=${r}`, label: 'date+' + r })),
-      // Relevance + date filters
-      ...DATE_RANGES.map(r => ({ url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&f_TPR=${r}`, label: 'rel+' + r })),
-      // Hashtag variants
-      { url: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`, label: 'hashtag' },
-      { url: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&sortBy=date_posted`, label: 'hashtag+date' },
-      { url: `https://www.linkedin.com/search/results/content/?keywords=%23${enc(keyword)}&f_TPR=r604800`, label: 'hashtag+week' },
-      { url: `https://www.linkedin.com/feed/hashtag/${slug}/`, label: 'hashtag-feed' },
-      // People writing about topic
-      { url: `https://www.linkedin.com/search/results/people/?keywords=${enc(keyword)}&origin=GLOBAL_SEARCH_HEADER`, label: 'people' },
-      // Quoted exact phrase
-      { url: `https://www.linkedin.com/search/results/content/?keywords=${enc('"' + keyword + '"')}&sortBy=date_posted`, label: 'quoted' },
-      // With common suffixes for broader reach
-      { url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword + ' tips')}&sortBy=date_posted`, label: 'tips' },
-      { url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword + ' strategy')}&sortBy=date_posted`, label: 'strategy' },
-      { url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword + ' 2024')}&sortBy=date_posted`, label: '2024' },
-      { url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword + ' 2025')}&sortBy=date_posted`, label: '2025' },
-      // Language variants (Arabic + English)
-      { url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&sortBy=date_posted&f_C=&f_CR=101282230`, label: 'uae' },
-      { url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&sortBy=date_posted&f_CR=101165590`, label: 'sa' },
-      // Pagination pages 2-5 (each page = 10 more posts)
-      ...[2,3,4,5].map(p => ({ url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&start=${(p-1)*10}`, label: 'page' + p })),
-      ...[2,3,4,5].map(p => ({ url: `https://www.linkedin.com/search/results/content/?keywords=${enc(keyword)}&sortBy=date_posted&start=${(p-1)*10}`, label: 'date-page' + p })),
+      // Relevance + time windows (engagement-probable)
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r604800',   label: 'rel-week'  },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r2592000',  label: 'rel-month' },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r7776000',  label: 'rel-3mo'   },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r15552000', label: 'rel-6mo'   },
+      // Deep relevance pagination pages 2-10 (engagement-sorted by LinkedIn)
+      ...[2,3,4,5,6,7,8,9,10].map(p => ({
+        url: base + '?keywords=' + enc(keyword) + '&start=' + ((p-1)*10),
+        label: 'page' + p,
+      })),
+      // Hashtag variants (relevance, not date)
+      { url: base + '?keywords=%23' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER', label: 'hashtag'       },
+      { url: base + '?keywords=%23' + enc(keyword) + '&f_TPR=r604800',               label: 'hashtag-week'  },
+      { url: base + '?keywords=%23' + enc(keyword) + '&f_TPR=r2592000',              label: 'hashtag-month' },
+      { url: 'https://www.linkedin.com/feed/hashtag/' + slug + '/',                  label: 'hashtag-feed'  },
+      // Quoted exact phrase (relevance)
+      { url: base + '?keywords=' + enc('"' + keyword + '"'),                          label: 'quoted'        },
+      { url: base + '?keywords=' + enc('"' + keyword + '"') + '&f_TPR=r2592000',     label: 'quoted-month'  },
+      // Content suffix variants -- relevance sort (no date_posted)
+      { url: base + '?keywords=' + enc(keyword + ' tips'),     label: 'tips'     },
+      { url: base + '?keywords=' + enc(keyword + ' strategy'), label: 'strategy' },
+      { url: base + '?keywords=' + enc(keyword + ' how to'),   label: 'howto'    },
+      { url: base + '?keywords=' + enc(keyword + ' growth'),   label: 'growth'   },
+      { url: base + '?keywords=' + enc(keyword + ' lessons'),  label: 'lessons'  },
+      // Region -- relevance + month window
+      { url: base + '?keywords=' + enc(keyword) + '&f_CR=101282230',                 label: 'uae'       },
+      { url: base + '?keywords=' + enc(keyword) + '&f_CR=101165590',                 label: 'sa'        },
+      { url: base + '?keywords=' + enc(keyword) + '&f_CR=101282230&f_TPR=r2592000',  label: 'uae-month' },
+      { url: base + '?keywords=' + enc(keyword) + '&f_CR=101165590&f_TPR=r2592000',  label: 'sa-month'  },
     ];
-
-    // Batch in groups of 3 to avoid hammering LinkedIn
     for (let i = 0; i < variants.length; i += 3) {
       if (S.state !== 'RUNNING') break;
       const batch = variants.slice(i, i + 3);
@@ -440,17 +445,17 @@ async function fetchPostsForKeyword(keyword) {
     console.log('[BG] Phase 4 done: ' + urlMap.size + ' posts');
   }
 
-  // â”€â”€ PHASE 5: Second scroll pass on date_posted (catches newly loaded content) â”€
-  // Run a second pass on the scroll tab after all other strategies have run.
-  // LinkedIn may have more content indexed now that we've touched its search APIs.
-  if (S.state === 'RUNNING' && urlMap.size < 100) {
-    console.log('[BG] Phase 5: Second scroll pass (volume=' + urlMap.size + ' < 100, boosting)...');
-    await fetchViaScrollTab(keyword, urlMap, 'date_posted');
+  // -- PHASE 5: Relevance+month scroll boost (if still low volume) --
+  // Month filter ensures scroll surfaces posts 1-30 days old ranked by engagement.
+  if (S.state === 'RUNNING' && urlMap.size < 80) {
+    console.log('[BG] Phase 5: Engagement-boost scroll (volume=' + urlMap.size + ' < 80)...');
+    const boostUrl = base + '?keywords=' + enc(keyword) + '&f_TPR=r2592000';
+    await fetchViaScrollTab(keyword, urlMap, 'relevance', boostUrl);
     console.log('[BG] Phase 5 done: ' + urlMap.size + ' posts');
   }
 
   const posts = Array.from(urlMap.values());
-  console.log('[BG] â•گâ•گâ•گ kw="' + keyword + '" TOTAL=' + posts.length + ' posts extracted â•گâ•گâ•گ');
+  console.log('[BG] === kw="' + keyword + '" TOTAL=' + posts.length + ' posts extracted ===');
   return posts;
 }
 
