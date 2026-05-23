@@ -1,4 +1,4 @@
-﻿// background.js â€” Nexora Headless Scraper + Auto-Enrich + Auto-Delete  v7.0
+// background.js â€” Nexora Headless Scraper + Auto-Enrich + Auto-Delete  v7.0
 // FIXES: scroll mechanics, extraction volume, enrich retry, auto-delete safety, uncertain sentinel
 console.log('[BG] Nexora Headless Scraper v7 loaded');
 
@@ -358,6 +358,11 @@ async function fetchHtmlVariant(url, urlMap, label) {
 //   - sortBy=date_posted across the board (pulls fresh posts with 0 reactions)
 //   - f_TPR=r86400 (24h) — too fresh to have meaningful engagement
 //   - Assuming recency = quality
+async function fetchPostsForKeyword(keyword) {
+  const urlMap = new Map();
+  const enc = encodeURIComponent;
+  const slug = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const csrf = await getCsrfToken();
   const base = 'https://www.linkedin.com/search/results/content/';
 
   console.log('[BG] === Engagement-optimized extraction for keyword: "' + keyword + '" ===');
