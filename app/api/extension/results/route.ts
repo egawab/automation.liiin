@@ -31,11 +31,11 @@ function normalizeUrn(raw: string): string | null {
 
 function normalizeUrl(u: string): string {
   if (!u) return '';
+  // Always use /feed/update/urn:li:{type}:{id} for all URN types.
+  // CRITICAL FIX: /posts/{number} (bare ID, no username) is NOT a valid LinkedIn URL
+  // and causes enrich to open a 404 page. background.js already documented this same fix.
   const m1 = u.match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
   if (m1) {
-    if (m1[1] === 'ugcPost') {
-      return `https://www.linkedin.com/posts/${m1[2]}`;
-    }
     return `https://www.linkedin.com/feed/update/urn:li:${m1[1]}:${m1[2]}`;
   }
   const m2 = u.match(/activity-(\d{10,25})/i);

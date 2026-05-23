@@ -59,7 +59,33 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    return setCorsHeaders(NextResponse.json(posts));
+    // ── Repair broken postUrls from the normalizeUrl bug ─────────────────────
+    // Before the fix, ugcPost URLs were stored as /posts/{number} (invalid LinkedIn URL).
+    // Remap them here on-the-fly so enrich works immediately without a DB migration.
+    function repairUrl(postUrl: string | null, canonicalUrn: string | null): string {
+      if (!postUrl) {
+        // Build from URN if postUrl missing
+        const m = (canonicalUrn || '').match(/urn:li:(activity|ugcPost|share):(\d{10,25})/);
+        if (m) return `https://www.linkedin.com/feed/update/urn:li:${m[1]}:${m[2]}`;
+        return '';
+      }
+      // Detect /posts/{bare_number} pattern (no username = broken ugcPost URL)
+      const brokenMatch = postUrl.match(/\/posts\/(\d{10,25})\s*$/);
+      if (brokenMatch) {
+        // Try to reconstruct from canonicalUrn first
+        const urnMatch = (canonicalUrn || '').match(/urn:li:(ugcPost|share):(\d{10,25})/);
+        if (urnMatch) return `https://www.linkedin.com/feed/update/urn:li:${urnMatch[1]}:${urnMatch[2]}`;
+        return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${brokenMatch[1]}`;
+      }
+      return postUrl;
+    }
+
+    const repairedPosts = posts.map(p => ({
+      ...p,
+      postUrl: repairUrl(p.postUrl, p.canonicalUrn),
+    })).filter(p => p.postUrl); // only return posts with a usable URL
+
+    return setCorsHeaders(NextResponse.json(repairedPosts));
   } catch (error: any) {
     console.error('[API/extension/posts] Error:', error.message);
     return setCorsHeaders(NextResponse.json({ error: error.message }, { status: 500 }));
