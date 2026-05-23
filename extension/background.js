@@ -637,7 +637,12 @@ async function startEnrichSession(posts, opts = {}) {
         if (done0 < total) await sleep(2500);
         continue;
       }
-
+      // ── Both passes null → uncertain sentinel ──────────────────────────────
+      if (score === null) {
+        console.log('[BG-ENRICH] ⚑  Both passes null → uncertain (-1). urn=' + post.urn);
+        await pushEnrichScore(post.urn, -1, true);
+        uncertain++;
+        nullCount++;
         const done = enriched + nullCount + failed + uncertain;
         broadcastStatus('Enriching ' + done + '/' + total + '...');
         chrome.runtime.sendMessage({ action: 'ENRICH_PROGRESS', done, total, enriched, deleted, failed, nullCount, uncertain }).catch(() => {});
@@ -655,23 +660,20 @@ async function startEnrichSession(posts, opts = {}) {
       // RE-CHECK BEFORE DELETE: run a second independent enrich pass to confirm
       // the score before permanently removing the post from the database.
       if (autoDelete && score >= 1 && score < deleteThreshold) {
-        console.log('[BG-ENRICH] Score ' + score + ' < threshold ' + deleteThreshold + ' â€” running re-check before delete...');
+        console.log('[BG-ENRICH] Score ' + score + ' < threshold ' + deleteThreshold + ' — running re-check before delete...');
         await sleep(4000); // give the tab pool time to settle
-        const confirmScore = await enrichSinglePost(post.url, post.urn);
-        console.log('[BG-ENRICH] Re-check score=' + confirmScore + ' urn=' + post.urn);
+        const res2 = await enrichSinglePost(post.url, post.urn);
+        console.log('[BG-ENRICH] Re-check score=' + res2.score + ' via=' + res2.method + (res2.isFallback ? ' [FALLBACK]' : '') + ' urn=' + post.urn);
 
-        if (confirmScore === null || confirmScore === 0) {
-          // Re-check failed or returned 0 â€” mark uncertain, do NOT delete
-          console.log('[BG-ENRICH] âڑ  Re-check null/0 â€” cannot confirm deletion. Marking uncertain. urn=' + post.urn);
+        if (res2.score === null || res2.score === 0 || res2.isFallback) {
+          console.log('[BG-ENRICH] ⚑  Re-check null/0/fallback — cannot confirm deletion. Marking uncertain. urn=' + post.urn);
           await pushEnrichScore(post.urn, -1, true);
           uncertain++;
-        } else if (confirmScore >= deleteThreshold) {
-          // Re-check returned a HIGHER score â€” original was wrong. Keep the post.
-          console.log('[BG-ENRICH] âœ… Re-check score=' + confirmScore + ' >= threshold â€” keeping post (original score was wrong). urn=' + post.urn);
-          await pushEnrichScore(post.urn, confirmScore, true);
+        } else if (res2.score >= deleteThreshold) {
+          console.log('[BG-ENRICH] ✅ Re-check score=' + res2.score + ' >= threshold — keeping post. urn=' + post.urn);
+          await pushEnrichScore(post.urn, res2.score, true);
         } else {
-          // Both passes confirm score < threshold â€” safe to delete
-          console.log('[BG-ENRICH] ًں—‘ Re-check confirmed score=' + confirmScore + ' < ' + deleteThreshold + ' â€” deleting. urn=' + post.urn);
+          console.log('[BG-ENRICH] 🗑 Re-check confirmed score=' + res2.score + ' < ' + deleteThreshold + ' — deleting. urn=' + post.urn);
           await deleteEnrichPost(post.urn);
           deleted++;
         }
