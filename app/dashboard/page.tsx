@@ -781,11 +781,11 @@ export default function Dashboard() {
                        <Sparkles className="w-6 h-6 text-apple-blue" /> Install Extension
                     </h4>
                     <p className="text-secondary mb-8 text-sm leading-relaxed font-medium">
-                      Download the Nexora Industrial-Strength extension and load it into your Chrome browser to begin automated extraction.
+                      Download the Nexora Industrial-Strength extension <strong className="text-primary">v8.4</strong> and load it into Chrome (Load unpacked) to begin automated extraction.
                     </p>
-                    <a href="/nexora-extension.zip" download="nexora-extension" className="w-full">
+                    <a href="/nexora-extension.zip?v=8.4" download="nexora-extension.zip" className="w-full">
                       <Button variant="primary" size="lg" className="w-full shadow-xl shadow-apple-blue/20 py-6 text-lg">
-                        Download Extension (.ZIP)
+                        Download Extension v8.4 (.ZIP)
                       </Button>
                     </a>
                   </div>
@@ -1236,8 +1236,8 @@ export default function Dashboard() {
                     Install Extension
                   </h4>
                   <p className="text-micro text-secondary mb-3">Download and install the Chrome extension.</p>
-                  <a href="/nexora-extension.zip" download="nexora-extension" className="inline-flex items-center gap-2 px-3 py-2 bg-surface-hover hover:bg-surface-elevated text-primary rounded-md text-micro-bold transition-all">
-                    Download Extension ZIP
+                  <a href="/nexora-extension.zip?v=8.4" download="nexora-extension.zip" className="inline-flex items-center gap-2 px-3 py-2 bg-surface-hover hover:bg-surface-elevated text-primary rounded-md text-micro-bold transition-all">
+                    Download Extension ZIP (v8.4)
                   </a>
                 </div>
 

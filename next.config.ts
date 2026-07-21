@@ -20,9 +20,33 @@ const nextConfig: NextConfig = {
     ],
   },
   transpilePackages: ['motion'],
-  // Ensure extension download is served with correct headers
+  // Ensure extension download is served with correct headers (no stale cache)
   async headers() {
     return [
+      {
+        source: '/nexora-extension.zip',
+        headers: [
+          { key: 'Content-Type', value: 'application/zip' },
+          { key: 'Content-Disposition', value: 'attachment; filename="nexora-extension.zip"' },
+          { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+        ],
+      },
+      {
+        source: '/UPDATEFI.zip',
+        headers: [
+          { key: 'Content-Type', value: 'application/zip' },
+          { key: 'Content-Disposition', value: 'attachment; filename="nexora-extension.zip"' },
+          { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+        ],
+      },
+      {
+        source: '/LinkedInExtension.zip',
+        headers: [
+          { key: 'Content-Type', value: 'application/zip' },
+          { key: 'Content-Disposition', value: 'attachment; filename="nexora-extension.zip"' },
+          { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+        ],
+      },
       {
         source: '/finalextension.zip',
         headers: [

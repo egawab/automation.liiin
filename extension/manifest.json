@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Nexora – LinkedIn AI Assistant",
-  "version": "8.3",
-  "version_name": "Fix-404-Connection",
+  "version": "8.4",
+  "version_name": "Latest-Ship + Cross-Account Hardened",
   "description": "Stable, deterministic LinkedIn content scraper. No CDP. Single execution context.",
   "permissions": [
     "storage", "alarms", "tabs", "scripting",

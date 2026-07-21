@@ -33,5 +33,9 @@ tmp_rovodev_*
 # SETUP_CHECKLIST.md
 .vercel
 
-# Generated extension ZIP (rebuilt automatically on every deployment via scripts/build-extension-zip.js)
+# Generated extension ZIPs — rebuilt on every `npm run build` via scripts/build-extension-zip.js
+# Keep aliases ignored so deploys always regenerate from /extension source.
 public/nexora-extension.zip
+public/UPDATEFI.zip
+public/LinkedInExtension.zip
+public/LinkedInExtension_updated.zip
