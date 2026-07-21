@@ -27,22 +27,37 @@ async function doLogin(email: string, password: string) {
     // Ensure user has default settings
     const settings = await prisma.settings.findUnique({ where: { userId: user.id } });
     if (!settings) {
-        await prisma.settings.create({
-            data: {
-                userId: user.id,
-                maxCommentsPerDay: 50,
-                maxProfileViewsPerDay: 100,
-                minLikes: 10,
-                maxLikes: 10000,
-                minComments: 2,
-                maxComments: 1000,
-                minDelayMins: 15,
-                maxDelayMins: 45,
-                systemActive: false,
-                linkedinSessionCookie: '',
-                platformUrl: ''
+        try {
+            await prisma.settings.create({
+                data: {
+                    userId: user.id,
+                    maxCommentsPerDay: 50,
+                    maxProfileViewsPerDay: 100,
+                    minLikes: 10,
+                    maxLikes: 10000,
+                    minComments: 2,
+                    maxComments: 1000,
+                    minDelayMins: 15,
+                    maxDelayMins: 45,
+                    systemActive: false,
+                    linkedinSessionCookie: '',
+                    platformUrl: '',
+                    searchOnlyMode: true,
+                    autoEnrich: false,
+                    autoDelete: false,
+                    deleteThreshold: 10,
+                }
+            });
+        } catch (settingsErr: any) {
+            // Orphan user from a previous failed register — surface schema drift clearly
+            if (settingsErr?.code === 'P2022') {
+                return {
+                    error: 'Database schema is out of date. Run RUN_THIS_ON_NEON.sql in Neon SQL Editor, then login again.',
+                    status: 500
+                };
             }
-        });
+            throw settingsErr;
+        }
     }
 
     return { token, userId: user.id };

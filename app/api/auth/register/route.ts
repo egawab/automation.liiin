@@ -37,33 +37,41 @@ export async function POST(req: Request) {
         const trialLimit = new Date();
         trialLimit.setDate(trialLimit.getDate() + 30);
 
-        // Create user with default settings OR instantly expired if abusing
-        const user = await prisma.user.create({
-            data: {
-                email,
-                password: hashedPassword,
-                deviceId: deviceId && deviceId.length > 5 ? deviceId : null,
-                subscriptionStatus: isTrialVoid ? "EXPIRED" : "TRIAL",
-                trialEndsAt: isTrialVoid ? new Date(0) : trialLimit
-            }
-        });
+        // Create user + settings atomically so a schema mismatch never leaves
+        // an orphan "User already exists" account without Settings.
+        const user = await prisma.$transaction(async (tx) => {
+            const created = await tx.user.create({
+                data: {
+                    email,
+                    password: hashedPassword,
+                    deviceId: deviceId && deviceId.length > 5 ? deviceId : null,
+                    subscriptionStatus: isTrialVoid ? "EXPIRED" : "TRIAL",
+                    trialEndsAt: isTrialVoid ? new Date(0) : trialLimit
+                }
+            });
 
-        // Create default settings for new user
-        await prisma.settings.create({
-            data: {
-                userId: user.id,
-                maxCommentsPerDay: 50,
-                maxProfileViewsPerDay: 100,
-                minLikes: 10,
-                maxLikes: 10000,
-                minComments: 2,
-                maxComments: 1000,
-                minDelayMins: 15,
-                maxDelayMins: 45,
-                systemActive: false,
-                linkedinSessionCookie: '',
-                platformUrl: '' // Auto-detected from environment
-            }
+            await tx.settings.create({
+                data: {
+                    userId: created.id,
+                    maxCommentsPerDay: 50,
+                    maxProfileViewsPerDay: 100,
+                    minLikes: 10,
+                    maxLikes: 10000,
+                    minComments: 2,
+                    maxComments: 1000,
+                    minDelayMins: 15,
+                    maxDelayMins: 45,
+                    systemActive: false,
+                    linkedinSessionCookie: '',
+                    platformUrl: '',
+                    searchOnlyMode: true,
+                    autoEnrich: false,
+                    autoDelete: false,
+                    deleteThreshold: 10,
+                }
+            });
+
+            return created;
         });
 
         // Auto-login: Create session token
@@ -92,6 +100,14 @@ export async function POST(req: Request) {
 
         if (error.code === 'P2002') {
             return NextResponse.json({ error: 'User already exists', details: errorDetails }, { status: 409 });
+        }
+
+        // Schema drift (missing columns on Neon) — give an actionable message
+        if (error.code === 'P2022') {
+            return NextResponse.json({
+                error: 'Database schema is out of date. Run RUN_THIS_ON_NEON.sql in your Neon SQL Editor, then try again.',
+                details: errorDetails
+            }, { status: 500 });
         }
         
         return NextResponse.json({ 
