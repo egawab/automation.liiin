@@ -1,6 +1,22 @@
-// dashboard-bridge.js v6.4 — auto-retry + SW wake-up
+// dashboard-bridge.js v6.5 — auto-retry + SW wake-up + dashboard-only gate
 (function () {
   if (window.__NexoraBridgeV6) return;
+
+  // Don't run on LinkedIn / random sites — only on the Nexora dashboard origin.
+  // Manifest matches are wide so custom domains work; this gate keeps it cheap.
+  function isLikelyDashboard() {
+    try {
+      if (document.getElementById('nexora-connect-data')) return true;
+      if (/(?:^|;\s*)auth_token=/.test(document.cookie || '')) return true;
+      const h = location.hostname || '';
+      if (h === 'localhost' || h === '127.0.0.1') return true;
+      if (/\.vercel\.app$/i.test(h)) return true;
+      if (/nexora|clonelink/i.test(h)) return true;
+    } catch (_) {}
+    return false;
+  }
+  if (!isLikelyDashboard()) return;
+
   window.__NexoraBridgeV6 = true;
 
   function canSend() {
@@ -85,19 +101,40 @@
 
     if (action === 'START_ENGINE') {
       const auth = extractAuth();
-      console.log('[NexoraBridge] START_ENGINE');
+      console.log('[NexoraBridge] START_ENGINE auth=', { url: auth.dashboardUrl, userId: !!auth.userId });
       wakeUpSW(() => {
-        sendToBackground(
-          {
-            action: 'START_ENGINE',
-            dashboardUrl:    auth.dashboardUrl,
-            userId:          auth.userId,
-          },
-          (resp) => {
-            console.log('[NexoraBridge] START_ENGINE reply:', resp);
-            notifyDashboard('ENGINE_STARTED_ACK', { keyword: 'starting' });
+        // Prefer page auth; fall back to whatever the popup saved in chrome.storage
+        const sendStart = (dashboardUrl, userId) => {
+          if (!dashboardUrl || !userId) {
+            const msg = 'Not connected to Nexora. Open the extension popup → Auto-Connect on the Dashboard, then press START again.';
+            console.error('[NexoraBridge] ' + msg);
+            notifyDashboard('ENGINE_ERROR', { error: msg });
+            return;
           }
-        );
+          sendToBackground(
+            { action: 'START_ENGINE', dashboardUrl, userId },
+            (resp) => {
+              console.log('[NexoraBridge] START_ENGINE reply:', resp);
+              if (resp && resp.ok === false) {
+                notifyDashboard('ENGINE_ERROR', { error: resp.reason || 'Start failed' });
+                return;
+              }
+              notifyDashboard('ENGINE_STARTED_ACK', { keyword: 'starting' });
+            }
+          );
+        };
+
+        if (auth.dashboardUrl && auth.userId) {
+          sendStart(auth.dashboardUrl, auth.userId);
+          return;
+        }
+
+        chrome.storage.sync.get(['dashboardUrl', 'userId'], (cfg) => {
+          sendStart(
+            auth.dashboardUrl || cfg.dashboardUrl,
+            auth.userId || cfg.userId
+          );
+        });
       });
     }
 

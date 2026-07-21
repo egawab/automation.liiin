@@ -26,7 +26,7 @@ export async function GET(req: Request) {
     });
 
     if (!user) {
-      return setCorsHeaders(NextResponse.json({ error: 'User not found' }, { status: 404 }));
+      return setCorsHeaders(NextResponse.json({ error: 'User not found', code: 'USER_NOT_FOUND' }, { status: 404 }));
     }
 
     const extDeviceId = req.headers.get('x-device-id');

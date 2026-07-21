@@ -155,6 +155,16 @@ export default function Dashboard() {
       } else if (event.data.action === 'ENGINE_STARTED_ACK') {
         console.log('🚀 Extension acknowledged START command');
         fetchData();
+      } else if (event.data.action === 'ENGINE_ERROR') {
+        console.error('❌ Extension error:', event.data.error);
+        alert('Extension error:\n\n' + (event.data.error || 'Unknown error'));
+        // Roll UI back so Start isn't stuck looking Active when engine never ran
+        setSystemActive(false);
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ systemActive: false })
+        }).catch(() => {});
       }
     };
     

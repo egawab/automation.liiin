@@ -11,17 +11,69 @@ const S = {
   userId: '',
   keywords: [],
   kwIndex: 0,
+  lastError: '',
+  lastMessage: '',
 };
 
 const E = { running: false };
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+/** Strip paths/trailing slashes so we never hit /dashboard/api/... (classic 404). */
+function normalizeDashboardUrl(raw) {
+  if (!raw) return '';
+  let s = String(raw).trim();
+  if (!s) return '';
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  try {
+    const u = new URL(s);
+    // Always origin only — never keep /dashboard or other paths.
+    return u.origin;
+  } catch (_) {
+    return s.replace(/\/+$/, '').replace(/\/(dashboard|login|register|admin).*$/i, '');
+  }
+}
+
+function apiUrl(path) {
+  const base = normalizeDashboardUrl(S.dashboardUrl);
+  const p = path.startsWith('/') ? path : '/' + path;
+  return base + p;
+}
+
+// ── Checkpoint / auth-wall detector — account & language agnostic ───────────
+// LinkedIn shows a challenge/login/"unusual activity" interstitial instead of
+// real results for some accounts (new accounts, flagged accounts, different
+// regions/UI languages). If we don't recognize this, the scraper silently
+// "finds nothing" on that account and looks broken/inconsistent. Matching a
+// wide multi-language marker set makes behaviour the same on every account.
+const CHECKPOINT_MARKERS = [
+  'checkpoint/challenge', 'checkpoint/rc', '/authwall', 'action=authwall', 'uas/login',
+  'Sign in to LinkedIn', 'Join LinkedIn today', "we've detected unusual", 'unusual activity',
+  'security check', 'verify you are a human', "Let's do a quick security check",
+  'تسجيل الدخول إلى', 'نشاط غير عادي', 'تحقق أمني',
+  'Se connecter à LinkedIn', 'activité inhabituelle',
+  'Anmelden bei LinkedIn', 'ungewöhnliche Aktivität',
+  'Inicia sesión en LinkedIn', 'actividad inusual',
+  'Accedi a LinkedIn', 'attività inusuale',
+  'Entrar no LinkedIn', 'atividade incomum',
+  "LinkedIn'de oturum aç", 'olağan dışı etkinlik',
+  '登录领英', '异常活动', 'LinkedInにログイン', '不審なアクティビティ',
+  '로그인', '비정상적인 활동', 'Войти в LinkedIn', 'необычная активность',
+];
+function isCheckpointText(text) {
+  if (!text) return false;
+  const sample = text.length > 20000 ? text.slice(0, 20000) : text;
+  return CHECKPOINT_MARKERS.some(m => sample.includes(m));
+}
+
 // â”€â”€ Keep-alive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 chrome.alarms.create('nexora_hb', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener(alarm => {
-  if (alarm.name === 'nexora_hb' && S.state === 'RUNNING')
-    console.log('[BG] hb state=RUNNING kw=' + (S.keywords[S.kwIndex] || ''));
+  if (alarm.name !== 'nexora_hb') return;
+  if (S.state === 'RUNNING' || E.running) {
+    console.log('[BG] hb state=' + S.state + ' kw=' + (S.keywords[S.kwIndex] || '') + ' saved=' + S.totalSaved);
+    chrome.storage.local.set({ nexoraHbAt: Date.now(), nexoraState: S.state }).catch(() => {});
+  }
 });
 
 // â”€â”€ URN helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -77,7 +129,11 @@ async function fetchHtml(url) {
       }
     });
     if (!res.ok) { console.warn('[BG] HTML ' + res.status + ' ' + url); return ''; }
-    return res.text();
+    const text = await res.text();
+    if (isCheckpointText(text)) {
+      console.warn('[BG] HTML fetch hit a checkpoint/auth-wall page for this account — ' + url);
+    }
+    return text;
   } catch (e) {
     console.warn('[BG] fetchHtml error:', e.message);
     return '';
@@ -86,31 +142,48 @@ async function fetchHtml(url) {
 
 // â”€â”€ Voyager GraphQL paginator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
-  const MAX_PAGES = 20; // up to 200 posts
+  const MAX_PAGES = 60; // raised cap — no artificial ceiling on volume, just a safety bound
   let success = false;
+  let emptyStreak = 0;
   for (let start = 0; start < MAX_PAGES * 10; start += 10) {
     if (S.state !== 'RUNNING') break;
     const apiUrl = `https://www.linkedin.com/voyager/api/graphql?variables=(count:10,keywords:${encodeURIComponent(keyword)},origin:GLOBAL_SEARCH_HEADER,q:blended,start:${start})&queryId=${queryId}`;
-    try {
-      const res = await fetch(apiUrl, {
-        headers: {
-          'accept': 'application/vnd.linkedin.normalized+json+2.1',
-          'csrf-token': csrf || '',
-          'x-restli-protocol-version': '2.0.0',
-          'x-li-lang': 'en_US',
+    let text = null;
+    for (let retry = 0; retry < 3; retry++) {
+      try {
+        const res = await fetch(apiUrl, {
+          headers: {
+            'accept': 'application/vnd.linkedin.normalized+json+2.1',
+            'csrf-token': csrf || '',
+            'x-restli-protocol-version': '2.0.0',
+            'x-li-lang': 'en_US',
+          }
+        });
+        if (res.ok) { text = await res.text(); break; }
+        if (res.status === 401 || res.status === 403) {
+          console.warn('[BG] Voyager HTTP ' + res.status + ' start=' + start + ' — auth/csrf rejected on this account, stopping this channel.');
+          break;
         }
-      });
-      if (!res.ok) { console.warn('[BG] Voyager HTTP ' + res.status + ' start=' + start); break; }
-      const text = await res.text();
-      const posts = extractPostsFromText(text);
-      let added = 0;
-      posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
-      console.log('[BG] Voyager GraphQL start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
-      if (added === 0) break;
+        // Transient (429/5xx/999 etc.) — retry with backoff instead of giving up on the account.
+        console.warn('[BG] Voyager HTTP ' + res.status + ' start=' + start + ' — retry ' + (retry + 1) + '/3');
+        await sleep(2000 * (retry + 1));
+      } catch (e) {
+        console.warn('[BG] Voyager GraphQL error (retry ' + (retry + 1) + '/3):', e.message);
+        await sleep(2000 * (retry + 1));
+      }
+    }
+    if (text === null) break;
+    if (isCheckpointText(text)) { console.warn('[BG] Voyager GraphQL checkpoint page — stopping this channel for kw="' + keyword + '"'); break; }
+    const posts = extractPostsFromText(text);
+    let added = 0;
+    posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
+    console.log('[BG] Voyager GraphQL start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
+    if (added === 0) {
+      emptyStreak++;
+      if (emptyStreak >= 2) break; // two consecutive empty pages = genuinely exhausted
+    } else {
+      emptyStreak = 0;
       success = true;
-    } catch (e) {
-      console.warn('[BG] Voyager GraphQL error:', e.message);
-      break;
     }
     await sleep(1200);
   }
@@ -120,32 +193,48 @@ async function fetchViaVoyager(keyword, queryId, csrf, urlMap) {
 // â”€â”€ Voyager REST search (no queryId needed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function fetchViaVoyagerRest(keyword, csrf, urlMap, sortBy) {
   const sort = sortBy || 'relevance';
-  const MAX_PAGES = 15;
+  const MAX_PAGES = 40; // raised cap — let it exhaust naturally instead of stopping early
   let success = false;
+  let emptyStreak = 0;
   for (let start = 0; start < MAX_PAGES * 10; start += 10) {
     if (S.state !== 'RUNNING') break;
     // FIX: Use the correct Voyager search endpoint format (v2 style with proper filter encoding)
     const apiUrl = `https://www.linkedin.com/voyager/api/search/blended?count=10&keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&q=blended&filters=List(resultType-%3ECONTENT)&start=${start}`;
-    try {
-      const res = await fetch(apiUrl, {
-        headers: {
-          'accept': 'application/json',
-          'csrf-token': csrf || '',
-          'x-restli-protocol-version': '2.0.0',
-          'x-li-lang': 'en_US',
+    let text = null;
+    for (let retry = 0; retry < 3; retry++) {
+      try {
+        const res = await fetch(apiUrl, {
+          headers: {
+            'accept': 'application/json',
+            'csrf-token': csrf || '',
+            'x-restli-protocol-version': '2.0.0',
+            'x-li-lang': 'en_US',
+          }
+        });
+        if (res.ok) { text = await res.text(); break; }
+        if (res.status === 401 || res.status === 403) {
+          console.warn('[BG] VoyagerREST HTTP ' + res.status + ' start=' + start + ' — auth/csrf rejected on this account, stopping this channel.');
+          break;
         }
-      });
-      if (!res.ok) { console.warn('[BG] VoyagerREST HTTP ' + res.status + ' start=' + start); break; }
-      const text = await res.text();
-      const posts = extractPostsFromText(text);
-      let added = 0;
-      posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
-      console.log('[BG] VoyagerREST sort=' + sort + ' start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
-      if (added === 0) break;
+        console.warn('[BG] VoyagerREST HTTP ' + res.status + ' start=' + start + ' — retry ' + (retry + 1) + '/3');
+        await sleep(2000 * (retry + 1));
+      } catch (e) {
+        console.warn('[BG] VoyagerREST error (retry ' + (retry + 1) + '/3):', e.message);
+        await sleep(2000 * (retry + 1));
+      }
+    }
+    if (text === null) break;
+    if (isCheckpointText(text)) { console.warn('[BG] VoyagerREST checkpoint page — stopping this channel for kw="' + keyword + '"'); break; }
+    const posts = extractPostsFromText(text);
+    let added = 0;
+    posts.forEach(p => { if (!urlMap.has(p.canonicalUrn)) { urlMap.set(p.canonicalUrn, p); added++; } });
+    console.log('[BG] VoyagerREST sort=' + sort + ' start=' + start + ': +' + added + ' (total=' + urlMap.size + ')');
+    if (added === 0) {
+      emptyStreak++;
+      if (emptyStreak >= 2) break;
+    } else {
+      emptyStreak = 0;
       success = true;
-    } catch (e) {
-      console.warn('[BG] VoyagerREST error:', e.message);
-      break;
     }
     await sleep(1200);
   }
@@ -155,9 +244,14 @@ async function fetchViaVoyagerRest(keyword, csrf, urlMap, sortBy) {
 // â”€â”€ Tab-based scroll scraper â€” MAXIMUM VOLUME MODE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Opens a real LinkedIn tab and scrolls aggressively to trigger infinite-scroll.
 // sortMode: 'date_posted' | 'relevance'
-async function fetchViaScrollTab(keyword, urlMap, sortMode) {
+async function fetchViaScrollTab(keyword, urlMap, sortMode, customUrl) {
   const sort = sortMode || 'date_posted';
-  const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=${sort}`;
+  // BUGFIX: this function used to ignore any 4th argument, so every caller that
+  // passed a distinct time-filtered URL (week/month/boost) silently fell back to
+  // the same plain, unfiltered search — three "different" tabs were actually
+  // running the identical query. customUrl now takes priority so each tab
+  // genuinely covers a different slice of results (real extra volume).
+  const searchUrl = customUrl || `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&origin=GLOBAL_SEARCH_HEADER&sortBy=${sort}`;
   let tabId = null;
   const before = urlMap.size;
   try {
@@ -176,9 +270,13 @@ async function fetchViaScrollTab(keyword, urlMap, sortMode) {
       setTimeout(r, 20000);
     });
 
-    // Pre-flight: verify page has content
+    // Pre-flight: verify page has content. Kept deliberately permissive — a
+    // sparse-but-real result set must never be treated as "failed", and a
+    // checkpoint/auth-wall page gets one retry before we give up on this tab
+    // (both phases exist purely so behaviour stays consistent account-to-account).
     let preflightOk = false;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    let checkpointDetected = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const pf = await chrome.scripting.executeScript({
           target: { tabId },
@@ -187,24 +285,51 @@ async function fetchViaScrollTab(keyword, urlMap, sortMode) {
             len: (document.body?.innerText || '').length,
             urns: (document.body?.innerHTML || '').match(/urn:li:/g)?.length || 0,
             url: window.location.href,
+            sample: (document.body?.innerText || '').slice(0, 4000),
           })
         });
         const p = pf?.[0]?.result || {};
         console.log('[BG] Preflight[' + sort + '] #' + (attempt+1) + ': sh=' + p.sh + ' len=' + p.len + ' urns=' + p.urns + ' url=' + p.url);
-        if (p.sh > 2000 || p.urns > 0 || p.len > 2000) { preflightOk = true; break; }
-        await sleep(5000);
+        if (isCheckpointText(p.sample) || isCheckpointText(p.url)) {
+          checkpointDetected = true;
+          console.warn('[BG] Preflight[' + sort + '] checkpoint/auth-wall detected on this account — will retry once after a cool-down.');
+          break;
+        }
+        // Lowered thresholds: any real sign of content is enough — never skip
+        // a legitimately small result set just because it is small.
+        if (p.sh > 800 || p.urns > 0 || p.len > 500) { preflightOk = true; break; }
+        await sleep(4000);
       } catch (e) { break; }
     }
 
+    if (checkpointDetected) {
+      await sleep(15000);
+      try {
+        await chrome.tabs.update(tabId, { url: searchUrl });
+        await sleep(8000);
+        const retry = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => (document.body?.innerText || '').slice(0, 4000)
+        });
+        const retryText = retry?.[0]?.result || '';
+        if (!isCheckpointText(retryText)) {
+          preflightOk = true;
+          console.log('[BG] ScrollTab[' + sort + '] checkpoint cleared after retry — proceeding normally.');
+        } else {
+          console.warn('[BG] ScrollTab[' + sort + '] checkpoint persists on this account/session — skipping this tab only; other collection phases still run.');
+        }
+      } catch (_) {}
+    }
+
     if (!preflightOk) {
-      console.warn('[BG] ScrollTab[' + sort + '] page never loaded â€” skipping.');
+      console.warn('[BG] ScrollTab[' + sort + '] page never loaded/unavailable — skipping (other phases unaffected).');
       return;
     }
 
-    const MAX_SCROLLS = 50;         // was 30 â€” push harder
+    const MAX_SCROLLS = 80;         // pushed further — exhaust results rather than cap them
     const SCROLL_STEP = 600;        // smaller steps = more observer triggers
-    const STALL_EXIT = 8;           // exit after 8 consecutive stalls
-    const STALL_RETRY = 3;          // retry scroll on stall before giving up
+    const STALL_EXIT = 12;          // more patience before declaring "no more results"
+    const STALL_RETRY = 5;          // retry scroll on stall before giving up
     let consecutiveStall = 0;
     let lastScrollY = -1;
     let stallRetries = 0;
@@ -270,12 +395,17 @@ async function fetchViaScrollTab(keyword, urlMap, sortMode) {
             const ih = window.innerHeight;
             const atBottom = sh > 2000 && (sy + ih) >= sh - 300;
 
-            return { posts: Array.from(found.values()), scrollY: sy, scrollHeight: sh, atBottom };
+            return { posts: Array.from(found.values()), scrollY: sy, scrollHeight: sh, atBottom, url: window.location.href };
           },
           args: [SCROLL_STEP]
         });
 
-        const res = results?.[0]?.result || { posts: [], scrollY: 0, scrollHeight: 0, atBottom: false };
+        const res = results?.[0]?.result || { posts: [], scrollY: 0, scrollHeight: 0, atBottom: false, url: '' };
+        // Mid-scroll redirect to a checkpoint page — bail immediately, no point scrolling it.
+        if (/checkpoint|authwall|uas\/login/i.test(res.url || '')) {
+          console.warn('[BG] Scroll[' + sort + '] redirected to a checkpoint mid-run — stopping this tab early (other phases unaffected).');
+          break;
+        }
         urnData = res.posts || [];
         pageInfo = { scrollY: res.scrollY, scrollHeight: res.scrollHeight, atBottom: res.atBottom };
       } catch (e) {
@@ -348,16 +478,15 @@ async function fetchHtmlVariant(url, urlMap, label) {
   } catch (_) { return 0; }
 }
 
-// ── Main fetch strategy per keyword — ENGAGEMENT-PROBABILITY OPTIMIZED ────────
-// PHILOSOPHY: LinkedIn's 'relevance' sort is engagement-weighted. Posts ranked
-// by relevance within a time window (week/month/3mo) are posts that had time
-// to accumulate reactions AND were promoted by the algorithm — exactly the
-// highest-engagement candidates we want.
-//
-// We deliberately avoid:
-//   - sortBy=date_posted across the board (pulls fresh posts with 0 reactions)
-//   - f_TPR=r86400 (24h) — too fresh to have meaningful engagement
-//   - Assuming recency = quality
+// ── Main fetch strategy per keyword — MAXIMUM RAW VOLUME, NO FILTERING ───────
+// PHILOSOPHY (per user requirement): collect every reachable post for the
+// keyword, with zero quality/engagement gating. No minLikes/minComments/date
+// restriction is ever applied to what gets saved — that is handled (if at
+// all) later, manually, by the user. Every phase below is a different,
+// independent discovery channel (API + real browser tabs + HTML sweeps) so
+// that if one channel is blocked/rate-limited/unavailable on a given
+// account, the others still deliver results — this is what keeps behaviour
+// consistent across completely different accounts, regions and UI languages.
 async function fetchPostsForKeyword(keyword) {
   const urlMap = new Map();
   const enc = encodeURIComponent;
@@ -365,12 +494,12 @@ async function fetchPostsForKeyword(keyword) {
   const csrf = await getCsrfToken();
   const base = 'https://www.linkedin.com/search/results/content/';
 
-  console.log('[BG] === Engagement-optimized extraction for keyword: "' + keyword + '" ===');
+  console.log('[BG] === Max-volume extraction for keyword: "' + keyword + '" ===');
+  broadcastStatus('Searching "' + keyword + '"...');
 
-  // -- PHASE 1: Voyager REST -- relevance only (engagement-weighted by LinkedIn algo)
-  // date_posted sort removed -- it pulls fresh posts with 0 reactions.
+  // -- PHASE 1: Voyager REST search API --
   if (S.state === 'RUNNING') {
-    console.log('[BG] Phase 1: Voyager REST relevance...');
+    console.log('[BG] Phase 1: Voyager REST...');
     await fetchViaVoyagerRest(keyword, csrf, urlMap, 'relevance');
     console.log('[BG] Phase 1 done: ' + urlMap.size + ' posts');
   }
@@ -390,52 +519,59 @@ async function fetchPostsForKeyword(keyword) {
     console.log('[BG] Phase 2 done: ' + urlMap.size + ' posts');
   }
 
-  // -- PHASE 3: Two relevance scroll tabs with time-window filtering --
-  // Both use RELEVANCE sort. Week filter = 1-7 days old (time for engagement).
-  // Month filter = 1-30 days old (deeper engagement history).
-  // date_posted scroll tab REMOVED -- it only finds 0-10 minute old posts.
+  // -- PHASE 3: Parallel real-browser scroll tabs across distinct slices --
+  // Each tab now genuinely hits a different URL (bug in fetchViaScrollTab
+  // meant these used to be duplicates of each other — fixed above). Mixing
+  // relevance windows with a pure date_posted/no-filter tab means we catch
+  // both "high engagement" AND "freshest, not-yet-engaged" posts — no bias.
   if (S.state === 'RUNNING') {
-    console.log('[BG] Phase 3: Dual relevance scroll tabs (week + month windows)...');
-    const weekUrl  = base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER&f_TPR=r604800';
-    const monthUrl = base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER&f_TPR=r2592000';
+    console.log('[BG] Phase 3: Parallel scroll tabs (week / month / freshest)...');
+    const weekUrl    = base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER&f_TPR=r604800';
+    const monthUrl   = base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER&f_TPR=r2592000';
+    const freshestUrl = base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER&sortBy=date_posted';
     await Promise.all([
       fetchViaScrollTab(keyword, urlMap, 'relevance', weekUrl),
       fetchViaScrollTab(keyword, urlMap, 'relevance', monthUrl),
+      fetchViaScrollTab(keyword, urlMap, 'date_posted', freshestUrl),
     ]);
     console.log('[BG] Phase 3 done: ' + urlMap.size + ' posts');
+    broadcastStatus('"' + keyword + '": ' + urlMap.size + ' posts found so far...');
   }
 
-  // -- PHASE 4: Relevance-first HTML variant sweep --
-  // All variants use relevance sort (or default = relevance).
-  // 24h range removed. Week/month/3mo/6mo give posts with real engagement.
+  // -- PHASE 4: Wide HTML variant sweep (no engagement bias, maximum breadth) --
   if (S.state === 'RUNNING') {
-    console.log('[BG] Phase 4: Engagement-optimized HTML variant sweep...');
+    console.log('[BG] Phase 4: Wide HTML variant sweep (deep pagination + all time windows)...');
     const variants = [
-      // Relevance + time windows (engagement-probable)
-      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r604800',   label: 'rel-week'  },
-      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r2592000',  label: 'rel-month' },
-      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r7776000',  label: 'rel-3mo'   },
-      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r15552000', label: 'rel-6mo'   },
-      // Deep relevance pagination pages 2-10 (engagement-sorted by LinkedIn)
-      ...[2,3,4,5,6,7,8,9,10].map(p => ({
-        url: base + '?keywords=' + enc(keyword) + '&start=' + ((p-1)*10),
+      // Time windows, relevance sort (default)
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r86400',     label: 'rel-24h'   },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r604800',    label: 'rel-week'  },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r2592000',   label: 'rel-month' },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r7776000',   label: 'rel-3mo'   },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r15552000',  label: 'rel-6mo'   },
+      // Same time windows, date_posted sort — catches freshest/no-engagement posts too
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r604800&sortBy=date_posted',   label: 'date-week'  },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r2592000&sortBy=date_posted',  label: 'date-month' },
+      { url: base + '?keywords=' + enc(keyword) + '&f_TPR=r7776000&sortBy=date_posted',  label: 'date-3mo'   },
+      // Deep pagination — pages 2-25 (LinkedIn's realistic practical ceiling per query)
+      ...Array.from({ length: 24 }, (_, i) => i + 2).map(p => ({
+        url: base + '?keywords=' + enc(keyword) + '&start=' + ((p - 1) * 10),
         label: 'page' + p,
       })),
-      // Hashtag variants (relevance, not date)
+      // Hashtag variants
       { url: base + '?keywords=%23' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER', label: 'hashtag'       },
       { url: base + '?keywords=%23' + enc(keyword) + '&f_TPR=r604800',               label: 'hashtag-week'  },
       { url: base + '?keywords=%23' + enc(keyword) + '&f_TPR=r2592000',              label: 'hashtag-month' },
       { url: 'https://www.linkedin.com/feed/hashtag/' + slug + '/',                  label: 'hashtag-feed'  },
-      // Quoted exact phrase (relevance)
-      { url: base + '?keywords=' + enc('"' + keyword + '"'),                          label: 'quoted'        },
-      { url: base + '?keywords=' + enc('"' + keyword + '"') + '&f_TPR=r2592000',     label: 'quoted-month'  },
-      // Content suffix variants -- relevance sort (no date_posted)
+      // Quoted exact phrase
+      { url: base + '?keywords=' + enc('"' + keyword + '"'),                      label: 'quoted'        },
+      { url: base + '?keywords=' + enc('"' + keyword + '"') + '&f_TPR=r2592000',   label: 'quoted-month'  },
+      // Content suffix variants — widen the net beyond the literal keyword
       { url: base + '?keywords=' + enc(keyword + ' tips'),     label: 'tips'     },
       { url: base + '?keywords=' + enc(keyword + ' strategy'), label: 'strategy' },
       { url: base + '?keywords=' + enc(keyword + ' how to'),   label: 'howto'    },
       { url: base + '?keywords=' + enc(keyword + ' growth'),   label: 'growth'   },
       { url: base + '?keywords=' + enc(keyword + ' lessons'),  label: 'lessons'  },
-      // Region -- relevance + month window
+      // Region variants (extra coverage, additive — never exclusionary)
       { url: base + '?keywords=' + enc(keyword) + '&f_CR=101282230',                 label: 'uae'       },
       { url: base + '?keywords=' + enc(keyword) + '&f_CR=101165590',                 label: 'sa'        },
       { url: base + '?keywords=' + enc(keyword) + '&f_CR=101282230&f_TPR=r2592000',  label: 'uae-month' },
@@ -448,19 +584,23 @@ async function fetchPostsForKeyword(keyword) {
       await sleep(1200);
     }
     console.log('[BG] Phase 4 done: ' + urlMap.size + ' posts');
+    broadcastStatus('"' + keyword + '": ' + urlMap.size + ' posts found so far...');
   }
 
-  // -- PHASE 5: Relevance+month scroll boost (if still low volume) --
-  // Month filter ensures scroll surfaces posts 1-30 days old ranked by engagement.
-  if (S.state === 'RUNNING' && urlMap.size < 80) {
-    console.log('[BG] Phase 5: Engagement-boost scroll (volume=' + urlMap.size + ' < 80)...');
-    const boostUrl = base + '?keywords=' + enc(keyword) + '&f_TPR=r2592000';
+  // -- PHASE 5: Deep scroll boost — ALWAYS runs (no volume gate) --
+  // Covers the 3-6 month window that Phase 3 doesn't scroll through, so every
+  // account gets the same exhaustive final pass regardless of how much the
+  // earlier phases already found.
+  if (S.state === 'RUNNING') {
+    console.log('[BG] Phase 5: Deep scroll boost (3-6mo window, unconditional)...');
+    const boostUrl = base + '?keywords=' + enc(keyword) + '&origin=GLOBAL_SEARCH_HEADER&f_TPR=r15552000';
     await fetchViaScrollTab(keyword, urlMap, 'relevance', boostUrl);
     console.log('[BG] Phase 5 done: ' + urlMap.size + ' posts');
   }
 
   const posts = Array.from(urlMap.values());
   console.log('[BG] === kw="' + keyword + '" TOTAL=' + posts.length + ' posts extracted ===');
+  broadcastStatus('"' + keyword + '": ' + posts.length + ' posts collected.');
   return posts;
 }
 
@@ -474,7 +614,7 @@ async function pushToAPI(posts, kw) {
     return formatted;
   });
 
-  const endpoint = S.dashboardUrl + '/api/extension/results';
+  const endpoint = apiUrl('/api/extension/results');
   const headers = { 'Content-Type': 'application/json', 'x-extension-token': S.userId };
   const body = JSON.stringify({ posts: payloadPosts, keyword: kw, source: 'search_only' });
   try {
@@ -491,28 +631,97 @@ async function pushToAPI(posts, kw) {
 }
 
 // ── Keyword Fetch ─────────────────────────────────────────────────────────────
+async function activateSystem() {
+  // Popup START used to fail silently when systemActive=false in the DB.
+  // Auto-flip it on so pressing Start always actually runs.
+  const url = apiUrl('/api/settings');
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-extension-token': S.userId,
+      },
+      body: JSON.stringify({ systemActive: true, searchOnlyMode: true }),
+    });
+    if (!resp.ok) {
+      console.warn('[BG] activateSystem HTTP ' + resp.status);
+      return false;
+    }
+    console.log('[BG] systemActive forced ON via /api/settings');
+    return true;
+  } catch (e) {
+    console.warn('[BG] activateSystem error:', e.message);
+    return false;
+  }
+}
+
+async function diagnoseHttpError(resp, label, url) {
+  let bodyText = '';
+  try { bodyText = await resp.text(); } catch (_) {}
+  let json = null;
+  try { json = JSON.parse(bodyText); } catch (_) {}
+
+  if (resp.status === 404) {
+    const looksLikeNext404 = /<!DOCTYPE html|This page could not be found|404: NOT_FOUND/i.test(bodyText);
+    if (looksLikeNext404) {
+      return label + ' 404 at ' + url + ' — wrong Dashboard URL, or this deployment does not have /api/extension/jobs yet. Re-open the real Nexora dashboard and Auto-Connect again.';
+    }
+    if (json?.error === 'User not found' || /user not found/i.test(bodyText)) {
+      return 'User ID not found in the database. You are connected to the wrong account/environment. Disconnect → open Dashboard → Auto-Connect again.';
+    }
+    return label + ' HTTP 404 at ' + url + (json?.error ? (' — ' + json.error) : '') + '. Check Dashboard URL + User ID.';
+  }
+  if (resp.status === 401) {
+    return label + ' unauthorized (401). Reconnect with Auto-Connect.';
+  }
+  return label + ' HTTP ' + resp.status + (json?.error ? (' — ' + json.error) : '') + ' @ ' + url;
+}
+
 async function fetchKeywords() {
-  const url = S.dashboardUrl + '/api/extension/jobs';
+  S.dashboardUrl = normalizeDashboardUrl(S.dashboardUrl);
+  const url = apiUrl('/api/extension/jobs');
+  console.log('[BG] fetchKeywords →', url, 'userId=', (S.userId || '').slice(0, 8) + '…');
+  broadcastStatus('Contacting dashboard…');
+
   let resp;
   try {
     resp = await fetch(url, { headers: { 'x-extension-token': S.userId } });
   } catch (e) {
-    throw new Error('Failed to connect to Dashboard API (' + url + '). Make sure the Dashboard is running and you are connected.');
+    throw new Error('Cannot reach Dashboard at ' + S.dashboardUrl + ' — is it open/running? (' + e.message + ')');
   }
 
-  if (!resp.ok) throw new Error('Jobs API ' + resp.status);
-  const jobs = await resp.json();
-  if (!jobs.active) throw new Error(jobs.message || 'System inactive.');
+  if (!resp.ok) {
+    throw new Error(await diagnoseHttpError(resp, 'Jobs API', url));
+  }
+  let jobs = await resp.json();
+
+  // If system was paused, auto-activate and retry once (this is the #1 reason
+  // Start appeared to "cancel itself" with no visible work).
+  if (!jobs.active && !jobs.subscriptionExpired) {
+    console.warn('[BG] Jobs inactive ("' + (jobs.message || '') + '") — activating system and retrying…');
+    broadcastStatus('System was paused — activating…');
+    await activateSystem();
+    await sleep(800);
+    resp = await fetch(url, { headers: { 'x-extension-token': S.userId } });
+    if (!resp.ok) throw new Error(await diagnoseHttpError(resp, 'Jobs API', url));
+    jobs = await resp.json();
+  }
+
+  if (!jobs.active) {
+    throw new Error(jobs.message || 'System inactive. Open the Dashboard, save keywords, then press START again.');
+  }
+
   let kws = [];
   if (jobs.settings?.searchConfigJson) {
     try {
       const cfg = JSON.parse(jobs.settings.searchConfigJson);
-      if (Array.isArray(cfg)) kws.push(...cfg.flat().filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
+      if (Array.isArray(cfg)) kws.push(...cfg.flat(Infinity).filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()));
     } catch (_) {}
   }
   if (kws.length === 0 && Array.isArray(jobs.keywords))
     kws.push(...jobs.keywords.map(k => k.keyword?.trim()).filter(Boolean));
-  if (kws.length === 0) throw new Error('No keywords configured.');
+  if (kws.length === 0) throw new Error('No keywords configured. Paste keywords in Dashboard → Save, then Start.');
   return { keywords: [...new Set(kws)], settings: jobs.settings || {} };
 }
 
@@ -592,7 +801,7 @@ async function enrichSinglePost(url, urn) {
 
 async function pushEnrichScore(urn, score, force) {
   try {
-    const res = await fetch(S.dashboardUrl + '/api/extension/enrich', {
+    const res = await fetch(apiUrl('/api/extension/enrich'), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'x-extension-token': S.userId },
       body: JSON.stringify({ urn, score, force: force || false })
@@ -603,7 +812,7 @@ async function pushEnrichScore(urn, score, force) {
 
 async function deleteEnrichPost(urn) {
   try {
-    const res = await fetch(S.dashboardUrl + '/api/extension/enrich?urn=' + encodeURIComponent(urn), {
+    const res = await fetch(apiUrl('/api/extension/enrich?urn=' + encodeURIComponent(urn)), {
       method: 'DELETE',
       headers: { 'x-extension-token': S.userId }
     });
@@ -727,7 +936,7 @@ async function runAutoEnrich(autoDelete, deleteThreshold) {
   console.log('[BG-ENRICH] Auto-enrich: fetching unscored posts...');
   try {
     const kwParam = encodeURIComponent(S.keywords.join(','));
-    const resp = await fetch(S.dashboardUrl + '/api/extension/posts?unscored=true&includeUncertain=true&keywords=' + kwParam, {
+    const resp = await fetch(apiUrl('/api/extension/posts?unscored=true&includeUncertain=true&keywords=' + kwParam), {
       headers: { 'x-extension-token': S.userId }
     });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -792,6 +1001,8 @@ async function runEngine(settings, msgEnrich = {}) {
 
 // â”€â”€ Broadcast / Badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function broadcastStatus(msg) {
+  S.lastMessage = msg || '';
+  if (/^Error:/i.test(S.lastMessage)) S.lastError = S.lastMessage.replace(/^Error:\s*/i, '');
   chrome.runtime.sendMessage({ action: 'STATUS_UPDATE', message: msg }).catch(() => {});
 }
 function setBadge(text, color) {
@@ -799,56 +1010,104 @@ function setBadge(text, color) {
   chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
 }
 
-// â”€â”€ Messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function statusPayload() {
+  return {
+    running: S.state === 'RUNNING',
+    state: S.state,
+    runId: S.runId,
+    totalSaved: S.totalSaved,
+    keyword: S.keywords[S.kwIndex] || null,
+    keywordCount: S.keywords.length,
+    kwIndex: S.kwIndex,
+    lastError: S.lastError || null,
+    message: S.lastMessage || null,
+  };
+}
+
+async function resolveAuth(msg) {
+  let dashboardUrl = normalizeDashboardUrl(msg.dashboardUrl || msg.cfg?.dashboardUrl || S.dashboardUrl || '');
+  let userId = (msg.userId || msg.cfg?.userId || S.userId || '').trim();
+  if ((!dashboardUrl || !userId) && chrome.storage?.sync) {
+    const stored = await new Promise(resolve => chrome.storage.sync.get(['dashboardUrl', 'userId'], resolve));
+    if (!dashboardUrl) dashboardUrl = normalizeDashboardUrl(stored.dashboardUrl || '');
+    if (!userId) userId = (stored.userId || '').trim();
+  }
+  return { dashboardUrl, userId };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.action === 'GET_STATUS' || msg.action === 'PING') {
-    sendResponse({ running: S.state === 'RUNNING', state: S.state, runId: S.runId, totalSaved: S.totalSaved, keyword: S.keywords[S.kwIndex] || null });
+    sendResponse(statusPayload());
   }
 
   else if (msg.action === 'START_ENGINE' || msg.action === 'START_SESSION') {
     if (S.state === 'RUNNING') { sendResponse({ ok: false, reason: 'already_running' }); return true; }
-    S.state = 'RUNNING';
-    S.runId = Date.now();
-    S.kwIndex = 0;
-    S.totalSaved = 0;
-    S.dashboardUrl = (msg.dashboardUrl || msg.cfg?.dashboardUrl || '').trim();
-    S.userId = (msg.userId || msg.cfg?.userId || '').trim();
-
-    if (!S.dashboardUrl || !S.dashboardUrl.startsWith('http')) {
-      sendResponse({ ok: false, reason: 'Invalid or missing Dashboard URL. Please reconnect.' });
-      S.state = 'IDLE';
-      return true;
-    }
-    if (!S.userId) {
-      sendResponse({ ok: false, reason: 'Missing User ID. Please reconnect.' });
-      S.state = 'IDLE';
-      return true;
-    }
 
     const msgEnrich = {
       autoEnrich:      msg.autoEnrich      ?? null,
       autoDelete:      msg.autoDelete      ?? null,
       deleteThreshold: msg.deleteThreshold ?? null,
     };
-    console.log('[BG] START_ENGINE received enrich cfg:', msgEnrich);
+
+    // Acknowledge immediately so the popup/dashboard never sees a "cancelled" silence
+    // while we resolve auth + keywords. Real failures are pushed via STATUS_UPDATE.
+    S.state = 'RUNNING';
+    S.runId = Date.now();
+    S.kwIndex = 0;
+    S.totalSaved = 0;
+    S.lastError = '';
+    S.lastMessage = 'Starting engine…';
+    S.keywords = [];
+    S.dashboardUrl = normalizeDashboardUrl(msg.dashboardUrl || msg.cfg?.dashboardUrl || S.dashboardUrl || '');
+    S.userId = (msg.userId || msg.cfg?.userId || S.userId || '').trim();
+    setBadge('…', '#f59e0b');
     sendResponse({ ok: true });
+    broadcastStatus('Starting engine…');
+
     (async () => {
       try {
+        const auth = await resolveAuth(msg);
+        S.dashboardUrl = normalizeDashboardUrl(auth.dashboardUrl);
+        S.userId = (auth.userId || '').trim();
+
+        if (!S.dashboardUrl || !S.dashboardUrl.startsWith('http')) {
+          throw new Error('Invalid or missing Dashboard URL. Please reconnect (Auto-Connect).');
+        }
+        if (!S.userId) {
+          throw new Error('Missing User ID. Open Dashboard and Auto-Connect first.');
+        }
+        // UUID sanity check — catches garbage from bad JWT decode / wrong paste
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(S.userId)) {
+          throw new Error('User ID looks invalid (' + S.userId.slice(0, 20) + '…). Disconnect and Auto-Connect again from the Dashboard page.');
+        }
+
+        chrome.storage.sync.set({ dashboardUrl: S.dashboardUrl, userId: S.userId }).catch(() => {});
+        console.log('[BG] START_ENGINE url=' + S.dashboardUrl + ' user=' + S.userId.slice(0, 8) + '…');
+        broadcastStatus('Connected to ' + S.dashboardUrl);
+
         const { keywords, settings } = await fetchKeywords();
+        if (S.state !== 'RUNNING') return; // stopped while loading
         S.keywords = keywords;
+        broadcastStatus('Loaded ' + keywords.length + ' keyword(s). Searching…');
+        setBadge('ON', '#22c55e');
         await runEngine(settings, msgEnrich);
+        chrome.runtime.sendMessage({ action: 'SCRAPER_COMPLETE', totalSaved: S.totalSaved }).catch(() => {});
       } catch (e) {
         console.error('[BG] Engine error:', e.message);
         S.state = 'IDLE';
-        broadcastStatus('Error: ' + e.message);
+        S.lastError = e.message || String(e);
+        setBadge('ERR', '#ef4444');
+        broadcastStatus('Error: ' + S.lastError);
       }
     })();
+    return true;
   }
 
   else if (msg.action === 'STOP_ENGINE' || msg.action === 'STOP_SESSION') {
     S.state = 'IDLE';
     E.running = false;
+    S.lastMessage = 'Stopped.';
     broadcastStatus('Stopped.');
     setBadge('', '#6b7280');
     sendResponse({ ok: true });

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Nexora – LinkedIn AI Assistant",
-  "version": "8.0",
-  "version_name": "Content-Script-Centric",
+  "version": "8.3",
+  "version_name": "Fix-404-Connection",
   "description": "Stable, deterministic LinkedIn content scraper. No CDP. Single execution context.",
   "permissions": [
     "storage", "alarms", "tabs", "scripting",
@@ -17,17 +17,15 @@
     "http://*/*"
   ],
   "content_scripts": [
-
     {
       "matches": [
-        "https://*.vercel.app/*",
-        "http://localhost:3000/*",
-        "http://127.0.0.1:3000/*"
+        "https://*/*",
+        "http://*/*"
       ],
-      "js": ["dashboard-bridge.js"]
+      "js": ["dashboard-bridge.js"],
+      "run_at": "document_idle"
     }
   ],
-
   "web_accessible_resources": [
     {
       "resources": ["content.js"],
